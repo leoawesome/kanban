@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { join, normalize } from "node:path";
-import type { Board } from "./board";
+import { ConflictError, type Board } from "./board";
 import type { Bus, BusEvent } from "./events";
 import { detectBaseBranch, isGitRepo, which } from "./git";
 import { checkPr } from "./prpoller";
@@ -69,6 +69,10 @@ export function createServer(deps: ServerDeps) {
   async function api(req: Request, url: URL): Promise<Response> {
     const parts = url.pathname.split("/").filter(Boolean).slice(1).map(decodeURIComponent);
     const m = req.method;
+    // Only JSON mutations: blocks HTML <form> posts (text/plain, urlencoded) that skip CORS preflight.
+    if ((m === "POST" || m === "PATCH" || m === "PUT") && !(req.headers.get("content-type") ?? "").startsWith("application/json")) {
+      throw new HttpError(415, "content-type must be application/json");
+    }
 
     if (parts[0] === "health" && m === "GET") {
       const [claude, git, gh] = await Promise.all([
@@ -156,7 +160,8 @@ export function createServer(deps: ServerDeps) {
       if (m === "PATCH") {
         const b = await body(req);
         if (b.status !== undefined && !STATUSES.includes(b.status)) throw new HttpError(400, `invalid status ${b.status}`);
-        const patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">> = {};
+        const patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">> & { expectedBody?: string } = {};
+        if (typeof b.expectedBody === "string") patch.expectedBody = b.expectedBody;
         if (typeof b.title === "string") patch.title = b.title;
         if (typeof b.body === "string") patch.body = b.body;
         if (b.status) patch.status = b.status;
@@ -256,6 +261,8 @@ export function createServer(deps: ServerDeps) {
         return await api(req, url);
       } catch (e) {
         if (e instanceof HttpError) return json({ error: e.message }, e.status);
+        if (e instanceof ConflictError) return json({ error: e.message }, 409);
+        if (e instanceof URIError) return json({ error: "malformed URL" }, 400);
         console.error(e);
         return json({ error: (e as Error).message ?? "internal error" }, 500);
       }

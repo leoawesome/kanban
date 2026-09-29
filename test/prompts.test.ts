@@ -56,3 +56,8 @@ test("commands are shell quoted", () => {
   expect(planningCommand("/tmp/a", "u1", "it's", false)).toBe(`cd '/tmp/a' && claude --session-id u1 'it'\\''s'`);
   expect(planningCommand("/tmp/a", "u1", "p", true)).toBe(`cd '/tmp/a' && claude --resume u1 'p'`);
 });
+
+test("parseResult drops non-https prUrl", () => {
+  expect(parseResult('CKANBAN_RESULT: {"status":"done","prUrl":"javascript:alert(1)","summary":"s"}')!.prUrl).toBeNull();
+  expect(parseResult('CKANBAN_RESULT: {"status":"done","prUrl":"http://x/pull/1","summary":"s"}')!.prUrl).toBeNull();
+});

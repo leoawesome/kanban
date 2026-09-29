@@ -1,4 +1,4 @@
-import type { Ticket } from "./api";
+import { safeHref, type Ticket } from "./api";
 
 export function outcomeBadge(t: Ticket) {
   if (t.status === "in_progress") return <span className="badge running"><span className="spinner" /> Running</span>;
@@ -23,7 +23,7 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
         <div className="card-meta">
           {badge}
           {ticket.prUrl && (
-            <a className="badge pr" href={ticket.prUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+            <a className="badge pr" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
               PR #{ticket.prUrl.split("/").pop()}
             </a>
           )}

@@ -54,3 +54,24 @@ test("buildArgs", () => {
   expect(again).not.toContain("--session-id");
   expect(again).not.toContain("--model");
 });
+
+test("stop kills the whole process group (grandchildren too)", async () => {
+  const pidFile = join(tempDir(), "child.pid");
+  process.env.FAKE_MODE = "child";
+  process.env.FAKE_CHILD_PID_FILE = pidFile;
+  try {
+    const h = startRun({ bin: FAKE, cwd: tempDir(), args: [], onEvent: () => {} });
+    await Bun.sleep(600);
+    const childPid = Number(await Bun.file(pidFile).text());
+    expect(childPid).toBeGreaterThan(0);
+    h.stop();
+    await h.done;
+    await Bun.sleep(200);
+    let alive = true;
+    try { process.kill(childPid, 0); } catch { alive = false; }
+    expect(alive).toBe(false);
+  } finally {
+    delete process.env.FAKE_MODE;
+    delete process.env.FAKE_CHILD_PID_FILE;
+  }
+}, 10000);

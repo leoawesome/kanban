@@ -40,6 +40,12 @@ if (stepMs) {
   }
 }
 
+if (mode === "child") {
+  const child = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+  if (process.env.FAKE_CHILD_PID_FILE) appendFileSync(process.env.FAKE_CHILD_PID_FILE, String(child.pid));
+  await Bun.sleep(30000);
+}
+
 if (mode === "slow") {
   await Bun.sleep(30000);
 }

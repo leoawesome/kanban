@@ -63,10 +63,11 @@ export type BusEvent =
   | { type: "profile.updated"; slug: string; profile: Profile | null };
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const hasBody = method === "POST" || method === "PATCH";
   const r = await fetch(url, {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: hasBody ? { "content-type": "application/json" } : undefined,
+    body: hasBody ? JSON.stringify(body ?? {}) : undefined,
   });
   if (r.status === 204) return undefined as T;
   const data = await r.json().catch(() => ({}));
@@ -88,7 +89,7 @@ export const api = {
   ticket: (slug: string, id: string) => req<Ticket>("GET", t(slug, id)),
   createTicket: (slug: string, input: { title: string; body: string; status: Status }) =>
     req<Ticket>("POST", t(slug), input),
-  updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">>) =>
+  updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">> & { expectedBody?: string }) =>
     req<Ticket>("PATCH", t(slug, id), patch),
   deleteTicket: (slug: string, id: string) => req<void>("DELETE", t(slug, id)),
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),
@@ -115,6 +116,11 @@ export function subscribe(fn: Listener): () => void {
     };
   }
   return () => listeners.delete(fn);
+}
+
+/** Only allow https links from untrusted data (e.g. PR URLs reported by Claude). */
+export function safeHref(url: string | null | undefined): string | undefined {
+  return url && /^https:\/\//.test(url) ? url : undefined;
 }
 
 export async function copy(text: string): Promise<void> {

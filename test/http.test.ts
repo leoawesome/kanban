@@ -90,6 +90,22 @@ test("validation and 404s", async () => {
   expect(r.status).toBe(400);
 });
 
+test("rejects non-JSON content-type on mutations (form posts)", async () => {
+  const r = await fetch(`${base}/api/profiles`, {
+    method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify({ name: "x", path: "/tmp" }),
+  });
+  expect(r.status).toBe(415);
+});
+
+test("stale body edit returns 409", async () => {
+  const path = tempDir("ck-plain-");
+  await fetch(`${base}/api/profiles`, json("POST", { name: "Conflict", path }));
+  const t = (await (await fetch(`${base}/api/profiles/conflict/tickets`, json("POST", { title: "t", body: "a" }))).json()) as any;
+  await fetch(`${base}/api/profiles/conflict/tickets/${t.id}`, json("PATCH", { body: "b" }));
+  const r = await fetch(`${base}/api/profiles/conflict/tickets/${t.id}`, json("PATCH", { body: "c", expectedBody: "a" }));
+  expect(r.status).toBe(409);
+});
+
 test("health", async () => {
   const r = await fetch(`${base}/api/health`);
   const h = (await r.json()) as any;

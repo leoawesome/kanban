@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, copy, COLUMNS, subscribe, type ActivityEntry, type Comment, type Profile, type Status, type Ticket } from "./api";
+import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type Comment, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
 import { Markdown, Transcript } from "./Transcript";
 
@@ -21,6 +21,9 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
   const [title, setTitle] = useState(ticket.title);
   const [body, setBody] = useState(ticket.body);
   const [editing, setEditing] = useState(!ticket.body.trim());
+  // Body the current edit started from; the server rejects the save if the file changed since
+  // (Claude rewrites ticket.md during terminal planning without the board being notified).
+  const [baseBody, setBaseBody] = useState(ticket.body);
   const [comments, setComments] = useState<Comment[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [draft, setDraft] = useState("");
@@ -35,7 +38,7 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
     reloadComments();
     api.activity(slug, ticket.id).then(setActivity).catch(() => {});
     // Claude may rewrite the body during planning; fetch fresh copy on open.
-    api.ticket(slug, ticket.id).then((t) => { setBody(t.body); setTitle(t.title); }).catch(() => {});
+    api.ticket(slug, ticket.id).then((t) => { setBody(t.body); setBaseBody(t.body); setTitle(t.title); }).catch(() => {});
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -49,8 +52,20 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
   }), [slug, ticket.id]);
 
   useEffect(() => {
-    if (!editing) setBody(ticket.body);
+    if (!editing) {
+      setBody(ticket.body);
+      setBaseBody(ticket.body);
+    }
   }, [ticket.body]);
+
+  const startEdit = async () => {
+    try {
+      const fresh = await api.ticket(slug, ticket.id);
+      setBody(fresh.body);
+      setBaseBody(fresh.body);
+    } catch {}
+    setEditing(true);
+  };
 
   const act = async (fn: () => Promise<unknown>) => {
     try {
@@ -64,8 +79,16 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
     if (title.trim() && title !== ticket.title) act(() => api.updateTicket(slug, ticket.id, { title: title.trim() }));
   };
   const saveBody = () => {
-    setEditing(false);
-    if (body !== ticket.body) act(() => api.updateTicket(slug, ticket.id, { body }));
+    if (body === baseBody) {
+      setEditing(false);
+      return;
+    }
+    api.updateTicket(slug, ticket.id, { body, expectedBody: baseBody })
+      .then((t) => {
+        setBaseBody(t.body);
+        setEditing(false);
+      })
+      .catch((e) => onError(e.message));
   };
   const setStatus = (status: Status) => act(() => api.updateTicket(slug, ticket.id, { status }));
 
@@ -108,7 +131,7 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
             ))}
           </select>
           {outcomeBadge(ticket)}
-          {ticket.prUrl && <a className="badge pr" href={ticket.prUrl} target="_blank" rel="noreferrer">PR #{ticket.prUrl.split("/").pop()}</a>}
+          {ticket.prUrl && <a className="badge pr" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer">PR #{ticket.prUrl.split("/").pop()}</a>}
           {ticket.branch && <code className="muted small" title={ticket.worktree ?? ""}>{ticket.branch}</code>}
           <span className="muted small">{ticket.id}</span>
         </div>
@@ -152,19 +175,19 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
         <section className="section">
           <div className="section-head">
             <h4>Description</h4>
-            {!editing && <button className="btn ghost small" onClick={() => setEditing(true)}>Edit</button>}
+            {!editing && <button className="btn ghost small" onClick={startEdit}>Edit</button>}
           </div>
           {editing ? (
             <>
               <textarea className="body-input" rows={10} value={body} onChange={(e) => setBody(e.target.value)} autoFocus
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveBody(); }} />
               <div className="form-actions">
-                <button className="btn ghost small" onClick={() => { setBody(ticket.body); setEditing(false); }}>Cancel</button>
+                <button className="btn ghost small" onClick={() => { setBody(baseBody); setEditing(false); }}>Cancel</button>
                 <button className="btn primary small" onClick={saveBody}>Save</button>
               </div>
             </>
           ) : body.trim() ? (
-            <div className="body-view" onDoubleClick={() => setEditing(true)}><Markdown text={body} /></div>
+            <div className="body-view" onDoubleClick={startEdit}><Markdown text={body} /></div>
           ) : (
             <div className="muted">No description.</div>
           )}

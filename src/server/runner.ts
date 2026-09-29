@@ -12,6 +12,15 @@ export interface RunHandle {
 
 const STDERR_TAIL = 2048;
 
+function killGroup(pid: number, signal: "TERM" | "KILL") {
+  const r = Bun.spawnSync(["kill", `-${signal}`, "--", `-${pid}`], { stdout: "ignore", stderr: "ignore" });
+  if (r.exitCode !== 0) {
+    try {
+      process.kill(pid, `SIG${signal}`);
+    } catch {}
+  }
+}
+
 export function buildArgs(prompt: string, sessionId: string, resume: boolean, model?: string | null): string[] {
   const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions"];
   args.push(resume ? "--resume" : "--session-id", sessionId);
@@ -33,6 +42,8 @@ export function startRun(opts: {
     try {
       proc = Bun.spawn([opts.bin, ...opts.args], {
         cwd: opts.cwd, env: { ...process.env }, stdout: "pipe", stderr: "pipe", stdin: "ignore",
+        // Own process group so stop() can take down tools claude spawned (shells, dev servers).
+        detached: true,
       });
     } catch (e) {
       return { code: -1, stderr: `failed to start ${opts.bin}: ${(e as Error).message}`, events };
@@ -78,8 +89,8 @@ export function startRun(opts: {
       if (!proc || stopped) return;
       stopped = true;
       const p = proc;
-      p.kill("SIGTERM");
-      const timer = setTimeout(() => p.kill("SIGKILL"), 5000);
+      killGroup(p.pid, "TERM");
+      const timer = setTimeout(() => killGroup(p.pid, "KILL"), 5000);
       p.exited.then(() => clearTimeout(timer));
     },
   };

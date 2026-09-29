@@ -16,7 +16,7 @@ export function parseResult(text: string): RunResult | null {
     if (v.status !== "done" && v.status !== "blocked") return null;
     return {
       status: v.status,
-      prUrl: typeof v.prUrl === "string" && v.prUrl ? v.prUrl : null,
+      prUrl: typeof v.prUrl === "string" && /^https:\/\//.test(v.prUrl) ? v.prUrl : null,
       summary: typeof v.summary === "string" ? v.summary : "",
     };
   } catch {

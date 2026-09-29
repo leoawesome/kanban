@@ -19,6 +19,9 @@ export async function checkPr(
   const t = store.getTicket(slug, id);
   if (!t?.prUrl || t.status !== "review") return null;
   const state = await gh(t.prUrl);
+  // The user may have moved the card while gh was in flight.
+  const now = store.getTicket(slug, id);
+  if (now?.status !== "review" || now.prUrl !== t.prUrl) return state;
   if (state === "MERGED") {
     store.addComment(slug, id, "ai", "PR merged.");
     await board.updateTicket(slug, id, { status: "done" });

@@ -39,6 +39,8 @@ export function claudeSessionExists(sessionId: string): boolean {
   }
 }
 
+export class ConflictError extends Error {}
+
 export class Board {
   private runs = new Map<string, ActiveRun>();
   private shuttingDown = false;
@@ -98,7 +100,8 @@ export class Board {
       })
       .finally(() => {
         this.runs.delete(this.key(slug, id));
-        if (!this.shuttingDown) this.dispatch(slug);
+        // When the user moved the card, updateTicket() writes the new status and dispatches itself.
+        if (!this.shuttingDown && !run.targetStatus) this.dispatch(slug);
       });
   }
 
@@ -114,7 +117,9 @@ export class Board {
       this.patch(slug, id, { status: run.targetStatus ?? "review", outcome: "failed", error: msg, lastActivity: null });
       return;
     }
+    if (this.shuttingDown) return;
     if (run.stopRequested) {
+      this.store.addComment(slug, id, "ai", "Run stopped by user.");
       this.patch(slug, id, { status: run.targetStatus ?? "review", outcome: "stopped", lastActivity: null });
       return;
     }
@@ -221,9 +226,16 @@ export class Board {
     return this.store.getTicket(slug, t.id)!;
   }
 
-  async updateTicket(slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">>): Promise<Ticket> {
-    const current = this.store.getTicket(slug, id);
+  async updateTicket(
+    slug: string,
+    id: string,
+    patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">> & { expectedBody?: string },
+  ): Promise<Ticket> {
+    let current = this.store.getTicket(slug, id);
     if (!current) throw new Error(`ticket ${id} not found`);
+    if (patch.body !== undefined && patch.expectedBody !== undefined && patch.expectedBody !== current.body) {
+      throw new ConflictError("description changed since you started editing (Claude may have updated it); reload and retry");
+    }
     const clean: Partial<Ticket> = {};
     if (patch.title !== undefined) clean.title = patch.title;
     if (patch.body !== undefined) clean.body = patch.body;
@@ -236,6 +248,7 @@ export class Board {
       active.targetStatus = status;
       this.stopRun(active);
       await active.promise;
+      current = this.store.getTicket(slug, id)!;
     }
     if (status && status !== current.status) {
       clean.status = status;
@@ -244,7 +257,7 @@ export class Board {
     let t = this.patch(slug, id, clean);
 
     if (clean.status === "done") t = await this.cleanupWorktree(slug, t);
-    if (clean.status === "ready" || (clean.order !== undefined && t.status === "ready")) this.dispatch(slug);
+    if (active || clean.status === "ready" || (clean.order !== undefined && t.status === "ready")) this.dispatch(slug);
     return this.store.getTicket(slug, id)!;
   }
 
@@ -295,7 +308,10 @@ export class Board {
   /** Kill all runs without recording an outcome; tickets stay in_progress for recover(). */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
-    for (const r of this.runs.values()) r.handle?.stop();
+    for (const r of this.runs.values()) {
+      r.stopRequested = true;
+      r.handle?.stop();
+    }
     await Promise.race([this.whenIdle(), Bun.sleep(6000)]);
   }
 

@@ -211,3 +211,33 @@ test("shutdown leaves running ticket in_progress for recovery", async () => {
   await board.shutdown();
   expect(store.getTicket("p", t.id)!.status).toBe("in_progress");
 }, 15000);
+
+test("moving a running ticket to ready restarts it and keeps in_progress", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await Bun.sleep(500);
+  await board.updateTicket("p", t.id, { status: "ready" });
+  await Bun.sleep(200);
+  expect(board.isRunning("p", t.id)).toBe(true);
+  expect(store.getTicket("p", t.id)!.status).toBe("in_progress");
+}, 15000);
+
+test("shutdown during worktree setup never spawns claude", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.shutdown();
+  await Bun.sleep(300);
+  expect(readArgs().length).toBe(0);
+  expect(store.getTicket("p", t.id)!.status).toBe("in_progress");
+});
+
+test("body update with stale expectedBody is rejected", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "old", status: "planning" });
+  store.updateTicket("p", t.id, { body: "plan from claude" });
+  await expect(board.updateTicket("p", t.id, { body: "mine", expectedBody: "old" })).rejects.toThrow(/changed/);
+  expect(store.getTicket("p", t.id)!.body).toBe("plan from claude");
+  await board.updateTicket("p", t.id, { body: "mine", expectedBody: "plan from claude" });
+  expect(store.getTicket("p", t.id)!.body).toBe("mine");
+});

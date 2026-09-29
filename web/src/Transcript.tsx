@@ -15,8 +15,15 @@ function toolLabel(block: any): string {
   return `${block.name}${arg ? `: ${String(arg).split("\n")[0]}` : ""}`;
 }
 
+// Transcript/comment text is untrusted (Claude output, repo content). No forms/inputs/styles: a
+// disguised same-origin form could otherwise drive the local API, which runs Claude unattended.
+const PURIFY = {
+  FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style", "iframe", "object", "embed"],
+  FORBID_ATTR: ["style", "action", "formaction"],
+};
+
 export function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(text, { async: false, breaks: true }) as string), [text]);
+  const html = useMemo(() => DOMPurify.sanitize(marked.parse(text, { async: false, breaks: true }) as string, PURIFY), [text]);
   return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 

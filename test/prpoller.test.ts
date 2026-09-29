@@ -35,3 +35,11 @@ test("open PR leaves ticket unchanged", async () => {
   expect(store.getTicket("p", id)!.status).toBe("review");
   expect(store.listComments("p", id).length).toBe(0);
 });
+
+test("merged PR does not touch ticket the user moved during gh call", async () => {
+  await checkPr(board, store, "p", id, async () => {
+    store.updateTicket("p", id, { status: "backlog" });
+    return "MERGED";
+  });
+  expect(store.getTicket("p", id)!.status).toBe("backlog");
+});
