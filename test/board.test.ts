@@ -42,12 +42,12 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  board.stopAll();
-  await board.whenIdle();
+  // shutdown(), not stopAll(): stopping frees a slot and would start the next queued (slow) ticket.
+  await board.shutdown();
   delete process.env.FAKE_MODE;
   delete process.env.FAKE_PR;
   delete process.env.FAKE_ARGS_FILE;
-});
+}, 10000);
 
 test("ready ticket runs to review with PR and AI comment", async () => {
   await setup();
