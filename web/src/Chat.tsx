@@ -113,7 +113,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const isApplied = (p: { title: string; description: string }) =>
     (!p.title || p.title === ticket.title) && (!p.description || p.description.trim() === ticket.body.trim());
 
-  const empty = page !== null && entries.length === 0 && !pending;
+  const empty = page !== null && entries.length === 0 && !pending && !running;
 
   return (
     <div className="chat">
@@ -132,7 +132,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
           <div className="chat-empty">
             {refine ? (
               <>
-                <p><b>Shape this ticket with Claude.</b> Tell it your idea in your own words. It will ask a few questions, then propose a clear title and description you can apply.</p>
+                <p><b>Shape this ticket with Claude.</b> Tell it your idea in your own words. It will ask a few questions, then propose a clear title and description you can apply.{ticket.status === "backlog" ? " (Moving the card to Planning starts this automatically.)" : ""}</p>
                 <button className="btn" onClick={() => send("Help me refine this ticket. Interview me about what's unclear, then propose an improved title and description.")}>
                   Help me refine this ticket
                 </button>

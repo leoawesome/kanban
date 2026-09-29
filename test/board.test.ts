@@ -325,13 +325,13 @@ test("runs get an outputs folder and deliverables are listed", async () => {
 
 test("chat in Planning refines read-only and keeps the card in place", async () => {
   await setup();
-  const t = await board.createTicket("p", { title: "App idea", body: "habit tracker", status: "planning" });
+  const t = await board.createTicket("p", { title: "App idea", body: "habit tracker", status: "backlog" });
   await board.chat("p", t.id, "Help me shape this idea");
   expect(board.isRunning("p", t.id)).toBe(true);
   expect(board.running("p")).toBe(0);
   await board.whenIdle();
   const got = store.getTicket("p", t.id)!;
-  expect(got.status).toBe("planning");
+  expect(got.status).toBe("backlog");
   expect(got.runCount).toBe(0);
   expect(got.sessionStarted).toBe(true);
   const call = readArgs()[0];
@@ -365,7 +365,7 @@ test("chat in Review acts right away: In Progress then back to Review", async ()
 test("chat is rejected while Claude is already working", async () => {
   await setup();
   process.env.FAKE_MODE = "slow";
-  const t = await board.createTicket("p", { title: "x", body: "", status: "planning" });
+  const t = await board.createTicket("p", { title: "x", body: "", status: "backlog" });
   await board.chat("p", t.id, "hi");
   await expect(board.chat("p", t.id, "again")).rejects.toThrow(/still working/);
 }, 15000);
@@ -373,7 +373,7 @@ test("chat is rejected while Claude is already working", async () => {
 test("refine chat does not take a queue slot", async () => {
   await setup({ maxParallel: 1 });
   process.env.FAKE_MODE = "slow";
-  const a = await board.createTicket("p", { title: "plan", body: "", status: "planning" });
+  const a = await board.createTicket("p", { title: "plan", body: "", status: "backlog" });
   await board.chat("p", a.id, "hi");
   const b = await board.createTicket("p", { title: "work", body: "", status: "ready" });
   await Bun.sleep(300);
@@ -382,11 +382,49 @@ test("refine chat does not take a queue slot", async () => {
 
 test("last ticket event after a chat reply reports it idle", async () => {
   await setup();
-  const t = await board.createTicket("p", { title: "x", body: "", status: "planning" });
+  const t = await board.createTicket("p", { title: "x", body: "", status: "backlog" });
   const seen: boolean[] = [];
   bus.on((e) => { if (e.type === "ticket.updated" && e.ticket.id === t.id) seen.push(board.isRunning("p", t.id)); });
   await board.chat("p", t.id, "hi");
   await board.whenIdle();
   expect(seen[0]).toBe(true);
   expect(seen.at(-1)).toBe(false);
+});
+
+test("creating a ticket in Planning starts the refine interview automatically", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "app idea", body: "gym tracker", status: "planning" });
+  expect(board.isRunning("p", t.id)).toBe(true);
+  await board.whenIdle();
+  const call = readArgs()[0];
+  expect(call.args[call.args.indexOf("--permission-mode") + 1]).toBe("plan");
+  expect(call.args[1].startsWith("<ckanban-context")).toBe(true);
+  expect(call.args[1]).toContain("gym tracker");
+  const got = store.getTicket("p", t.id)!;
+  expect(got.refineStarted).toBe(true);
+  expect(got.status).toBe("planning");
+});
+
+test("moving into Planning auto-starts only the first time; Backlog never does", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "backlog" });
+  await board.whenIdle();
+  expect(readArgs().length).toBe(0);
+  await board.updateTicket("p", t.id, { status: "planning" });
+  await board.whenIdle();
+  expect(readArgs().length).toBe(1);
+  await board.updateTicket("p", t.id, { status: "backlog" });
+  await board.updateTicket("p", t.id, { status: "planning" });
+  await board.whenIdle();
+  expect(readArgs().length).toBe(1);
+});
+
+test("a manual refine chat also counts as started", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "backlog" });
+  await board.chat("p", t.id, "thoughts?");
+  await board.whenIdle();
+  await board.updateTicket("p", t.id, { status: "planning" });
+  await board.whenIdle();
+  expect(readArgs().length).toBe(1);
 });

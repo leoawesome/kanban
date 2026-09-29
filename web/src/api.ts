@@ -4,7 +4,7 @@ export type TicketMode = "interview" | "auto";
 
 export const COLUMNS: { id: Status; label: string; hint: string }[] = [
   { id: "backlog", label: "Backlog", hint: "Ideas" },
-  { id: "planning", label: "Planning", hint: "Shape it with Claude in chat" },
+  { id: "planning", label: "Planning", hint: "Claude interviews you to shape it" },
   { id: "ready", label: "Ready", hint: "Claude picks these up" },
   { id: "in_progress", label: "In Progress", hint: "Claude working" },
   { id: "review", label: "Review", hint: "Your turn" },

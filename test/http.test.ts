@@ -61,8 +61,8 @@ test("profile + ticket flow", async () => {
   const t = (await r.json()) as any;
   expect(t.status).toBe("backlog");
 
-  r = await fetch(`${base}/api/profiles/my-proj/tickets/${t.id}`, json("PATCH", { status: "planning" }));
-  expect(((await r.json()) as any).status).toBe("planning");
+  r = await fetch(`${base}/api/profiles/my-proj/tickets/${t.id}`, json("PATCH", { status: "review" }));
+  expect(((await r.json()) as any).status).toBe("review");
 
   r = await fetch(`${base}/api/profiles/my-proj/tickets/${t.id}/comments`, json("POST", { text: "hi" }));
   expect(r.status).toBe(201);
@@ -149,7 +149,7 @@ test("new tickets default to interview mode; outputs are served as sandboxed tex
 test("chat endpoint validates and conflicts", async () => {
   const path = tempDir("ck-plain-");
   await fetch(`${base}/api/profiles`, json("POST", { name: "Chatty", path }));
-  const t = (await (await fetch(`${base}/api/profiles/chatty/tickets`, json("POST", { title: "t", status: "planning" }))).json()) as any;
+  const t = (await (await fetch(`${base}/api/profiles/chatty/tickets`, json("POST", { title: "t", status: "backlog" }))).json()) as any;
   let r = await fetch(`${base}/api/profiles/chatty/tickets/${t.id}/chat`, json("POST", { text: " " }));
   expect(r.status).toBe(400);
   r = await fetch(`${base}/api/profiles/chatty/tickets/${t.id}/chat`, json("POST", { text: "hello" }));

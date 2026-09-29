@@ -25,6 +25,8 @@ export interface Ticket {
   interviewed?: boolean;
   /** True once any claude run used this ticket's sessionId (so later runs must --resume). */
   sessionStarted?: boolean;
+  /** True once a refine conversation began (auto-start on entering Planning happens only once). */
+  refineStarted?: boolean;
   order: number;
   sessionId: string | null;
   worktree: string | null;

@@ -108,9 +108,12 @@ export type ChatMode = "refine" | "act";
 export function chatPrompt(t: Ticket, text: string, mode: ChatMode, outputDir: string): string {
   const typed = text.trim();
   if (mode === "refine") {
-    return `${typed}
+    const start = typed ? "" : `The user just moved this ticket to Planning and is waiting for you in the ticket chat. Start now:
+- If important things are unclear, briefly say what you understood so far and interview them.
+- If the ticket is already clear enough to work on autonomously, skip the questions: propose the polished ticket, or say it looks ready.
 
-${context("", `(Sent from the kanban board's ticket chat. The user reads your reply there, not in a terminal.)
+`;
+    return `${typed}${typed ? "\n\n" : ""}${context(typed ? "" : "Board asked Claude to help refine this ticket", `${start}(Sent from the kanban board's ticket chat. The user reads your reply there, not in a terminal.)
 You are helping the user shape this ticket BEFORE any work starts. Do not modify files or start the work; reading code, docs and links to understand the context is fine.
 
 Current ticket

@@ -111,12 +111,20 @@ export class Board {
     return this.store.getTicket(slug, id)!;
   }
 
+  /** Entering Planning means "shape this with Claude": start the interview once, without a click. */
+  private autoRefine(slug: string, id: string): void {
+    const t = this.store.getTicket(slug, id);
+    if (!t || t.status !== "planning" || t.refineStarted || this.isRunning(slug, id) || this.shuttingDown) return;
+    if (t.error?.startsWith("corrupt")) return;
+    this.start(slug, id, { text: "", mode: "refine" });
+  }
+
   private start(slug: string, id: string, chat?: ActiveRun["chat"]) {
     const run: ActiveRun = { slug, id, handle: null, promise: Promise.resolve(), targetStatus: null, stopRequested: false, chat };
     this.runs.set(this.key(slug, id), run);
     const refine = chat?.mode === "refine";
     this.patch(slug, id, refine
-      ? { error: null, lastActivity: "Claude is replying…" }
+      ? { error: null, lastActivity: "Claude is replying…", refineStarted: true }
       : { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…" });
     run.promise = this.execute(run)
       .catch((e) => {
@@ -245,7 +253,21 @@ export class Board {
     });
   }
 
-  async ensureSession(slug: string, id: string): Promise<{ dir: string; sessionId: string; existed: boolean; isGit: boolean }> {
+  private sessionLocks = new Map<string, Promise<unknown>>();
+
+  /** Serialized per ticket: a run and a "copy command" click must not both create the worktree. */
+  ensureSession(slug: string, id: string): Promise<{ dir: string; sessionId: string; existed: boolean; isGit: boolean }> {
+    const key = this.key(slug, id);
+    const prev = this.sessionLocks.get(key) ?? Promise.resolve();
+    const next = prev.catch(() => {}).then(() => this.ensureSessionNow(slug, id));
+    this.sessionLocks.set(key, next);
+    next.finally(() => {
+      if (this.sessionLocks.get(key) === next) this.sessionLocks.delete(key);
+    }).catch(() => {});
+    return next;
+  }
+
+  private async ensureSessionNow(slug: string, id: string): Promise<{ dir: string; sessionId: string; existed: boolean; isGit: boolean }> {
     const profile = this.store.getProfile(slug);
     if (!profile) throw new Error(`profile ${slug} not found`);
     if (!existsSync(profile.path)) throw new Error(`profile path does not exist: ${profile.path}`);
@@ -283,6 +305,7 @@ export class Board {
     const t = this.store.createTicket(slug, { ...input, status });
     this.emitTicket(slug, t);
     if (status === "ready") this.dispatch(slug);
+    if (status === "planning") this.autoRefine(slug, t.id);
     return this.store.getTicket(slug, t.id)!;
   }
 
@@ -318,6 +341,7 @@ export class Board {
     let t = this.patch(slug, id, clean);
 
     if (clean.status === "done") t = await this.cleanupWorktree(slug, t);
+    if (clean.status === "planning") this.autoRefine(slug, id);
     if (active || clean.status === "ready" || (clean.order !== undefined && t.status === "ready")) this.dispatch(slug);
     return this.store.getTicket(slug, id)!;
   }

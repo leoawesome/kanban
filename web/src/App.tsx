@@ -196,6 +196,8 @@ export function App() {
             const t = await api.createTicket(profile.slug, input);
             setTickets((ts) => (ts.some((x) => x.id === t.id) ? ts : [...ts, t]));
             setNewTicket(null);
+            // Planning starts the interview immediately: open the ticket so the questions are in view.
+            if (t.status === "planning") setOpenId(t.id);
           }}
         />
       )}

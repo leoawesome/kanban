@@ -73,7 +73,7 @@ export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate
             ariaLabel="Column"
             value={status}
             onChange={(s) => setStatus(s as Status)}
-            options={ALLOWED.map((c) => ({ value: c.id, label: c.label, hint: c.id === "ready" ? "Claude starts right away" : c.hint }))}
+            options={ALLOWED.map((c) => ({ value: c.id, label: c.label, hint: c.id === "ready" ? "Claude starts working right away" : c.id === "planning" ? "Claude starts asking you questions right away" : c.id === "backlog" ? "Just park it; nothing runs" : c.hint }))}
           />
         </label>
         {err && <div className="form-error">{err}</div>}
