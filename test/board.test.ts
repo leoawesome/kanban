@@ -455,3 +455,30 @@ test("chat still works while the linked session is open in a terminal", async ()
   expect(readArgs().length).toBe(1);
   expect(store.getTicket("p", t.id)!.outcome).not.toBe("blocked");
 });
+
+test("planning-only message in Review: Claude marks it and the card moves to Planning", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.whenIdle();
+  process.env.FAKE_EXTRA = '\n1. idea\n<ckanban-move to="planning"/>';
+  try {
+    await board.chat("p", t.id, "Audit the UI and list 5 improvements. Don't change anything yet.");
+    await board.whenIdle();
+  } finally {
+    delete process.env.FAKE_EXTRA;
+  }
+  const got = store.getTicket("p", t.id)!;
+  expect(got.status).toBe("planning");
+  expect(got.outcome).toBeNull();
+  const prompt = readArgs()[1].args[1];
+  expect(prompt).toContain('<ckanban-move to="planning"/>');
+});
+
+test("normal Review chat still lands back in Review", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.whenIdle();
+  await board.chat("p", t.id, "make the button blue");
+  await board.whenIdle();
+  expect(store.getTicket("p", t.id)!.status).toBe("review");
+});

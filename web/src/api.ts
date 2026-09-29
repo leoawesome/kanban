@@ -89,6 +89,7 @@ export interface SessionEntry {
   text: string;
   questions?: Question[];
   proposal?: { title: string; description: string };
+  moved?: "planning";
 }
 
 export interface Comment {

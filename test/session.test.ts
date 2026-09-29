@@ -142,3 +142,9 @@ test("artifacts only come from the Artifact tool, not from text quoted in other 
   ].join("\n");
   expect(parseSession(raw).artifacts.map((a) => a.label)).toEqual(["board"]);
 });
+
+test("move marker is hidden from text and exposed as moved", () => {
+  const s = parseSession(asst([{ type: "text", text: 'Top 5:\n1. a\n<ckanban-move to="planning"/>' }], "2026-09-29T04:00:00Z"));
+  expect(s.entries[0].text).toBe("Top 5:\n1. a");
+  expect(s.entries[0].moved).toBe("planning");
+});

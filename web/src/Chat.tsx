@@ -186,6 +186,12 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
                     }
                   }} />
               )}
+              {e.moved === "planning" && (
+                <div className="chat-moved">
+                  ↩ Moved to <b>Planning</b>: this was a planning request, so nothing was changed. Answer or refine here, then
+                  drag the card to Ready when you want Claude to do it.
+                </div>
+              )}
             </div>
           );
         })}

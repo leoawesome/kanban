@@ -59,6 +59,6 @@ if (process.env.FAKE_OUTPUT && process.env.CKANBAN_OUTPUT_DIR) {
 const status = mode === "blocked" ? "blocked" : mode === "questions" ? "questions" : "done";
 const text = mode === "noresult"
   ? "All done, no result line."
-  : `Work complete.\nCKANBAN_RESULT: ${JSON.stringify({ status, prUrl: pr, summary: `fake ${status}` })}`;
+  : `Work complete.${process.env.FAKE_EXTRA ?? ""}\nCKANBAN_RESULT: ${JSON.stringify({ status, prUrl: pr, summary: `fake ${status}` })}`;
 emit({ type: "assistant", message: { content: [{ type: "text", text }] } });
 emit({ type: "result", subtype: "success", is_error: false, result: text, total_cost_usd: 0.01, duration_ms: 100, session_id: sessionId });

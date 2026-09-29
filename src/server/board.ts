@@ -5,6 +5,7 @@ import { extractFinalText, summarizeEvent } from "./activity";
 import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, worktreeDir } from "./git";
+import { MOVE_TO_PLANNING_RE } from "./session";
 import { chatPrompt, firstRunPrompt, planningCommand, planningPrompt, resumePrompt, type ChatMode } from "./prompts";
 import { parseResult } from "./result";
 import { buildArgs, startRun, type RunHandle } from "./runner";
@@ -240,6 +241,14 @@ export class Board {
     }
     if (refine) {
       this.patch(slug, id, { ...base, lastActivity: null, error: null });
+      return;
+    }
+    // A Review/Done message that only asked for planning: show the ticket where it really is.
+    if (run.chat?.mode === "act" && !run.targetStatus && result?.status !== "blocked" && MOVE_TO_PLANNING_RE.test(finalText)) {
+      this.patch(slug, id, {
+        ...base, status: "planning", order: this.store.nextOrder(slug, "planning"),
+        outcome: null, error: null, refineStarted: true, lastActivity: null,
+      });
       return;
     }
     const current = this.store.getTicket(slug, id)!;

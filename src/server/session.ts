@@ -33,7 +33,12 @@ export interface SessionEntry {
   questions?: Question[];
   /** Improved title/description Claude proposed (rendered with an Apply button). */
   proposal?: TicketProposal;
+  /** Claude asked the board to move the ticket (a planning-only request arrived in Review). */
+  moved?: "planning";
 }
+
+/** Marker Claude adds when a Review message only asked for planning; the board moves the card. */
+export const MOVE_TO_PLANNING_RE = /<ckanban-move\s+to="planning"\s*\/?>(?:\s*<\/ckanban-move>)?/;
 
 const CONTEXT_TAG = "<ckanban-context";
 const QUESTIONS_RE = /<ckanban-questions>([\s\S]*?)<\/ckanban-questions>/;
@@ -70,8 +75,13 @@ function parseProposal(json: string): TicketProposal | null {
 }
 
 /** Split an assistant text block into visible text + structured questions/proposal. */
-function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" | "proposal"> {
+function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" | "proposal" | "moved"> {
   let out = text;
+  let moved: "planning" | undefined;
+  if (MOVE_TO_PLANNING_RE.test(out)) {
+    moved = "planning";
+    out = out.replace(MOVE_TO_PLANNING_RE, "");
+  }
   let questions: Question[] | undefined;
   let proposal: TicketProposal | undefined;
   const q = out.match(QUESTIONS_RE);
@@ -86,7 +96,7 @@ function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" |
     proposal = parsedT;
     out = out.replace(t[0], "");
   }
-  return { text: out.trim(), ...(questions ? { questions } : {}), ...(proposal ? { proposal } : {}) };
+  return { text: out.trim(), ...(questions ? { questions } : {}), ...(proposal ? { proposal } : {}), ...(moved ? { moved } : {}) };
 }
 
 export interface SessionArtifact {
