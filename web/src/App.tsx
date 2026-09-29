@@ -3,6 +3,7 @@ import { api, subscribe, type Profile, type Status, type Ticket } from "./api";
 import { Board } from "./Board";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { ProfileDialog } from "./ProfileDialog";
+import { Select } from "./Select";
 import { TicketDrawer } from "./TicketDrawer";
 
 const LAST_PROFILE = "ckanban.profile";
@@ -97,13 +98,15 @@ export function App() {
           Claude Kanban
         </div>
         {profiles && profiles.length > 0 && (
-          <select className="profile-select" value={slug ?? ""} onChange={(e) => setSlug(e.target.value)} aria-label="Profile">
-            {profiles.map((p) => (
-              <option key={p.slug} value={p.slug}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          <Select
+            className="profile-select"
+            ariaLabel="Profile"
+            value={slug ?? ""}
+            onChange={setSlug}
+            options={profiles.map((p) => ({ value: p.slug, label: p.name, hint: p.path.replace(/^\/Users\/[^/]+/, "~") }))}
+            renderValue={(o) => o?.label}
+            footer={[{ label: "New profile…", onSelect: () => setProfileDialog("new") }]}
+          />
         )}
         {profile && (
           <>
@@ -119,9 +122,6 @@ export function App() {
           </>
         )}
         <div className="spacer" />
-        <button className="btn ghost" onClick={() => setProfileDialog("new")}>
-          New profile
-        </button>
         {profile && (
           <button className="btn primary" onClick={() => setNewTicket("backlog")}>
             New ticket

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { COLUMNS, type Status } from "./api";
 import { Modal } from "./Modal";
+import { Select } from "./Select";
 
 const ALLOWED = COLUMNS.filter((c) => c.id !== "in_progress" && c.id !== "done");
 
@@ -35,15 +36,18 @@ export function NewTicketDialog({ initialStatus, onClose, onCreate }: {
           <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should be done?" />
         </label>
         <label>
-          Description <span className="muted">(markdown)</span>
-          <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Context, acceptance criteria, links…"
+          Description
+          <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Context, acceptance criteria, links… (markdown)"
             onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(e); }} />
         </label>
         <label>
           Column
-          <select value={status} onChange={(e) => setStatus(e.target.value as Status)}>
-            {ALLOWED.map((c) => <option key={c.id} value={c.id}>{c.label}{c.id === "ready" ? " (start now)" : ""}</option>)}
-          </select>
+          <Select
+            ariaLabel="Column"
+            value={status}
+            onChange={(s) => setStatus(s as Status)}
+            options={ALLOWED.map((c) => ({ value: c.id, label: c.label, hint: c.id === "ready" ? "Claude starts right away" : c.hint }))}
+          />
         </label>
         {err && <div className="form-error">{err}</div>}
         <div className="form-actions">

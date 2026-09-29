@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type Comment, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { Select } from "./Select";
 import { timeAgo } from "./time";
 import { Markdown, Transcript } from "./Transcript";
 
@@ -118,11 +120,13 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
         </header>
 
         <div className="drawer-meta">
-          <select value={ticket.status} onChange={(e) => setStatus(e.target.value as Status)} aria-label="Status">
-            {COLUMNS.map((c) => (
-              <option key={c.id} value={c.id} disabled={c.id === "in_progress" && !running}>{c.label}</option>
-            ))}
-          </select>
+          <Select
+            className="status-select"
+            ariaLabel="Status"
+            value={ticket.status}
+            onChange={(s) => setStatus(s as Status)}
+            options={COLUMNS.map((c) => ({ value: c.id, label: c.label, disabled: c.id === "in_progress" && !running }))}
+          />
           {outcomeBadge(ticket)}
           {ticket.prUrl && <a className="badge pr" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer">PR #{ticket.prUrl.split("/").pop()}</a>}
           {ticket.branch && <code className="muted small" title={ticket.worktree ?? ""}>{ticket.branch}</code>}
@@ -152,11 +156,7 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
             <button className="btn ghost" onClick={() => act(() => api.checkPr(slug, ticket.id))}>Check PR now</button>
           )}
           <div className="spacer" />
-          {confirmDelete ? (
-            <button className="btn danger" onClick={() => act(async () => { await api.deleteTicket(slug, ticket.id); onClose(); })}>Confirm delete</button>
-          ) : (
-            <button className="btn ghost danger-text" onClick={() => setConfirmDelete(true)}>Delete</button>
-          )}
+          <button className="btn ghost danger-text" onClick={() => setConfirmDelete(true)}>Delete</button>
         </div>
         {canPlan && (
           <p className="hint">
@@ -221,6 +221,17 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           <section className="section">
             <Transcript entries={activity} live={running} />
           </section>
+        )}
+        {confirmDelete && (
+          <ConfirmDialog
+            title={`Delete "${ticket.title}"?`}
+            confirmLabel="Delete ticket"
+            onCancel={() => setConfirmDelete(false)}
+            onConfirm={async () => { await api.deleteTicket(slug, ticket.id); onClose(); }}
+          >
+            <p>Removes the ticket, its comments and transcript.{running ? " The running Claude session will be stopped." : ""}</p>
+            {ticket.worktree && <p className="muted">Its worktree is removed if it has no uncommitted changes. The branch and any PR stay.</p>}
+          </ConfirmDialog>
         )}
       </aside>
     </div>

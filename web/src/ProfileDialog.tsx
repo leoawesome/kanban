@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type ClaudeProject, type Profile } from "./api";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Modal } from "./Modal";
+import { Select } from "./Select";
 import { timeAgo } from "./time";
 
 const MODELS = ["opus", "sonnet", "haiku"];
@@ -28,10 +30,12 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
   const [picking, setPicking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [ticketCount, setTicketCount] = useState<number | null>(null);
 
   useEffect(() => {
     api.claudeDefaults().then((d) => setClaudeModel(d.model)).catch(() => {});
     if (isNew) api.claudeProjects().then(setRecent).catch(() => setRecent([]));
+    else api.tickets(profile!.slug).then((ts) => setTicketCount(ts.length)).catch(() => {});
   }, [isNew]);
 
   const choose = (p: string) => {
@@ -72,12 +76,8 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
 
   const remove = async () => {
     if (!profile) return;
-    try {
-      await api.deleteProfile(profile.slug);
-      onDeleted();
-    } catch (e: any) {
-      setErr(e.message);
-    }
+    await api.deleteProfile(profile.slug);
+    onDeleted();
   };
 
   const customModel = model && !MODELS.includes(model) ? model : null;
@@ -141,26 +141,43 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
           </label>
           <label>
             Model
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
-              <option value="">Claude default{claudeModel ? ` (${claudeModel})` : ""}</option>
-              {MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
-              {customModel && <option value={customModel}>{customModel}</option>}
-            </select>
+            <Select
+              ariaLabel="Model"
+              value={model}
+              onChange={setModel}
+              options={[
+                { value: "", label: claudeModel ? `Claude default (${claudeModel})` : "Claude default", hint: "follows ~/.claude/settings.json" },
+                ...MODELS.map((m) => ({ value: m, label: m })),
+                ...(customModel ? [{ value: customModel, label: customModel }] : []),
+              ]}
+            />
           </label>
         </div>
 
         {err && <div className="form-error">{err}</div>}
         <div className="form-actions">
-          {profile && (confirmDelete ? (
-            <button type="button" className="btn danger" onClick={remove}>Really delete board data?</button>
-          ) : (
+          {profile && (
             <button type="button" className="btn ghost danger-text" onClick={() => setConfirmDelete(true)}>Delete profile</button>
-          ))}
+          )}
           <div className="spacer" />
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
           <button type="submit" className="btn primary" disabled={!name.trim() || !path.trim()}>{profile ? "Save" : "Create board"}</button>
         </div>
       </form>
+      {confirmDelete && profile && (
+        <ConfirmDialog
+          title={`Delete board "${profile.name}"?`}
+          confirmLabel="Delete board"
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={remove}
+        >
+          <p>
+            Removes {ticketCount === null ? "all" : ticketCount} ticket{ticketCount === 1 ? "" : "s"} with their comments and transcripts
+            from <code>~/.claude-kanban</code>. This cannot be undone.
+          </p>
+          <p className="muted">Your folder <code>{profile.path}</code>, git branches and Claude sessions are not touched.</p>
+        </ConfirmDialog>
+      )}
     </Modal>
   );
 }
