@@ -4,7 +4,8 @@ Local kanban board for [Claude Code](https://claude.com/claude-code). Drop a tic
 
 ## Features
 
-- **Profiles**: one board per folder. Git repos get a worktree + branch per ticket (`ck/<id>-<title>`); plain folders are worked in place.
+- **Profiles**: one board per folder. *New profile* lists the folders you've recently run Claude Code in (from `~/.claude.json`), or *Browse…* opens the macOS folder picker. Base branch is auto-detected; model defaults to your Claude Code setting (`~/.claude/settings.json`); max parallel defaults to 5.
+   Git repos get a worktree + branch per ticket (`ck/<id>-<title>`); plain folders are worked in place.
 - **Auto pickup**: moving a card to Ready starts a run immediately, up to `maxParallel` per profile. Extra cards wait their turn.
 - **Live activity**: the card shows Claude's latest action; the ticket drawer shows the full transcript (tool calls, results, cost).
 - **Review loop**: comment on a ticket, click *Comment & send to Claude*, and the same session resumes with your feedback.

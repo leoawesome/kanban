@@ -56,6 +56,13 @@ export interface ActivityEntry {
   event: any;
 }
 
+export interface ClaudeProject {
+  path: string;
+  name: string;
+  lastUsed: string | null;
+  hasProfile: boolean;
+}
+
 export type BusEvent =
   | { type: "ticket.updated"; profile: string; ticket: Ticket }
   | { type: "ticket.deleted"; profile: string; id: string }
@@ -79,6 +86,9 @@ const t = (slug: string, id?: string) =>
   `/api/profiles/${encodeURIComponent(slug)}/tickets${id ? `/${encodeURIComponent(id)}` : ""}`;
 
 export const api = {
+  claudeProjects: () => req<ClaudeProject[]>("GET", "/api/claude/projects"),
+  claudeDefaults: () => req<{ model: string | null }>("GET", "/api/claude/defaults"),
+  pickFolder: () => req<{ path: string | null }>("POST", "/api/pick-folder"),
   health: () => req<{ claude: boolean; git: boolean; gh: boolean }>("GET", "/api/health"),
   profiles: () => req<Profile[]>("GET", "/api/profiles"),
   createProfile: (p: { name: string; path: string; maxParallel?: number; model?: string; baseBranch?: string }) =>

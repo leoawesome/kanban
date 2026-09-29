@@ -1,15 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type Comment, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
+import { timeAgo } from "./time";
 import { Markdown, Transcript } from "./Transcript";
-
-function timeAgo(iso: string): string {
-  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return new Date(iso).toLocaleDateString();
-}
 
 export function TicketDrawer({ profile, ticket, onClose, onError }: {
   profile: Profile;

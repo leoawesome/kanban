@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { ConflictError, type Board } from "./board";
+import { claudeDefaults, listClaudeProjects, pickFolder } from "./claude";
 import type { Bus, BusEvent } from "./events";
 import { detectBaseBranch, isGitRepo, which } from "./git";
 import { checkPr } from "./prpoller";
@@ -24,6 +25,7 @@ class HttpError extends Error {
 }
 
 const LOCAL_HOSTS = ["localhost", "127.0.0.1"];
+const DEFAULT_MAX_PARALLEL = 5;
 
 export function isAllowedRequest(req: Request, port: number): boolean {
   const host = req.headers.get("host") ?? new URL(req.url).host;
@@ -83,6 +85,13 @@ export function createServer(deps: ServerDeps) {
 
     if (parts[0] === "events" && m === "GET") return sse(req);
 
+    if (parts[0] === "claude" && parts[1] === "projects" && m === "GET") {
+      const taken = new Set(store.listProfiles().map((p) => p.path));
+      return json(listClaudeProjects().map((p) => ({ ...p, hasProfile: taken.has(p.path) })));
+    }
+    if (parts[0] === "claude" && parts[1] === "defaults" && m === "GET") return json(claudeDefaults());
+    if (parts[0] === "pick-folder" && m === "POST") return json({ path: await pickFolder() });
+
     if (parts[0] !== "profiles") throw new HttpError(404, "not found");
 
     // /profiles
@@ -101,7 +110,7 @@ export function createServer(deps: ServerDeps) {
         const profile: Profile = {
           name, slug, path,
           baseBranch: b.baseBranch || ((await isGitRepo(path)) ? await detectBaseBranch(path) : "main"),
-          maxParallel: Math.max(1, Number(b.maxParallel) || 1),
+          maxParallel: Math.max(1, Number(b.maxParallel) || DEFAULT_MAX_PARALLEL),
           model: b.model || null,
           createdAt: nowIso(),
         };

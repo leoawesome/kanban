@@ -51,7 +51,7 @@ test("profile + ticket flow", async () => {
   expect(r.status).toBe(201);
   const p = (await r.json()) as any;
   expect(p.slug).toBe("my-proj");
-  expect(p.maxParallel).toBe(1);
+  expect(p.maxParallel).toBe(5);
 
   r = await fetch(`${base}/api/profiles`, json("POST", { name: "My Proj", path }));
   expect(((await r.json()) as any).slug).toBe("my-proj-2");
@@ -104,6 +104,13 @@ test("stale body edit returns 409", async () => {
   await fetch(`${base}/api/profiles/conflict/tickets/${t.id}`, json("PATCH", { body: "b" }));
   const r = await fetch(`${base}/api/profiles/conflict/tickets/${t.id}`, json("PATCH", { body: "c", expectedBody: "a" }));
   expect(r.status).toBe(409);
+});
+
+test("claude discovery endpoints respond", async () => {
+  const projects = (await (await fetch(`${base}/api/claude/projects`)).json()) as any;
+  expect(Array.isArray(projects)).toBe(true);
+  const defaults = (await (await fetch(`${base}/api/claude/defaults`)).json()) as any;
+  expect("model" in defaults).toBe(true);
 });
 
 test("health", async () => {
