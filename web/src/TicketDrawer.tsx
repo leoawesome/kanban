@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type ClaudeSession, type Comment, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -7,6 +7,72 @@ import { Select } from "./Select";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
 import { timeAgo } from "./time";
 import { Markdown, Transcript } from "./Transcript";
+
+const WIDTH_KEY = "ckanban.drawerWidth";
+const DEFAULT_WIDTH = 760;
+const MIN_WIDTH = 420;
+
+function clampWidth(w: number): number {
+  return Math.round(Math.min(Math.max(w, MIN_WIDTH), window.innerWidth - 40));
+}
+
+function savedWidth(): number {
+  try {
+    const v = Number(localStorage.getItem(WIDTH_KEY));
+    if (v) return clampWidth(v);
+  } catch {}
+  return clampWidth(DEFAULT_WIDTH);
+}
+
+/** Drag the drawer's left edge to resize; double-click resets. Width persists per browser. */
+function useDrawerWidth() {
+  const [width, setWidth] = useState(savedWidth);
+  const [dragging, setDragging] = useState(false);
+  const widthRef = useRef(width);
+  widthRef.current = width;
+
+  const persist = (w: number) => {
+    try {
+      localStorage.setItem(WIDTH_KEY, String(w));
+    } catch {}
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setDragging(true);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (dragging) setWidth(clampWidth(window.innerWidth - e.clientX));
+  };
+  const onPointerUp = () => {
+    if (!dragging) return;
+    setDragging(false);
+    persist(widthRef.current);
+  };
+  const reset = () => {
+    const w = clampWidth(DEFAULT_WIDTH);
+    setWidth(w);
+    persist(w);
+  };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 120 : 40;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      const w = clampWidth(widthRef.current + (e.key === "ArrowLeft" ? step : -step));
+      setWidth(w);
+      persist(w);
+    }
+  };
+
+  useEffect(() => {
+    const onResize = () => setWidth((w) => clampWidth(w));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  return { width, dragging, handle: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onDoubleClick: reset, onKeyDown } };
+}
 
 export function TicketDrawer({ profile, ticket, onClose, onError }: {
   profile: Profile;
@@ -31,6 +97,7 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
   const [picking, setPicking] = useState(false);
   const [linked, setLinked] = useState<ClaudeSession | null>(null);
   const running = ticket.status === "in_progress";
+  const { width, dragging, handle } = useDrawerWidth();
 
   const reloadComments = () => api.comments(slug, ticket.id).then(setComments).catch(() => {});
 
@@ -125,7 +192,9 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
 
   return (
     <div className="drawer-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className="drawer" role="dialog" aria-label={ticket.title}>
+      <aside className={`drawer ${dragging ? "resizing" : ""}`} role="dialog" aria-label={ticket.title} style={{ width }}>
+        <div className="drawer-resize" role="separator" aria-orientation="vertical" aria-label="Resize panel" tabIndex={0}
+          title="Drag to resize · double-click to reset" {...handle} />
         <header className="drawer-head">
           <input className="title-input" value={title} onChange={(e) => setTitle(e.target.value)} onBlur={saveTitle}
             onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
