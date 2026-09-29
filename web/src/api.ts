@@ -46,6 +46,8 @@ export interface Ticket {
   updatedAt: string;
   body: string;
   running?: boolean;
+  /** Linked session currently open in a terminal. */
+  terminalOpen?: boolean;
   resumeCommand?: string | null;
   session?: SessionSummary | null;
   /** Why the ticket is waiting on you ("Your turn"), computed by the server. */

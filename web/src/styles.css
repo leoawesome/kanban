@@ -578,3 +578,5 @@ textarea { resize: vertical; font-size: 13.5px; }
   .panel-details { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--border); }
   .panel-body.details-closed { grid-template-columns: 1fr; }
 }
+
+.composer-warn { font-size: 12.5px; color: var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 6px 10px; }

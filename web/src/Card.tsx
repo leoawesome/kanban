@@ -51,7 +51,9 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
               PR #{ticket.prUrl.split("/").pop()}
             </a>
           )}
-          {ticket.workdir && <span className="badge stopped" title="Linked to an existing Claude session">session</span>}
+          {ticket.workdir && (ticket.terminalOpen
+            ? <span className="badge running" title="This ticket's Claude session is open in a terminal"><span className="live-dot" /> In terminal</span>
+            : <span className="badge stopped" title="Linked to an existing Claude session">session</span>)}
           {ticket.session && !working && (
             <span className="muted small">{timeAgo(ticket.session.lastMessage?.at || ticket.session.updatedAt)}</span>
           )}

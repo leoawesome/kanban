@@ -203,6 +203,12 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
         )}
       </div>
 
+      {ticket.terminalOpen && !running && (
+        <div className="composer-warn">
+          This session is also open in your terminal. Sending here works, but if you type in both places at once the two
+          conversations can get mixed up. Easiest: continue in one place.
+        </div>
+      )}
       <div className="composer">
         <textarea rows={2} value={draft} disabled={running}
           placeholder={running ? "Claude is replying…" : refine ? "Describe your idea or answer Claude…" : "Ask Claude to change or continue something…"}

@@ -116,6 +116,8 @@ export class Board {
     const t = this.store.getTicket(slug, id);
     if (!t || t.status !== "planning" || t.refineStarted || this.isRunning(slug, id) || this.shuttingDown) return;
     if (t.error?.startsWith("corrupt")) return;
+    // A linked session is already a conversation about work underway; an interview would be noise.
+    if (t.workdir || t.sessionStarted) return;
     this.start(slug, id, { text: "", mode: "refine" });
   }
 
@@ -162,7 +164,8 @@ export class Board {
       return;
     }
     if (this.shuttingDown) return;
-    if (session.existed && !run.stopRequested) {
+    // Unattended runs refuse to share a session with an open terminal; chat messages are the user's call (UI warns).
+    if (session.existed && !run.stopRequested && !run.chat) {
       const t0 = this.store.getTicket(slug, id)!;
       const title = t0.workdir ? sessionTitle(t0.workdir, session.sessionId) : null;
       if (await this.isSessionLive(session.sessionId, title)) {
@@ -381,7 +384,9 @@ export class Board {
     }
     return this.patch(slug, id, sessionId === null
       ? { sessionId: null, workdir: null }
-      : { sessionId, workdir: profile.path, worktree: null, runCount: 0, lastRunAt: new Date().toISOString() });
+      // Linked work already exists and the next step is the user's: land in Review ("Your turn").
+      : { sessionId, workdir: profile.path, worktree: null, runCount: 0, lastRunAt: new Date().toISOString(), status: "review",
+        order: t.status === "review" ? t.order : this.store.nextOrder(slug, "review") });
   }
 
   addComment(slug: string, id: string, text: string) {

@@ -246,7 +246,7 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
               {ticket.workdir && ticket.sessionId ? (
                 <div className="session-line">
                   <span>Linked: <b>{linked ? sessionLabel(linked) : ticket.sessionId.slice(0, 8)}</b></span>
-                  {linked?.live && <span className="badge running"><span className="live-dot" /> open in terminal</span>}
+                  {(ticket.terminalOpen || linked?.live) && <span className="badge running"><span className="live-dot" /> open in terminal</span>}
                   {!working && <button className="link-btn" onClick={() => setPicking(true)}>Change</button>}
                   {!working && <button className="link-btn" onClick={() => act(() => api.linkSession(slug, ticket.id, null))}>Unlink</button>}
                 </div>

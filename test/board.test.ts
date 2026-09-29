@@ -428,3 +428,30 @@ test("a manual refine chat also counts as started", async () => {
   await board.whenIdle();
   expect(readArgs().length).toBe(1);
 });
+
+test("linking a session moves the card to Review", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "backlog" });
+  const linked = await board.linkSession("p", t.id, "11111111-2222-3333-4444-555555555555");
+  expect(linked.status).toBe("review");
+});
+
+test("linked ticket moved into Planning does not auto-start an interview", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "backlog" });
+  await board.linkSession("p", t.id, "11111111-2222-3333-4444-555555555555");
+  await board.updateTicket("p", t.id, { status: "planning" });
+  await board.whenIdle();
+  expect(readArgs().length).toBe(0);
+});
+
+test("chat still works while the linked session is open in a terminal", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "backlog" });
+  await board.linkSession("p", t.id, "11111111-2222-3333-4444-555555555555");
+  liveSessions.add("11111111-2222-3333-4444-555555555555");
+  await board.chat("p", t.id, "what's the status?");
+  await board.whenIdle();
+  expect(readArgs().length).toBe(1);
+  expect(store.getTicket("p", t.id)!.outcome).not.toBe("blocked");
+});

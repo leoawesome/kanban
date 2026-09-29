@@ -8,6 +8,7 @@ import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
 import { attentionFor } from "./attention";
 import { SessionCache } from "./session";
+import type { TerminalWatcher } from "./terminals";
 import { UpdateChecker } from "./update";
 import type { Store } from "./store";
 import { STATUSES, type Profile, type Status, type Ticket } from "./types";
@@ -23,6 +24,7 @@ export interface ServerDeps {
   assets?: Record<string, string>;
   sessions?: SessionCache;
   updates?: UpdateChecker;
+  terminals?: TerminalWatcher;
 }
 
 class HttpError extends Error {
@@ -79,6 +81,8 @@ export function createServer(deps: ServerDeps) {
       running,
       resumeCommand: t.sessionId ? resumeCommand(t.workdir ?? t.worktree ?? p.path, t.sessionId) : null,
       session,
+      /** Linked session is open in a terminal right now (board chat still works, UI warns). */
+      terminalOpen: deps.terminals?.isOpen(p.slug, t.id) ?? false,
       attention: attentionFor(t, session, running),
     };
   };
