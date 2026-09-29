@@ -188,6 +188,7 @@ export function parseSession(raw: string): ParsedSession {
   let aiTitle: string | null = null;
   const entries: SessionEntry[] = [];
   const artifacts = new Map<string, SessionArtifact>();
+  const toolNames = new Map<string, string>();
 
   for (const line of raw.split("\n")) {
     if (!line) continue;
@@ -207,7 +208,9 @@ export function parseSession(raw: string): ParsedSession {
     if (ev.type === "user") {
       if (Array.isArray(content)) {
         for (const b of content) {
-          if (b?.type !== "tool_result") continue;
+          // Only real publishes: output of the Artifact tool. Other tools (e.g. Bash grepping a
+          // different session's file) can print the same text.
+          if (b?.type !== "tool_result" || toolNames.get(b.tool_use_id) !== "Artifact") continue;
           for (const m of resultText(b.content).matchAll(PUBLISHED)) {
             const label = basename(m[1]).replace(/\.[a-z0-9]+$/i, "");
             artifacts.delete(m[2]); // re-insert so the newest publish sorts last
@@ -222,6 +225,7 @@ export function parseSession(raw: string): ParsedSession {
 
     if (!Array.isArray(content)) continue;
     content.forEach((b: any, i: number) => {
+      if (b?.type === "tool_use" && typeof b.id === "string") toolNames.set(b.id, String(b.name));
       const id = i ? `${uuid}:${i}` : uuid;
       if (b?.type === "text" && b.text?.trim()) entries.push({ uuid: id, at, role: "assistant", kind: "text", ...assistantBlock(b.text.trim()) });
       else if (b?.type === "tool_use") entries.push({ uuid: id, at, role: "assistant", kind: "tool", text: toolLabel(b) });

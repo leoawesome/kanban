@@ -92,7 +92,31 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [picking, setPicking] = useState(false);
   const [linked, setLinked] = useState<ClaudeSession | null>(null);
-  const [detailsOpen, setDetailsOpen] = useState(true);
+  const [detailsOpen, setDetailsOpenState] = useState(() => {
+    try {
+      return localStorage.getItem("ckanban.detailsOpen") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const setDetailsOpen = (fn: (v: boolean) => boolean) => setDetailsOpenState((v) => {
+    const next = fn(v);
+    try {
+      localStorage.setItem("ckanban.detailsOpen", next ? "1" : "0");
+    } catch {}
+    return next;
+  });
+  useEffect(() => {
+    // ⌘\ / Ctrl+\ toggles the details column, like a sidebar.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "\\" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setDetailsOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const titleRef = useRef<HTMLInputElement>(null);
   const working = ticket.status === "in_progress" || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
@@ -163,6 +187,15 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           title="Drag to resize · double-click to reset" {...handle} />
 
         <header className="panel-head">
+          <button className={`icon-btn sidebar-toggle ${detailsOpen ? "on" : ""}`} onClick={() => setDetailsOpen((v) => !v)}
+            aria-label={detailsOpen ? "Hide details" : "Show details"} aria-pressed={detailsOpen}
+            title={`${detailsOpen ? "Hide" : "Show"} details (⌘\\)`}>
+            <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
+              <rect x="2" y="3" width="14" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="7" y1="3.5" x2="7" y2="14.5" stroke="currentColor" strokeWidth="1.5" />
+              {detailsOpen && <rect x="2.75" y="3.75" width="3.5" height="10.5" rx="1.5" fill="currentColor" opacity="0.35" />}
+            </svg>
+          </button>
           <input ref={titleRef} className="title-input" value={title} onChange={(e) => setTitle(e.target.value)} onBlur={saveTitle}
             onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} aria-label="Title" />
           {att && (
@@ -176,9 +209,6 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
 
         <div className={`panel-body ${detailsOpen ? "" : "details-closed"}`}>
           <div className="panel-details">
-            <button className="details-toggle link-btn" onClick={() => setDetailsOpen((v) => !v)}>
-              {detailsOpen ? "Hide details" : "Show details"}
-            </button>
 
             <div className="field-row">
               <span className="field-key">Status</span>

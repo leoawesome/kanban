@@ -37,7 +37,7 @@ test("parseSession: timeline, artifacts deduped, last message", () => {
     ["user", "text", "looks good, ship it"],
   ]);
   expect(s.artifacts).toEqual([
-    { url: "https://claude.ai/artifact/EHESGk3", label: "flight-autopilot", at: "2026-09-29T01:00:05Z" },
+    { url: "https://claude.ai/artifact/EHESGk3", label: "flight-autopilot", at: "2026-09-29T01:00:04Z" },
   ]);
   expect(s.lastMessage).toEqual({ role: "user", text: "looks good, ship it", at: "2026-09-29T01:00:08Z" });
 });
@@ -131,4 +131,14 @@ test("parseSession: open questions and pending proposal reset after the user rep
   expect(proposed.pendingProposal).toEqual({ title: "T2", description: "D2" });
   const after = parseSession([asst([{ type: "text", text: p }], "3"), user("ok", "4")].join("\n"));
   expect(after.pendingProposal).toBeNull();
+});
+
+test("artifacts only come from the Artifact tool, not from text quoted in other tool output", () => {
+  const raw = [
+    asst([{ type: "tool_use", id: "b1", name: "Bash", input: { command: "grep Published other.jsonl" } }], "2026-09-29T03:00:00Z"),
+    user([{ type: "tool_result", tool_use_id: "b1", content: "Published /x/flight-autopilot.html at https://claude.ai/artifact/EHESGk3 (Version 1)" }], "2026-09-29T03:00:01Z"),
+    asst([{ type: "tool_use", id: "a1", name: "Artifact", input: { file_path: "/y/board.html" } }], "2026-09-29T03:00:02Z"),
+    user([{ type: "tool_result", tool_use_id: "a1", content: "Published /y/board.html at https://claude.ai/artifact/Mine123 (Version 1)" }], "2026-09-29T03:00:03Z"),
+  ].join("\n");
+  expect(parseSession(raw).artifacts.map((a) => a.label)).toEqual(["board"]);
 });
