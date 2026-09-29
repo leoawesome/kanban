@@ -1,0 +1,42 @@
+import { expect, test } from "bun:test";
+import { attentionFor } from "../src/server/attention";
+import type { SessionSummary } from "../src/server/session";
+import type { Ticket } from "../src/server/types";
+
+const T = (p: Partial<Ticket>): Ticket => ({
+  id: "t", title: "T", status: "planning", order: 1, sessionId: "s", worktree: null, branch: null, prUrl: null,
+  outcome: null, lastActivity: null, lastRunAt: null, runCount: 0, error: null, createdAt: "", updatedAt: "", body: "b", ...p,
+});
+const S = (p: Partial<SessionSummary>): SessionSummary => ({
+  title: null, lastMessage: null, artifacts: [], updatedAt: "", openQuestions: 0, pendingProposal: null, ...p,
+});
+
+test("running tickets never need the user", () => {
+  expect(attentionFor(T({ outcome: "failed" }), S({ openQuestions: 3 }), true)).toBeNull();
+});
+
+test("failures and blocks come first", () => {
+  expect(attentionFor(T({ outcome: "failed" }), null, false)).toEqual({ kind: "failed", label: "Run failed" });
+  expect(attentionFor(T({ outcome: "blocked" }), S({ openQuestions: 2 }), false)!.kind).toBe("blocked");
+});
+
+test("open questions", () => {
+  expect(attentionFor(T({}), S({ openQuestions: 5 }), false)).toEqual({ kind: "questions", label: "Answer 5 questions" });
+  expect(attentionFor(T({}), S({ openQuestions: 1 }), false)!.label).toBe("Answer 1 question");
+  expect(attentionFor(T({ outcome: "needs_input" }), null, false)!.kind).toBe("questions");
+});
+
+test("unapplied proposal, but not once applied", () => {
+  const prop = { title: "New", description: "D" };
+  expect(attentionFor(T({}), S({ pendingProposal: prop }), false)).toEqual({ kind: "proposal", label: "Review proposal" });
+  expect(attentionFor(T({ title: "New", body: "D" }), S({ pendingProposal: prop }), false)).toBeNull();
+});
+
+test("review column and Claude replies in planning", () => {
+  expect(attentionFor(T({ status: "review", outcome: "done" }), null, false)).toEqual({ kind: "review", label: "Ready for review" });
+  const replied = S({ lastMessage: { role: "assistant", text: "hi", at: "" } });
+  expect(attentionFor(T({}), replied, false)).toEqual({ kind: "reply", label: "Claude replied" });
+  expect(attentionFor(T({ status: "backlog" }), replied, false)).toBeNull();
+  expect(attentionFor(T({ status: "done" }), replied, false)).toBeNull();
+  expect(attentionFor(T({}), S({ lastMessage: { role: "user", text: "hi", at: "" } }), false)).toBeNull();
+});

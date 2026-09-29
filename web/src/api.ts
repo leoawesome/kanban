@@ -2,14 +2,17 @@ export type Status = "backlog" | "planning" | "ready" | "in_progress" | "review"
 export type Outcome = null | "done" | "blocked" | "failed" | "stopped" | "needs_input";
 export type TicketMode = "interview" | "auto";
 
-export const COLUMNS: { id: Status; label: string; hint: string }[] = [
-  { id: "backlog", label: "Backlog", hint: "Ideas" },
-  { id: "planning", label: "Planning", hint: "Claude interviews you to shape it" },
-  { id: "ready", label: "Ready", hint: "Claude picks these up" },
-  { id: "in_progress", label: "In Progress", hint: "Claude working" },
-  { id: "review", label: "Review", hint: "Your turn" },
-  { id: "done", label: "Done", hint: "" },
+/** claude: dropping a card here makes Claude start (or it is running). */
+export const COLUMNS: { id: Status; label: string; hint: string; claude: boolean }[] = [
+  { id: "backlog", label: "Backlog", hint: "Park ideas. Nothing runs.", claude: false },
+  { id: "planning", label: "Planning", hint: "Claude interviews you and shapes the ticket", claude: true },
+  { id: "ready", label: "Ready", hint: "Claude starts the work on its own", claude: true },
+  { id: "in_progress", label: "In Progress", hint: "Claude is working", claude: true },
+  { id: "review", label: "Review", hint: "Your turn: check the result", claude: false },
+  { id: "done", label: "Done", hint: "Finished", claude: false },
 ];
+
+export type AttentionKind = "failed" | "blocked" | "questions" | "proposal" | "review" | "reply";
 
 export interface Profile {
   name: string;
@@ -45,6 +48,8 @@ export interface Ticket {
   running?: boolean;
   resumeCommand?: string | null;
   session?: SessionSummary | null;
+  /** Why the ticket is waiting on you ("Your turn"), computed by the server. */
+  attention?: { kind: AttentionKind; label: string } | null;
 }
 
 export interface SessionMessage {
@@ -58,6 +63,8 @@ export interface SessionSummary {
   lastMessage: SessionMessage | null;
   artifacts: { url: string; label: string; at: string }[];
   updatedAt: string;
+  openQuestions: number;
+  pendingProposal: { title: string; description: string } | null;
 }
 
 export interface QuestionOption {

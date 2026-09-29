@@ -106,6 +106,10 @@ export interface ParsedSession {
   entries: SessionEntry[];
   artifacts: SessionArtifact[];
   lastMessage: SessionMessage | null;
+  /** Questions Claude asked since the user's last message. */
+  openQuestions: number;
+  /** Latest ticket proposal since the user's last message. */
+  pendingProposal: TicketProposal | null;
 }
 
 /** What the board card and ticket header need; sent over SSE. */
@@ -114,6 +118,8 @@ export interface SessionSummary {
   lastMessage: SessionMessage | null;
   artifacts: SessionArtifact[];
   updatedAt: string;
+  openQuestions: number;
+  pendingProposal: TicketProposal | null;
 }
 
 interface Dirs {
@@ -230,6 +236,19 @@ export function parseSession(raw: string): ParsedSession {
     entries,
     artifacts: [...artifacts.values()],
     lastMessage: last ? { role: last.role, text: lastText, at: last.at } : null,
+    ...pendingSince(entries),
+  };
+}
+
+function pendingSince(entries: SessionEntry[]): Pick<ParsedSession, "openQuestions" | "pendingProposal"> {
+  let lastUser = -1;
+  entries.forEach((e, i) => {
+    if (e.role === "user" && e.kind === "text") lastUser = i;
+  });
+  const after = entries.slice(lastUser + 1);
+  return {
+    openQuestions: after.reduce((n, e) => n + (e.questions?.length ?? 0), 0),
+    pendingProposal: after.findLast((e) => e.proposal)?.proposal ?? null,
   };
 }
 
@@ -296,7 +315,10 @@ export class SessionCache {
     try {
       updatedAt = statSync(f).mtime.toISOString();
     } catch {}
-    return { title: p.title, lastMessage: p.lastMessage, artifacts: p.artifacts, updatedAt };
+    return {
+      title: p.title, lastMessage: p.lastMessage, artifacts: p.artifacts, updatedAt,
+      openQuestions: p.openQuestions, pendingProposal: p.pendingProposal,
+    };
   }
 }
 

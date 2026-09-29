@@ -119,3 +119,16 @@ test("parseSession hides board instructions and extracts questions + proposals",
   expect(s.entries[4].proposal).toEqual({ title: "Habit tracker MVP", description: "## Goal\nTrack habits" });
   expect(s.lastMessage!.text).toBe("<ckanban-questions>not json</ckanban-questions>");
 });
+
+test("parseSession: open questions and pending proposal reset after the user replies", () => {
+  const q = '<ckanban-questions>[{"question":"A?","options":[{"label":"x"}]},{"question":"B?","options":[{"label":"y"}]}]</ckanban-questions>';
+  const p = '<ckanban-ticket>{"title":"T2","description":"D2"}</ckanban-ticket>';
+  const asked = parseSession([asst([{ type: "text", text: q }], "1")].join("\n"));
+  expect(asked.openQuestions).toBe(2);
+  const answered = parseSession([asst([{ type: "text", text: q }], "1"), user("answers", "2")].join("\n"));
+  expect(answered.openQuestions).toBe(0);
+  const proposed = parseSession([user("answers", "2"), asst([{ type: "text", text: p }], "3")].join("\n"));
+  expect(proposed.pendingProposal).toEqual({ title: "T2", description: "D2" });
+  const after = parseSession([asst([{ type: "text", text: p }], "3"), user("ok", "4")].join("\n"));
+  expect(after.pendingProposal).toBeNull();
+});

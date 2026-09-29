@@ -16,17 +16,31 @@ export function outcomeBadge(t: Ticket) {
 }
 
 export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: () => void; dragging?: boolean }) {
-  const badge = outcomeBadge(ticket);
-  const showActivity = ticket.lastActivity && (ticket.status === "in_progress" || (ticket.status === "review" && !ticket.session?.lastMessage));
+  const working = ticket.status === "in_progress" || !!ticket.running;
+  const att = working ? null : ticket.attention ?? null;
+  const badge = att ? null : outcomeBadge(ticket);
+  const showActivity = working && ticket.lastActivity;
+  const last = ticket.session?.lastMessage;
   return (
-    <article className={`card ${dragging ? "dragging" : ""} ${ticket.status === "in_progress" ? "is-running" : ""}`} onClick={onClick}>
+    <article
+      className={`card ${dragging ? "dragging" : ""} ${working ? "is-running" : ""} ${att ? `needs-you att-${att.kind}` : ""}`}
+      onClick={onClick}>
+      {att && (
+        <div className={`your-turn att-${att.kind}`}>
+          <span className="yt-dot" aria-hidden />
+          <span className="yt-label">Your turn</span>
+          <span className="yt-why">{att.label}</span>
+        </div>
+      )}
       <div className="card-title">{ticket.title}</div>
       {showActivity ? (
-        <div className="card-activity" title={ticket.lastActivity!}>{ticket.lastActivity}</div>
-      ) : ticket.session?.lastMessage && (
-        <div className="card-last" title={ticket.session.lastMessage.text}>
-          <span className={`who ${ticket.session.lastMessage.role}`}>{ticket.session.lastMessage.role === "user" ? "You" : "Claude"}:</span>{" "}
-          {plainPreview(ticket.session.lastMessage.text)}
+        <div className="card-activity" title={ticket.lastActivity!}>
+          <span className="spinner" /> {ticket.lastActivity}
+        </div>
+      ) : last && (
+        <div className="card-last" title={last.text}>
+          <span className={`who ${last.role}`}>{last.role === "user" ? "You" : "Claude"}:</span>{" "}
+          {plainPreview(last.text)}
         </div>
       )}
       {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session) && (
@@ -38,10 +52,9 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
             </a>
           )}
           {ticket.workdir && <span className="badge stopped" title="Linked to an existing Claude session">session</span>}
-          {ticket.session && ticket.status !== "in_progress" && (
+          {ticket.session && !working && (
             <span className="muted small">{timeAgo(ticket.session.lastMessage?.at || ticket.session.updatedAt)}</span>
           )}
-          {ticket.runCount > 0 && <span className="muted small">{ticket.runCount} run{ticket.runCount > 1 ? "s" : ""}</span>}
         </div>
       )}
     </article>

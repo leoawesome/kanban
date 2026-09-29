@@ -32,27 +32,41 @@ function SortableCard({ ticket, onOpen }: { ticket: Ticket; onOpen: (id: string)
   );
 }
 
-function Column({ id, label, hint, tickets, onOpen, onAdd }: {
-  id: Status; label: string; hint: string; tickets: Ticket[]; onOpen: (id: string) => void; onAdd: (s: Status) => void;
+const SPARK = (
+  <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden>
+    <path d="M8 0c.5 3.9 2.1 5.5 6 6-3.9.5-5.5 2.1-6 6-.5-3.9-2.1-5.5-6-6 3.9-.5 5.5-2.1 6-6Z" fill="currentColor" />
+  </svg>
+);
+
+function Column({ id, label, hint, claude, tickets, onOpen, onAdd }: {
+  id: Status; label: string; hint: string; claude: boolean; tickets: Ticket[]; onOpen: (id: string) => void; onAdd: (s: Status) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${id}`, data: { status: id } });
+  const needYou = tickets.filter((t) => t.attention && !t.running && t.status !== "in_progress").length;
+  const canAdd = id !== "in_progress" && id !== "done";
   return (
-    <section className={`column col-${id} ${isOver ? "over" : ""}`}>
+    <section className={`column col-${id} ${claude ? "claude-zone" : ""} ${isOver ? "over" : ""}`}>
       <header className="column-head">
         <span className="column-title">{label}</span>
         <span className="count">{tickets.length}</span>
-        {id !== "in_progress" && id !== "done" && (
-          <button className="icon-btn" title={`Add to ${label}`} onClick={() => onAdd(id)}>
-            +
-          </button>
-        )}
+        {claude && <span className="claude-tag" title="Claude starts automatically when a card is here">{SPARK} Claude</span>}
+        {needYou > 0 && <span className="need-chip" title="Tickets waiting on you">{needYou} need you</span>}
+        <span className="spacer" />
+        {canAdd ? (
+          <button className="icon-btn" title={`Add to ${label}`} onClick={() => onAdd(id)}>+</button>
+        ) : <span className="icon-btn-placeholder" aria-hidden />}
       </header>
-      {hint && <div className="column-hint">{hint}</div>}
+      <div className="column-hint">{hint}</div>
       <SortableContext items={tickets.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className="column-body">
           {tickets.map((t) => (
             <SortableCard key={t.id} ticket={t} onOpen={onOpen} />
           ))}
+          {tickets.length === 0 && claude && (
+            <div className="column-drop-hint">
+              {id === "in_progress" ? "Cards show up here while Claude works" : `Drop a card here and Claude ${id === "planning" ? "starts interviewing you" : "starts working on it"}`}
+            </div>
+          )}
         </div>
       </SortableContext>
     </section>

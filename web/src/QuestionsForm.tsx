@@ -1,61 +1,158 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Question } from "./api";
 
-/** Claude's interview questions as a form; answers are sent back as one chat message. */
+interface Answer {
+  picked: string[];
+  otherOn: boolean;
+  other: string;
+}
+
+function initial(q: Question): Answer {
+  const rec = q.options.find((o) => o.recommended) ?? (q.multiSelect ? undefined : q.options[0]);
+  return { picked: rec ? [rec.label] : [], otherOn: false, other: "" };
+}
+
+function answerText(a: Answer): string {
+  const parts = [...a.picked, ...(a.otherOn && a.other.trim() ? [a.other.trim()] : [])];
+  return parts.length ? parts.join("; ") : "(no preference)";
+}
+
+/**
+ * Claude's interview questions, one at a time (like Claude Code's question picker).
+ * Keys: 1-9 pick an option, Enter goes next, Backspace/← goes back when not typing.
+ */
 export function QuestionsForm({ questions, answered, disabled, onSubmit }: {
   questions: Question[];
   answered: boolean;
   disabled: boolean;
   onSubmit: (text: string) => void;
 }) {
-  const [picked, setPicked] = useState<string[][]>(() =>
-    questions.map((q) => {
-      const rec = q.options.find((o) => o.recommended) ?? (q.multiSelect ? undefined : q.options[0]);
-      return rec ? [rec.label] : [];
-    }));
-  const [other, setOther] = useState<string[]>(() => questions.map(() => ""));
+  const [answers, setAnswers] = useState<Answer[]>(() => questions.map(initial));
+  const [step, setStep] = useState(0);
   const [note, setNote] = useState("");
+  const root = useRef<HTMLDivElement>(null);
+  const total = questions.length;
+  const summary = step >= total;
+  const q = questions[Math.min(step, total - 1)];
+  const a = answers[Math.min(step, total - 1)];
 
-  const toggle = (qi: number, label: string, multi: boolean) =>
-    setPicked((p) => p.map((sel, i) => (i !== qi ? sel : multi ? (sel.includes(label) ? sel.filter((l) => l !== label) : [...sel, label]) : [label])));
+  useEffect(() => {
+    if (!answered) root.current?.focus({ preventScroll: true });
+  }, [step, answered]);
 
-  const submit = () => {
-    const lines = questions.map((q, i) => {
-      const parts = [...picked[i], ...(other[i].trim() ? [other[i].trim()] : [])];
-      return `- ${q.question} → ${parts.length ? parts.join("; ") : "(no preference)"}`;
-    });
+  const update = (i: number, fn: (a: Answer) => Answer) => setAnswers((arr) => arr.map((x, j) => (j === i ? fn(x) : x)));
+
+  const pick = (label: string) =>
+    update(step, (x) => q.multiSelect
+      ? { ...x, picked: x.picked.includes(label) ? x.picked.filter((l) => l !== label) : [...x.picked, label] }
+      : { ...x, picked: [label], otherOn: false });
+
+  const toggleOther = () =>
+    update(step, (x) => ({ ...x, otherOn: !x.otherOn, picked: q.multiSelect || x.otherOn ? x.picked : [] }));
+
+  const send = () => {
+    const lines = questions.map((qq, i) => `- ${qq.question} → ${answerText(answers[i])}`);
     onSubmit(`My answers:\n${lines.join("\n")}${note.trim() ? `\n\n${note.trim()}` : ""}`);
   };
 
+  const next = () => (step < total - 1 || (total > 1 && step === total - 1) ? setStep(step + 1) : send());
+
+  if (answered) {
+    return (
+      <div className="qcard answered">
+        <div className="qcard-head"><span className="qcard-title">✓ Answered {total} question{total > 1 ? "s" : ""}</span></div>
+      </div>
+    );
+  }
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (disabled || (e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
+    if (!summary && /^[1-9]$/.test(e.key)) {
+      const opt = q.options[Number(e.key) - 1];
+      if (opt) pick(opt.label);
+      else if (Number(e.key) === q.options.length + 1) toggleOther();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      summary ? send() : next();
+    } else if ((e.key === "ArrowLeft" || e.key === "Backspace") && step > 0) {
+      e.preventDefault();
+      setStep(step - 1);
+    }
+  };
+
   return (
-    <div className={`qform ${answered ? "answered" : ""}`}>
-      {questions.map((q, qi) => (
-        <fieldset key={qi} className="q" disabled={answered || disabled}>
-          <legend>{qi + 1}. {q.question}{q.multiSelect && <span className="muted small"> (pick any)</span>}</legend>
-          {q.options.map((o) => {
-            const on = picked[qi].includes(o.label);
-            return (
-              <label key={o.label} className={`q-opt ${on ? "on" : ""}`}>
-                <input type={q.multiSelect ? "checkbox" : "radio"} name={`q${qi}`} checked={on}
-                  onChange={() => toggle(qi, o.label, q.multiSelect)} />
-                <span>
-                  <b>{o.label}</b>{o.recommended && <span className="q-rec">Recommended</span>}
-                  {o.description && <span className="q-desc">{o.description}</span>}
-                </span>
-              </label>
-            );
-          })}
-          <input className="q-other" value={other[qi]} placeholder="Other / add detail (optional)"
-            onChange={(e) => setOther((arr) => arr.map((v, i) => (i === qi ? e.target.value : v)))} />
-        </fieldset>
-      ))}
-      {!answered && (
-        <div className="q-foot">
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Anything else Claude should know? (optional)" disabled={disabled} />
-          <button className="btn primary" onClick={submit} disabled={disabled}>Send answers</button>
+    <div className="qcard" ref={root} tabIndex={-1} onKeyDown={onKey}>
+      <div className="qcard-head">
+        <span className="qcard-title">Claude has {total} question{total > 1 ? "s" : ""}</span>
+        <span className="qsteps" aria-label={`Step ${Math.min(step + 1, total)} of ${total}`}>
+          {questions.map((_, i) => (
+            <button key={i} className={`qstep ${i === step ? "on" : ""} ${i < step || summary ? "done" : ""}`}
+              onClick={() => setStep(i)} aria-label={`Question ${i + 1}`} />
+          ))}
+          <span className="muted small">{summary ? "Review" : `${step + 1} / ${total}`}</span>
+        </span>
+      </div>
+
+      {!summary ? (
+        <div className="qbody">
+          <div className="qquestion">{q.question}{q.multiSelect && <span className="muted small"> · pick any</span>}</div>
+          <div className="qopts" role={q.multiSelect ? "group" : "radiogroup"}>
+            {q.options.map((o, i) => {
+              const on = a.picked.includes(o.label);
+              return (
+                <button key={o.label} type="button" disabled={disabled}
+                  className={`qopt ${on ? "on" : ""} ${q.multiSelect ? "multi" : ""}`}
+                  role={q.multiSelect ? "checkbox" : "radio"} aria-checked={on} onClick={() => pick(o.label)}>
+                  <span className="qmark" aria-hidden>{q.multiSelect ? (on ? "✓" : "") : ""}</span>
+                  <span className="qtext">
+                    <span className="qlabel">
+                      {o.label}
+                      {o.recommended && <span className="qrec">Recommended</span>}
+                    </span>
+                    {o.description && <span className="qdesc">{o.description}</span>}
+                  </span>
+                  <kbd className="qkey">{i + 1}</kbd>
+                </button>
+              );
+            })}
+            <button type="button" disabled={disabled} className={`qopt ${a.otherOn ? "on" : ""} ${q.multiSelect ? "multi" : ""}`}
+              role={q.multiSelect ? "checkbox" : "radio"} aria-checked={a.otherOn} onClick={toggleOther}>
+              <span className="qmark" aria-hidden>{q.multiSelect ? (a.otherOn ? "✓" : "") : ""}</span>
+              <span className="qtext"><span className="qlabel">Other…</span><span className="qdesc">Type your own answer</span></span>
+              <kbd className="qkey">{q.options.length + 1}</kbd>
+            </button>
+            {a.otherOn && (
+              <input autoFocus className="qother" value={a.other} placeholder="Your answer"
+                onChange={(e) => update(step, (x) => ({ ...x, other: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); next(); } }} />
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="qbody">
+          <ol className="qsummary">
+            {questions.map((qq, i) => (
+              <li key={i}>
+                <button className="link-btn" onClick={() => setStep(i)}>{qq.question}</button>
+                <span>{answerText(answers[i])}</span>
+              </li>
+            ))}
+          </ol>
+          <input className="qother" value={note} onChange={(e) => setNote(e.target.value)} disabled={disabled}
+            placeholder="Anything else Claude should know? (optional)"
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); send(); } }} />
         </div>
       )}
-      {answered && <div className="muted small">Answered</div>}
+
+      <div className="qfoot">
+        <button className="btn ghost small" disabled={step === 0} onClick={() => setStep(step - 1)}>Back</button>
+        <span className="muted small qhint">{summary ? "Enter to send" : "1-9 to pick · Enter for next"}</span>
+        {summary || total === 1 ? (
+          <button className="btn primary small" disabled={disabled} onClick={send}>Send answers</button>
+        ) : (
+          <button className="btn primary small" disabled={disabled} onClick={next}>{step === total - 1 ? "Review →" : "Next →"}</button>
+        )}
+      </div>
     </div>
   );
 }

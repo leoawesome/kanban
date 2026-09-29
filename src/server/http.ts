@@ -6,6 +6,7 @@ import type { Bus, BusEvent } from "./events";
 import { detectBaseBranch, isGitRepo, which } from "./git";
 import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
+import { attentionFor } from "./attention";
 import { SessionCache } from "./session";
 import { UpdateChecker } from "./update";
 import type { Store } from "./store";
@@ -70,12 +71,17 @@ export function createServer(deps: ServerDeps) {
     if (!t) throw new HttpError(404, `ticket ${id} not found`);
     return t;
   };
-  const view = (p: Profile, t: Ticket) => ({
-    ...t,
-    running: board.isRunning(p.slug, t.id),
-    resumeCommand: t.sessionId ? resumeCommand(t.workdir ?? t.worktree ?? p.path, t.sessionId) : null,
-    session: t.sessionId ? sessions.summary(t.sessionId) : null,
-  });
+  const view = (p: Profile, t: Ticket) => {
+    const running = board.isRunning(p.slug, t.id);
+    const session = t.sessionId ? sessions.summary(t.sessionId) : null;
+    return {
+      ...t,
+      running,
+      resumeCommand: t.sessionId ? resumeCommand(t.workdir ?? t.worktree ?? p.path, t.sessionId) : null,
+      session,
+      attention: attentionFor(t, session, running),
+    };
+  };
 
   async function api(req: Request, url: URL): Promise<Response> {
     const parts = url.pathname.split("/").filter(Boolean).slice(1).map(decodeURIComponent);
@@ -301,6 +307,12 @@ export function createServer(deps: ServerDeps) {
             if (p) out = { ...e, ticket: view(p, e.ticket) };
           }
           send(`data: ${JSON.stringify(out)}\n\n`);
+          // Session changes (terminal chat, new questions) change the ticket's "your turn" state too.
+          if (e.type === "session.updated") {
+            const p = store.getProfile(e.profile);
+            const t = p && store.getTicket(e.profile, e.id);
+            if (p && t) send(`data: ${JSON.stringify({ type: "ticket.updated", profile: e.profile, ticket: view(p, t) })}\n\n`);
+          }
         });
         ping = setInterval(() => send(": ping\n\n"), 15_000);
         req.signal.addEventListener("abort", () => {
