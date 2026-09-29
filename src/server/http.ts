@@ -171,7 +171,8 @@ export function createServer(deps: ServerDeps) {
         const title = String(b.title ?? "").trim();
         if (!title) throw new HttpError(400, "title is required");
         const status: Status = STATUSES.includes(b.status) ? b.status : "backlog";
-        let t = await board.createTicket(slug, { title, body: String(b.body ?? ""), status: b.sessionId ? "backlog" : status });
+        const mode = b.mode === "auto" ? "auto" : "interview";
+        let t = await board.createTicket(slug, { title, body: String(b.body ?? ""), status: b.sessionId ? "backlog" : status, mode });
         if (b.sessionId) {
           try {
             await board.linkSession(slug, t.id, String(b.sessionId));
@@ -193,7 +194,8 @@ export function createServer(deps: ServerDeps) {
       if (m === "PATCH") {
         const b = await body(req);
         if (b.status !== undefined && !STATUSES.includes(b.status)) throw new HttpError(400, `invalid status ${b.status}`);
-        const patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">> & { expectedBody?: string } = {};
+        const patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode">> & { expectedBody?: string } = {};
+        if (b.mode === "auto" || b.mode === "interview") patch.mode = b.mode;
         if (typeof b.expectedBody === "string") patch.expectedBody = b.expectedBody;
         if (typeof b.title === "string") patch.title = b.title;
         if (typeof b.body === "string") patch.body = b.body;
@@ -210,6 +212,19 @@ export function createServer(deps: ServerDeps) {
 
     const action = parts[4];
     if (action === "activity" && m === "GET") return json(store.readActivity(slug, id));
+    if (action === "outputs" && m === "GET") {
+      if (parts.length === 5) return json(store.listOutputs(slug, id));
+      const file = store.outputPath(slug, id, parts.slice(5).join("/"));
+      if (!file) throw new HttpError(404, "output not found");
+      // Always plain text + sandbox: files are written by Claude and must never run as HTML on this origin.
+      return new Response(Bun.file(file), {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "sandbox",
+        },
+      });
+    }
     if (action === "conversation" && m === "GET") {
       // Read-only view of the ticket's Claude session file (terminal chat + board runs), newest last.
       const t = store.getTicket(slug, id)!;

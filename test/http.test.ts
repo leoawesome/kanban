@@ -132,6 +132,20 @@ test("link session endpoint and sessions list", async () => {
   expect(((await r.json()) as any).sessionId).toBeNull();
 });
 
+test("new tickets default to interview mode; outputs are served as sandboxed text", async () => {
+  const path = tempDir("ck-plain-");
+  await fetch(`${base}/api/profiles`, json("POST", { name: "Modes", path }));
+  const t = (await (await fetch(`${base}/api/profiles/modes/tickets`, json("POST", { title: "t" }))).json()) as any;
+  expect(t.mode).toBe("interview");
+  const a = (await (await fetch(`${base}/api/profiles/modes/tickets`, json("POST", { title: "t2", mode: "auto" }))).json()) as any;
+  expect(a.mode).toBe("auto");
+  const patched = (await (await fetch(`${base}/api/profiles/modes/tickets/${t.id}`, json("PATCH", { mode: "auto" }))).json()) as any;
+  expect(patched.mode).toBe("auto");
+  expect(await (await fetch(`${base}/api/profiles/modes/tickets/${t.id}/outputs`)).json()).toEqual([]);
+  const r = await fetch(`${base}/api/profiles/modes/tickets/${t.id}/outputs/..%2Fticket.md`);
+  expect(r.status).toBe(404);
+});
+
 test("health", async () => {
   const r = await fetch(`${base}/api/health`);
   const h = (await r.json()) as any;

@@ -6,6 +6,7 @@ export function outcomeBadge(t: Ticket) {
   if (t.error?.startsWith("corrupt")) return <span className="badge failed">Corrupt file</span>;
   switch (t.outcome) {
     case "blocked": return <span className="badge blocked">Blocked</span>;
+    case "needs_input": return <span className="badge blocked">Needs your input</span>;
     case "failed": return <span className="badge failed">Failed</span>;
     case "stopped": return <span className="badge stopped">Stopped</span>;
     case "done": return t.status === "review" ? <span className="badge ok">Ready for review</span> : null;

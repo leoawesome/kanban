@@ -1,5 +1,6 @@
 export type Status = "backlog" | "planning" | "ready" | "in_progress" | "review" | "done";
-export type Outcome = null | "done" | "blocked" | "failed" | "stopped";
+export type Outcome = null | "done" | "blocked" | "failed" | "stopped" | "needs_input";
+export type TicketMode = "interview" | "auto";
 
 export const COLUMNS: { id: Status; label: string; hint: string }[] = [
   { id: "backlog", label: "Backlog", hint: "Ideas" },
@@ -26,6 +27,7 @@ export interface Ticket {
   id: string;
   title: string;
   status: Status;
+  mode?: TicketMode;
   order: number;
   sessionId: string | null;
   worktree: string | null;
@@ -77,6 +79,12 @@ export interface ActivityEntry {
   run: number;
   at: string;
   event: any;
+}
+
+export interface OutputFile {
+  name: string;
+  size: number;
+  updatedAt: string;
 }
 
 export interface ClaudeProject {
@@ -133,9 +141,15 @@ export const api = {
   sessions: (slug: string) => req<ClaudeSession[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/sessions`),
   linkSession: (slug: string, id: string, sessionId: string | null) =>
     req<Ticket>("POST", `${t(slug, id)}/link-session`, { sessionId }),
-  createTicket: (slug: string, input: { title: string; body: string; status: Status; sessionId?: string }) =>
+  outputs: (slug: string, id: string) => req<OutputFile[]>("GET", `${t(slug, id)}/outputs`),
+  outputText: async (slug: string, id: string, name: string) => {
+    const r = await fetch(`${t(slug, id)}/outputs/${name.split("/").map(encodeURIComponent).join("/")}`);
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.text();
+  },
+  createTicket: (slug: string, input: { title: string; body: string; status: Status; sessionId?: string; mode?: TicketMode }) =>
     req<Ticket>("POST", t(slug), input),
-  updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">> & { expectedBody?: string }) =>
+  updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode">> & { expectedBody?: string }) =>
     req<Ticket>("PATCH", t(slug, id), patch),
   deleteTicket: (slug: string, id: string) => req<void>("DELETE", t(slug, id)),
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),

@@ -3,6 +3,8 @@ import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type Claud
 import { outcomeBadge } from "./Card";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Conversation } from "./Conversation";
+import { ModeToggle } from "./ModeToggle";
+import { Outputs } from "./Outputs";
 import { Select } from "./Select";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
 import { timeAgo } from "./time";
@@ -90,8 +92,12 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
   const [comments, setComments] = useState<Comment[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [draft, setDraft] = useState("");
-  const [tab, setTab] = useState<"comments" | "conversation" | "transcript">(
-    ticket.status === "in_progress" ? "transcript" : ticket.workdir && ticket.sessionId ? "conversation" : "comments");
+  const [tab, setTab] = useState<"comments" | "conversation" | "outputs" | "transcript">(
+    ticket.status === "in_progress" ? "transcript"
+      : ticket.outcome === "needs_input" ? "comments"
+      : ticket.workdir && ticket.sessionId ? "conversation"
+      : "comments");
+  const [outputCount, setOutputCount] = useState(0);
   const [copied, setCopied] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -103,6 +109,7 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
 
   useEffect(() => {
     reloadComments();
+    api.outputs(slug, ticket.id).then((o) => setOutputCount(o.length)).catch(() => {});
     api.activity(slug, ticket.id).then(setActivity).catch(() => {});
     // Claude may rewrite the body during planning; fetch fresh copy on open.
     api.ticket(slug, ticket.id).then((t) => { setBody(t.body); setBaseBody(t.body); setTitle(t.title); }).catch(() => {});
@@ -123,7 +130,10 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
     if (e.type === "activity" && e.profile === slug && e.id === ticket.id) {
       setActivity((a) => [...a, { run: e.run, at: new Date().toISOString(), event: e.event }]);
     }
-    if (e.type === "ticket.updated" && e.profile === slug && e.ticket.id === ticket.id) reloadComments();
+    if (e.type === "ticket.updated" && e.profile === slug && e.ticket.id === ticket.id) {
+      reloadComments();
+      api.outputs(slug, ticket.id).then((o) => setOutputCount(o.length)).catch(() => {});
+    }
   }), [slug, ticket.id]);
 
   useEffect(() => {
@@ -211,6 +221,8 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           />
           {outcomeBadge(ticket)}
           {ticket.prUrl && <a className="badge pr" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer">PR #{ticket.prUrl.split("/").pop()}</a>}
+          <ModeToggle value={ticket.mode ?? "auto"} disabled={running}
+            onChange={(mode) => act(() => api.updateTicket(slug, ticket.id, { mode }))} />
           {ticket.branch && <code className="muted small" title={ticket.worktree ?? ""}>{ticket.branch}</code>}
           <span className="muted small">{ticket.id}</span>
         </div>
@@ -309,6 +321,9 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           {ticket.sessionId && (
             <button className={tab === "conversation" ? "active" : ""} onClick={() => setTab("conversation")}>Conversation</button>
           )}
+          {outputCount > 0 && (
+            <button className={tab === "outputs" ? "active" : ""} onClick={() => setTab("outputs")}>Outputs ({outputCount})</button>
+          )}
           {(ticket.runCount > 0 || running || activity.length > 0) && (
             <button className={tab === "transcript" ? "active" : ""} onClick={() => setTab("transcript")}>
               Run log {running && <span className="dot" />}
@@ -316,7 +331,11 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           )}
         </nav>
 
-        {tab === "conversation" && ticket.sessionId ? (
+        {tab === "outputs" ? (
+          <section className="section">
+            <Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} />
+          </section>
+        ) : tab === "conversation" && ticket.sessionId ? (
           <section className="section">
             <Conversation slug={slug} ticketId={ticket.id} resumeCommand={ticket.resumeCommand} />
           </section>
@@ -334,12 +353,12 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
               {!comments.length && <div className="muted">No comments yet.</div>}
             </div>
             <div className="comment-box">
-              <textarea rows={3} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Feedback for Claude…"
+              <textarea rows={3} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={ticket.outcome === "needs_input" ? "Answer Claude's questions, e.g. 1a, 2c, 3: … or just \"go\"" : "Feedback for Claude…"}
                 onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendComment(false); }} />
               <div className="form-actions">
                 <button className="btn ghost" disabled={!draft.trim()} onClick={() => sendComment(false)}>Comment</button>
                 {!running && ticket.status !== "ready" && (
-                  <button className="btn primary" disabled={!draft.trim()} onClick={() => sendComment(true)}>Comment &amp; send to Claude</button>
+                  <button className="btn primary" disabled={!draft.trim()} onClick={() => sendComment(true)}>{ticket.outcome === "needs_input" ? "Reply & send to Claude" : "Comment & send to Claude"}</button>
                 )}
               </div>
             </div>

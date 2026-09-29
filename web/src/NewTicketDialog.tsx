@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { COLUMNS, type ClaudeSession, type Status } from "./api";
+import { COLUMNS, type ClaudeSession, type Status, type TicketMode } from "./api";
+import { ModeToggle } from "./ModeToggle";
 import { Modal } from "./Modal";
 import { Select } from "./Select";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
@@ -11,8 +12,9 @@ export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate
   folder: string;
   initialStatus: Status;
   onClose: () => void;
-  onCreate: (input: { title: string; body: string; status: Status; sessionId?: string }) => Promise<void>;
+  onCreate: (input: { title: string; body: string; status: Status; sessionId?: string; mode?: TicketMode }) => Promise<void>;
 }) {
+  const [mode, setMode] = useState<TicketMode>("interview");
   const [session, setSession] = useState<ClaudeSession | null>(null);
   const [picking, setPicking] = useState(false);
   const [title, setTitle] = useState("");
@@ -26,7 +28,7 @@ export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate
     if (!title.trim()) return;
     setBusy(true);
     try {
-      await onCreate({ title: title.trim(), body, status, sessionId: session?.id });
+      await onCreate({ title: title.trim(), body, status, sessionId: session?.id, mode });
     } catch (e: any) {
       setErr(e.message);
       setBusy(false);
@@ -56,6 +58,15 @@ export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate
           <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Context, acceptance criteria, links… (markdown)"
             onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(e); }} />
         </label>
+        <div className="field">
+          <div className="field-label">How should Claude work?</div>
+          <ModeToggle value={mode} onChange={setMode} />
+          <span className="muted small">
+            {mode === "interview"
+              ? "Claude first asks clarifying questions in the comments, then does the work once you answer."
+              : "Claude works on its own and reports back when done."}
+          </span>
+        </div>
         <label>
           Column
           <Select

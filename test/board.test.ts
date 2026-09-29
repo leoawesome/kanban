@@ -291,3 +291,34 @@ test("cannot link while running", async () => {
   await Bun.sleep(300);
   await expect(board.linkSession("p", t.id, "11111111-2222-3333-4444-555555555555")).rejects.toThrow(/running/);
 }, 15000);
+
+test("interview ticket asking questions lands in review as needs_input", async () => {
+  await setup();
+  process.env.FAKE_MODE = "questions";
+  const t = await board.createTicket("p", { title: "explore", body: "", status: "ready", mode: "interview" });
+  await board.whenIdle();
+  const got = store.getTicket("p", t.id)!;
+  expect(got.mode).toBe("interview");
+  expect(got.status).toBe("review");
+  expect(got.outcome).toBe("needs_input");
+  expect(got.interviewed).toBe(true);
+  expect(readArgs()[0].args[1]).toContain("interview first");
+  const c = store.listComments("p", t.id).at(-1)!;
+  expect(c.text).toContain("Work complete.");
+  expect(c.text).not.toContain("CKANBAN_RESULT");
+});
+
+test("runs get an outputs folder and deliverables are listed", async () => {
+  await setup();
+  process.env.FAKE_OUTPUT = "# Report\nTL;DR";
+  try {
+    const t = await board.createTicket("p", { title: "research", body: "", status: "ready" });
+    await board.whenIdle();
+    const outs = store.listOutputs("p", t.id);
+    expect(outs.map((o) => o.name)).toEqual(["report.md"]);
+    expect(store.outputPath("p", t.id, "report.md")).not.toBeNull();
+    expect(store.outputPath("p", t.id, "../ticket.md")).toBeNull();
+  } finally {
+    delete process.env.FAKE_OUTPUT;
+  }
+});

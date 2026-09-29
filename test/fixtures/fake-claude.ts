@@ -51,7 +51,12 @@ if (mode === "slow") {
 }
 
 const pr = process.env.FAKE_PR ?? null;
-const status = mode === "blocked" ? "blocked" : "done";
+if (process.env.FAKE_OUTPUT && process.env.CKANBAN_OUTPUT_DIR) {
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(`${process.env.CKANBAN_OUTPUT_DIR}/report.md`, process.env.FAKE_OUTPUT);
+}
+
+const status = mode === "blocked" ? "blocked" : mode === "questions" ? "questions" : "done";
 const text = mode === "noresult"
   ? "All done, no result line."
   : `Work complete.\nCKANBAN_RESULT: ${JSON.stringify({ status, prUrl: pr, summary: `fake ${status}` })}`;

@@ -1,10 +1,10 @@
 import {
-  appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import YAML from "yaml";
-import type { ActivityEntry, Comment, Config, Profile, Status, Ticket } from "./types";
+import type { ActivityEntry, Comment, Config, OutputFile, Profile, Status, Ticket, TicketMode } from "./types";
 import { newId, newTicketId, nowIso } from "./util";
 
 const DEFAULT_CONFIG: Config = { port: 7777, prPollMinutes: 5 };
@@ -133,10 +133,10 @@ export class Store {
     return orders.length ? Math.max(...orders) + 1 : 1;
   }
 
-  createTicket(slug: string, input: { title: string; body: string; status: Status }): Ticket {
+  createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode }): Ticket {
     const at = nowIso();
     const t: Ticket = {
-      id: newTicketId(), title: input.title, status: input.status, order: this.nextOrder(slug, input.status),
+      id: newTicketId(), title: input.title, status: input.status, mode: input.mode ?? "auto", order: this.nextOrder(slug, input.status),
       sessionId: null, worktree: null, branch: null, prUrl: null, outcome: null, lastActivity: null,
       lastRunAt: null, runCount: 0, error: null, createdAt: at, updatedAt: at, body: input.body,
     };
@@ -154,6 +154,37 @@ export class Store {
 
   deleteTicket(slug: string, id: string): void {
     rmSync(this.ticketDir(slug, id), { recursive: true, force: true });
+  }
+
+  /** Folder where runs save deliverables (reports etc.) for the user to read on the board. */
+  outputsDir(slug: string, id: string): string {
+    const dir = join(this.ticketDir(slug, id), "outputs");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  listOutputs(slug: string, id: string): OutputFile[] {
+    const dir = join(this.ticketDir(slug, id), "outputs");
+    if (!existsSync(dir)) return [];
+    const out: OutputFile[] = [];
+    const walk = (sub: string) => {
+      for (const name of readdirSync(join(dir, sub))) {
+        const rel = sub ? `${sub}/${name}` : name;
+        const st = statSync(join(dir, rel));
+        if (st.isDirectory()) walk(rel);
+        else out.push({ name: rel, size: st.size, updatedAt: st.mtime.toISOString() });
+      }
+    };
+    walk("");
+    return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  /** Resolve an output file path, refusing anything outside the ticket's outputs folder. */
+  outputPath(slug: string, id: string, name: string): string | null {
+    const dir = join(this.ticketDir(slug, id), "outputs");
+    const file = resolve(dir, name);
+    if (!file.startsWith(dir + sep) || !existsSync(file) || !statSync(file).isFile()) return null;
+    return file;
   }
 
   listComments(slug: string, id: string): Comment[] {

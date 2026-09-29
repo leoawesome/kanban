@@ -1,5 +1,5 @@
 export interface RunResult {
-  status: "done" | "blocked";
+  status: "done" | "blocked" | "questions";
   prUrl: string | null;
   summary: string;
 }
@@ -13,7 +13,7 @@ export function parseResult(text: string): RunResult | null {
   const json = line.slice(line.indexOf(PREFIX) + PREFIX.length).trim().replace(/`+$/, "").trim();
   try {
     const v = JSON.parse(json);
-    if (v.status !== "done" && v.status !== "blocked") return null;
+    if (v.status !== "done" && v.status !== "blocked" && v.status !== "questions") return null;
     return {
       status: v.status,
       prUrl: typeof v.prUrl === "string" && /^https:\/\//.test(v.prUrl) ? v.prUrl : null,

@@ -32,6 +32,7 @@ export function startRun(opts: {
   bin: string;
   cwd: string;
   args: string[];
+  env?: Record<string, string>;
   onEvent: (ev: any) => void;
 }): RunHandle {
   let stopped = false;
@@ -41,7 +42,7 @@ export function startRun(opts: {
   const done = (async (): Promise<RunOutput> => {
     try {
       proc = Bun.spawn([opts.bin, ...opts.args], {
-        cwd: opts.cwd, env: { ...process.env }, stdout: "pipe", stderr: "pipe", stdin: "ignore",
+        cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdout: "pipe", stderr: "pipe", stdin: "ignore",
         // Own process group so stop() can take down tools claude spawned (shells, dev servers).
         detached: true,
       });

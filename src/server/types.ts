@@ -1,5 +1,7 @@
 export type Status = "backlog" | "planning" | "ready" | "in_progress" | "review" | "done";
-export type Outcome = null | "done" | "blocked" | "failed" | "stopped";
+export type Outcome = null | "done" | "blocked" | "failed" | "stopped" | "needs_input";
+/** interview: Claude asks clarifying questions before doing the work. auto: just do it. */
+export type TicketMode = "interview" | "auto";
 
 export const STATUSES: Status[] = ["backlog", "planning", "ready", "in_progress", "review", "done"];
 
@@ -17,6 +19,10 @@ export interface Ticket {
   id: string;
   title: string;
   status: Status;
+  /** Missing on tickets created before modes existed: treated as "auto". */
+  mode?: TicketMode;
+  /** True once Claude has asked the user a round of questions on this ticket. */
+  interviewed?: boolean;
   order: number;
   sessionId: string | null;
   worktree: string | null;
@@ -44,6 +50,12 @@ export interface Comment {
 export interface Config {
   port: number;
   prPollMinutes: number;
+}
+
+export interface OutputFile {
+  name: string;
+  size: number;
+  updatedAt: string;
 }
 
 export interface ActivityEntry {

@@ -9,7 +9,7 @@ import { firstRunPrompt, planningCommand, planningPrompt, resumePrompt } from ".
 import { parseResult } from "./result";
 import { buildArgs, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
-import type { Status, Ticket } from "./types";
+import type { Status, Ticket, TicketMode } from "./types";
 import { nowIso, slugify } from "./util";
 
 export interface BoardOptions {
@@ -143,9 +143,10 @@ export class Board {
     const profile = this.store.getProfile(slug)!;
     const runNo = t.runCount + 1;
     const newComments = this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt));
+    const outputDir = this.store.outputsDir(slug, id);
     const prompt = t.runCount === 0
-      ? firstRunPrompt(t, session.isGit, !!t.workdir, t.workdir ? newComments : [])
-      : resumePrompt(t, newComments);
+      ? firstRunPrompt(t, { isGit: session.isGit, linked: !!t.workdir, comments: t.workdir ? newComments : [], outputDir })
+      : resumePrompt(t, newComments, outputDir);
 
     let lastWrite = 0;
     let pendingActivity: string | null = null;
@@ -153,6 +154,7 @@ export class Board {
       bin: this.opts.claudeBin,
       cwd: session.dir,
       args: buildArgs(prompt, session.sessionId, session.existed, profile.model),
+      env: { CKANBAN_OUTPUT_DIR: outputDir },
       onEvent: (ev) => {
         this.store.appendActivity(slug, id, runNo, ev);
         this.bus.emit({ type: "activity", profile: slug, id, run: runNo, event: ev });
@@ -192,11 +194,14 @@ export class Board {
       return;
     }
     const current = this.store.getTicket(slug, id)!;
-    const summary = result?.summary || finalText.replace(/^.*CKANBAN_RESULT:.*$/m, "").trim() || "(no output)";
+    const body = finalText.replace(/^.*CKANBAN_RESULT:.*$/gm, "").trim();
+    // Questions must reach the user verbatim; otherwise the short summary is enough.
+    const summary = (result?.status === "questions" ? body : result?.summary) || body || "(no output)";
     this.store.addComment(slug, id, "ai", summary);
     this.patch(slug, id, {
       ...base,
-      outcome: result?.status ?? "done",
+      outcome: result?.status === "questions" ? "needs_input" : result?.status ?? "done",
+      ...(result?.status === "questions" ? { interviewed: true } : {}),
       prUrl: result?.prUrl ?? current.prUrl,
       error: null,
     });
@@ -235,7 +240,7 @@ export class Board {
     return planningCommand(s.dir, s.sessionId, planningPrompt(t, this.store.ticketPath(slug, id)), s.existed);
   }
 
-  async createTicket(slug: string, input: { title: string; body: string; status: Status }): Promise<Ticket> {
+  async createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode }): Promise<Ticket> {
     const status = input.status === "in_progress" ? "ready" : input.status;
     const t = this.store.createTicket(slug, { ...input, status });
     this.emitTicket(slug, t);
@@ -246,7 +251,7 @@ export class Board {
   async updateTicket(
     slug: string,
     id: string,
-    patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">> & { expectedBody?: string },
+    patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode">> & { expectedBody?: string },
   ): Promise<Ticket> {
     let current = this.store.getTicket(slug, id);
     if (!current) throw new Error(`ticket ${id} not found`);
@@ -257,6 +262,7 @@ export class Board {
     if (patch.title !== undefined) clean.title = patch.title;
     if (patch.body !== undefined) clean.body = patch.body;
     if (patch.order !== undefined) clean.order = patch.order;
+    if (patch.mode !== undefined) clean.mode = patch.mode;
     let status = patch.status;
     if (status === "in_progress" && !this.isRunning(slug, id)) status = "ready";
 
