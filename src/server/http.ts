@@ -208,7 +208,14 @@ export function createServer(deps: ServerDeps) {
           } catch {}
         };
         send(": connected\n\n");
-        unsubscribe = bus.on((e: BusEvent) => send(`data: ${JSON.stringify(e)}\n\n`));
+        unsubscribe = bus.on((e: BusEvent) => {
+          let out: unknown = e;
+          if (e.type === "ticket.updated") {
+            const p = store.getProfile(e.profile);
+            if (p) out = { ...e, ticket: view(p, e.ticket) };
+          }
+          send(`data: ${JSON.stringify(out)}\n\n`);
+        });
         ping = setInterval(() => send(": ping\n\n"), 15_000);
         req.signal.addEventListener("abort", () => {
           unsubscribe();
