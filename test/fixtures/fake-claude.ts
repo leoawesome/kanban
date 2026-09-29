@@ -11,6 +11,8 @@ const mode = process.env.FAKE_MODE ?? "ok";
 const idx = Math.max(args.indexOf("--session-id"), args.indexOf("--resume"));
 const sessionId = idx >= 0 ? args[idx + 1] : "none";
 
+const stepMs = Number(process.env.FAKE_STEP_MS ?? 0);
+
 function emit(obj: unknown) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
@@ -28,6 +30,15 @@ process.stdout.write(split.slice(0, 20));
 await Bun.sleep(20);
 process.stdout.write(split.slice(20));
 process.stdout.write("not json line\n");
+
+if (stepMs) {
+  for (const cmd of ["npm install", "npm test"]) {
+    await Bun.sleep(stepMs);
+    emit({ type: "assistant", message: { content: [{ type: "tool_use", id: cmd, name: "Bash", input: { command: cmd } }] } });
+    await Bun.sleep(stepMs);
+    emit({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: cmd, content: `ok: ${cmd}` }] } });
+  }
+}
 
 if (mode === "slow") {
   await Bun.sleep(30000);

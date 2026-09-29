@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Board } from "./board";
 import { Bus } from "./events";
@@ -12,6 +13,7 @@ export async function startDaemon(): Promise<void> {
   const bus = new Bus();
   const board = new Board(store, bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
   const webDir = join(import.meta.dir, "..", "..", "web", "dist");
+  if (!existsSync(join(webDir, "index.html"))) console.warn("web UI not built yet: run `bun run build:web`");
   const server = createServer({ store, bus, board, port, webDir });
   console.log(`ckanban listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();

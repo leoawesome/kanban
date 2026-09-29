@@ -70,7 +70,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .logo { display: inline-flex; gap: 2px; align-items: flex-start; height: 16px; }
 .logo i { display: block; width: 4px; border-radius: 1px; background: var(--accent); }
 .logo i:nth-child(1) { height: 16px; } .logo i:nth-child(2) { height: 10px; } .logo i:nth-child(3) { height: 13px; }
-.profile-select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); font-weight: 550; }
+.profile-select { width: auto; max-width: 240px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); font-weight: 550; }
 .profile-path { color: var(--muted); font-family: var(--mono); font-size: 12px; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); }
 

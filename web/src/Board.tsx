@@ -1,6 +1,6 @@
 import {
-  closestCorners, DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
-  type DragEndEvent, type DragStartEvent,
+  closestCenter, DndContext, pointerWithin, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
+  type CollisionDetection, type DragEndEvent, type DragStartEvent,
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -59,6 +59,16 @@ function Column({ id, label, hint, tickets, onOpen, onAdd }: {
   );
 }
 
+// Prefer whatever is under the pointer (a card beats its column); fall back to nearest card.
+const collision: CollisionDetection = (args) => {
+  const hits = pointerWithin(args);
+  if (hits.length) {
+    const card = hits.find((h) => !String(h.id).startsWith("col:"));
+    return [card ?? hits[0]];
+  }
+  return closestCenter(args);
+};
+
 export function Board({ tickets, onOpen, onMove, onAdd }: Props) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const [dragId, setDragId] = useState<string | null>(null);
@@ -103,7 +113,7 @@ export function Board({ tickets, onOpen, onMove, onAdd }: Props) {
   const dragging = tickets.find((t) => t.id === dragId);
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
+    <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
       <main className="board">
         {COLUMNS.map((c) => (
           <Column key={c.id} {...c} tickets={byColumn.get(c.id) ?? []} onOpen={onOpen} onAdd={onAdd} />
