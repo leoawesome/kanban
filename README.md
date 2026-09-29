@@ -13,6 +13,9 @@ Local kanban board for [Claude Code](https://claude.com/claude-code). Drop a tic
   - **Ready: do the work** on its own (queued, up to max parallel).
   - **Review / Done: follow-up.** Your message is acted on straight away; the card shows In Progress, then returns to Review.
 - **Terminal handoff**: *Copy resume command* (`cd <dir> && claude --resume <id>`) to continue any ticket's session yourself.
+- **Live replies**: Claude's text appears in the chat while it is being written.
+- **"Need you" inbox**: the top bar counts tickets on every board where Claude is waiting on you (questions, proposal, reply, blocked, failed); the browser tab shows the count too. Click to jump to one.
+- **Links and shortcuts**: an open ticket is in the URL (`#/<board>/<ticket>`), so refresh keeps it and Back closes it. `N` new ticket, `/` search this board, `Esc` close.
 - **PR tracking**: Review cards with a PR are checked every 5 minutes via `gh`; merged → Done (worktree removed).
 
 Columns: Backlog → Planning → Ready → In Progress → Review → Done.

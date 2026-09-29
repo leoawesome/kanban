@@ -74,12 +74,14 @@ function usePanelWidth() {
 }
 
 /** Ticket view: details on the left, the chat with Claude filling the right side. */
-export function TicketDrawer({ profile, ticket, onClose, onError }: {
+export function TicketDrawer({ profile, ticket, onClose }: {
   profile: Profile;
   ticket: Ticket;
   onClose: () => void;
-  onError: (msg: string) => void;
 }) {
+  // Errors from actions in this ticket show here, next to what failed, not in the page's top strip.
+  const [panelError, setPanelError] = useState<string | null>(null);
+  const onError = (msg: string) => setPanelError(msg);
   const slug = profile.slug;
   const [title, setTitle] = useState(ticket.title);
   const [body, setBody] = useState(ticket.body);
@@ -302,6 +304,12 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           </div>
 
           <div className="panel-main">
+            {panelError && (
+              <div className="banner error inline panel-error" role="alert">
+                <span>{panelError}</span>
+                <button className="icon-btn" aria-label="Dismiss" onClick={() => setPanelError(null)}>×</button>
+              </div>
+            )}
             {outputCount > 0 && (
               <nav className="tabs">
                 <button className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>Chat {working && <span className="dot" />}</button>

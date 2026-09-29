@@ -132,7 +132,16 @@ export type BusEvent =
   | { type: "ticket.deleted"; profile: string; id: string }
   | { type: "activity"; profile: string; id: string; run: number; event: any }
   | { type: "profile.updated"; slug: string; profile: Profile | null }
-  | { type: "session.updated"; profile: string; id: string; session: SessionSummary };
+  | { type: "session.updated"; profile: string; id: string; session: SessionSummary }
+  | { type: "draft"; profile: string; id: string; text: string };
+
+export interface InboxItem {
+  profile: string;
+  profileName: string;
+  id: string;
+  title: string;
+  attention: { kind: AttentionKind; label: string };
+}
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const hasBody = method === "POST" || method === "PATCH";
@@ -184,6 +193,7 @@ export const api = {
     req<{ entries: SessionEntry[]; start: number; total: number; title: string | null }>(
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),
   activity: (slug: string, id: string) => req<ActivityEntry[]>("GET", `${t(slug, id)}/activity`),
+  inbox: () => req<InboxItem[]>("GET", "/api/inbox"),
   stop: (slug: string, id: string) => req<{ stopped: boolean }>("POST", `${t(slug, id)}/stop`),
   checkPr: (slug: string, id: string) => req<{ state: string | null }>("POST", `${t(slug, id)}/check-pr`),
   planningCommand: (slug: string, id: string) => req<{ command: string }>("POST", `${t(slug, id)}/planning-command`),
@@ -191,20 +201,40 @@ export const api = {
 
 type Listener = (e: BusEvent) => void;
 const listeners = new Set<Listener>();
+const reconnectListeners = new Set<() => void>();
 let source: EventSource | null = null;
+let lostConnection = false;
+
+function connect() {
+  source = new EventSource("/api/events");
+  source.onmessage = (m) => {
+    try {
+      const e = JSON.parse(m.data) as BusEvent;
+      for (const l of listeners) l(e);
+    } catch {}
+  };
+  source.onerror = () => {
+    // EventSource retries on its own; remember that we missed events meanwhile.
+    lostConnection = true;
+  };
+  source.onopen = () => {
+    if (!lostConnection) return;
+    lostConnection = false;
+    for (const fn of reconnectListeners) fn();
+  };
+}
 
 export function subscribe(fn: Listener): () => void {
   listeners.add(fn);
-  if (!source) {
-    source = new EventSource("/api/events");
-    source.onmessage = (m) => {
-      try {
-        const e = JSON.parse(m.data) as BusEvent;
-        for (const l of listeners) l(e);
-      } catch {}
-    };
-  }
+  if (!source) connect();
   return () => listeners.delete(fn);
+}
+
+/** Called after the live connection comes back (daemon restart, laptop sleep): refetch state. */
+export function onReconnect(fn: () => void): () => void {
+  reconnectListeners.add(fn);
+  if (!source) connect();
+  return () => reconnectListeners.delete(fn);
 }
 
 /** Only allow https links from untrusted data (e.g. PR URLs reported by Claude). */

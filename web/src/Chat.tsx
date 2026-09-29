@@ -19,6 +19,18 @@ function group(entries: SessionEntry[]): Block[] {
   return out;
 }
 
+/** What to show of a half-written reply: hide board blocks (questions/proposal JSON) and the result line. */
+function liveView(text: string): { text: string; preparing: string | null } {
+  const cut = text.indexOf("<ckanban-");
+  const visible = (cut >= 0 ? text.slice(0, cut) : text).replace(/^CKANBAN_RESULT.*$/gm, "").trim();
+  if (cut < 0) return { text: visible, preparing: null };
+  const rest = text.slice(cut);
+  return {
+    text: visible,
+    preparing: rest.startsWith("<ckanban-questions") ? "Preparing questions…" : rest.startsWith("<ckanban-ticket") ? "Preparing ticket proposal…" : null,
+  };
+}
+
 const REFINE = (s: Ticket["status"]) => s === "backlog" || s === "planning";
 
 /**
@@ -30,6 +42,8 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const [pending, setPending] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [loadingEarlier, setLoadingEarlier] = useState(false);
+  // Text Claude is writing right now (from the run's partial-message stream); not yet in the session file.
+  const [live, setLive] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const keepOffset = useRef<number | null>(null);
@@ -54,6 +68,12 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
 
   // Live updates: session file changes (terminal) and run activity (board) both refresh the tail.
   useEffect(() => subscribe((e) => {
+    if (e.type === "draft" && e.profile === slug && e.id === ticket.id) {
+      if (e.text) setLive(e.text);
+      // Message finished: swap the live copy for the saved one without a gap.
+      else loadTail().catch(() => {}).finally(() => setLive(""));
+      return;
+    }
     const mine = (e.type === "session.updated" || e.type === "activity") && e.profile === slug && e.id === ticket.id;
     if (!mine || refreshTimer.current) return;
     refreshTimer.current = setTimeout(() => {
@@ -64,7 +84,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
 
   // A run just finished: pick up the final message even if no more events arrive.
   useEffect(() => {
-    if (!running) loadTail().catch(() => {});
+    if (!running) loadTail().catch(() => {}).finally(() => setLive(""));
   }, [running]);
 
   const entries = page?.entries ?? [];
@@ -80,7 +100,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
       el.scrollTop = el.scrollHeight - keepOffset.current;
       keepOffset.current = null;
     } else if (stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [page, pending, running]);
+  }, [page, pending, running, live]);
 
   const send = async (text: string) => {
     const t = text.trim();
@@ -201,7 +221,14 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
             <Markdown text={pending} />
           </div>
         )}
-        {running && (
+        {live && (
+          <div className="conv-msg assistant live" aria-live="polite">
+            <div className="conv-head"><b>Claude</b><span className="muted small">writing…</span></div>
+            {liveView(live).text && <Markdown text={liveView(live).text} />}
+            {liveView(live).preparing && <div className="chat-typing"><span className="spinner" /> {liveView(live).preparing}</div>}
+          </div>
+        )}
+        {running && !live && (
           <div className="chat-typing"><span className="spinner" /> {ticket.lastActivity && ticket.lastActivity !== "Starting…" ? ticket.lastActivity : "Claude is working…"}</div>
         )}
         {!running && ticket.error && !ticket.error.startsWith("corrupt") && (

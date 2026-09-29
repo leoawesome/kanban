@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, subscribe, type Profile, type Status, type Ticket } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, onReconnect, subscribe, type InboxItem, type Profile, type Status, type Ticket } from "./api";
+import { Inbox } from "./Inbox";
 import { Board } from "./Board";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { ProfileDialog } from "./ProfileDialog";
@@ -7,6 +8,22 @@ import { Select } from "./Select";
 import { TicketDrawer } from "./TicketDrawer";
 
 const LAST_PROFILE = "ckanban.profile";
+
+/** URL hash is the source of truth for what's open: #/<profile> or #/<profile>/<ticketId>. */
+function parseHash(): { slug: string | null; ticket: string | null } {
+  const [, slug, ticket] = decodeURIComponent(location.hash.replace(/^#/, "")).split("/");
+  return { slug: slug || null, ticket: ticket || null };
+}
+
+function hashFor(slug: string | null, ticket?: string | null): string {
+  if (!slug) return "#/";
+  return `#/${encodeURIComponent(slug)}${ticket ? `/${encodeURIComponent(ticket)}` : ""}`;
+}
+
+function isTyping(e: KeyboardEvent): boolean {
+  const el = e.target as HTMLElement | null;
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+}
 
 function readLast(): string | null {
   try {
@@ -18,10 +35,16 @@ function readLast(): string | null {
 
 export function App() {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
-  const [slug, setSlug] = useState<string | null>(readLast());
+  const [slug, setSlug] = useState<string | null>(parseHash().slug ?? readLast());
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [health, setHealth] = useState<{ claude: boolean; git: boolean; gh: boolean } | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(parseHash().ticket);
+  // True when the open ticket was pushed onto browser history by us, so closing can go Back.
+  const pushedOpen = useRef(false);
+  const [inbox, setInbox] = useState<InboxItem[]>([]);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const inboxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [profileDialog, setProfileDialog] = useState<"new" | "edit" | null>(null);
   const [newTicket, setNewTicket] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,11 +56,81 @@ export function App() {
     setSlug((cur) => (cur && ps.some((p) => p.slug === cur) ? cur : ps[0]?.slug ?? null));
   }, []);
 
+  const loadInbox = useCallback(() => api.inbox().then(setInbox).catch(() => {}), []);
+  const refreshInboxSoon = useCallback(() => {
+    if (inboxTimer.current) return;
+    inboxTimer.current = setTimeout(() => {
+      inboxTimer.current = null;
+      loadInbox();
+    }, 400);
+  }, [loadInbox]);
+
   useEffect(() => {
     loadProfiles().catch((e) => setError(e.message));
+    loadInbox();
     api.health().then(setHealth).catch(() => {});
     api.version().then(setVersion).catch(() => {});
-  }, [loadProfiles]);
+  }, [loadProfiles, loadInbox]);
+
+  // Browser Back/Forward and pasted links drive the open board and ticket.
+  useEffect(() => {
+    const onHash = () => {
+      const h = parseHash();
+      if (h.slug) setSlug(h.slug);
+      setOpenId(h.ticket);
+      if (!h.ticket) pushedOpen.current = false;
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // Keep the URL in step with the board shown (replace, so switching boards doesn't pile up history).
+  useEffect(() => {
+    if (slug && parseHash().slug !== slug) history.replaceState(null, "", hashFor(slug, openId));
+  }, [slug]);
+
+  const openTicket = useCallback((id: string, board = slug) => {
+    if (!board) return;
+    pushedOpen.current = true;
+    location.hash = hashFor(board, id);
+  }, [slug]);
+
+  const closeTicket = useCallback(() => {
+    if (pushedOpen.current) history.back();
+    else {
+      history.replaceState(null, "", hashFor(slug));
+      setOpenId(null);
+    }
+  }, [slug]);
+
+  // After the daemon restarts or the laptop wakes, events were missed: reload everything.
+  useEffect(() => onReconnect(() => {
+    loadProfiles().catch(() => {});
+    loadInbox();
+    if (slug) api.tickets(slug).then(setTickets).catch(() => {});
+  }), [slug, loadProfiles, loadInbox]);
+
+  const needYou = inbox.length;
+  useEffect(() => {
+    document.title = needYou ? `(${needYou}) Claude Kanban` : "Claude Kanban";
+  }, [needYou]);
+
+  // Shortcuts: N new ticket, / search. Esc is handled by the panel and dialogs.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
+      if (openId || profileDialog || newTicket || document.querySelector(".overlay")) return;
+      if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
+        if (slug) setNewTicket("backlog");
+      } else if (e.key === "/") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openId, profileDialog, newTicket, slug]);
 
   useEffect(() => {
     if (!slug) return;
@@ -53,8 +146,10 @@ export function App() {
       subscribe((e) => {
         if (e.type === "profile.updated") {
           loadProfiles().catch(() => {});
+          refreshInboxSoon();
           return;
         }
+        if (e.type === "ticket.updated" || e.type === "ticket.deleted" || e.type === "session.updated") refreshInboxSoon();
         if (e.type === "ticket.updated" && e.profile === slug) {
           setTickets((ts) => {
             const i = ts.findIndex((t) => t.id === e.ticket.id);
@@ -72,11 +167,18 @@ export function App() {
           setTickets((ts) => ts.filter((t) => t.id !== e.id));
         }
       }),
-    [slug, loadProfiles],
+    [slug, loadProfiles, refreshInboxSoon],
   );
 
   const profile = useMemo(() => profiles?.find((p) => p.slug === slug) ?? null, [profiles, slug]);
   const open = tickets.find((t) => t.id === openId) ?? null;
+  const q = query.trim().toLowerCase();
+  const shownTickets = q ? tickets.filter((t) => `${t.title}\n${t.body}`.toLowerCase().includes(q)) : tickets;
+  const perBoard = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const i of inbox) m.set(i.profile, (m.get(i.profile) ?? 0) + 1);
+    return m;
+  }, [inbox]);
 
   const move = async (id: string, status: Status, order: number) => {
     setTickets((ts) => ts.map((t) => (t.id === id ? { ...t, status, order } : t)));
@@ -108,8 +210,12 @@ export function App() {
             ariaLabel="Profile"
             value={slug ?? ""}
             onChange={setSlug}
-            options={profiles.map((p) => ({ value: p.slug, label: p.name, hint: p.path.replace(/^\/Users\/[^/]+/, "~") }))}
-            renderValue={(o) => o?.label}
+            options={profiles.map((p) => ({
+              value: p.slug,
+              label: perBoard.get(p.slug) ? <>{p.name} <span className="need-chip">{perBoard.get(p.slug)} need you</span></> : p.name,
+              hint: p.path.replace(/^\/Users\/[^/]+/, "~"),
+            }))}
+            renderValue={() => profile?.name}
             footer={[{ label: "New profile…", onSelect: () => setProfileDialog("new") }]}
           />
         )}
@@ -127,6 +233,18 @@ export function App() {
           </>
         )}
         <div className="spacer" />
+        {profile && (
+          <div className="search">
+            <input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tickets  /"
+              aria-label="Search tickets on this board"
+              onKeyDown={(e) => { if (e.key === "Escape") { setQuery(""); e.currentTarget.blur(); } }} />
+            {q && <span className="muted small">{shownTickets.length} match{shownTickets.length === 1 ? "" : "es"}</span>}
+          </div>
+        )}
+        <Inbox items={inbox} onPick={(i) => {
+          if (i.profile !== slug) setSlug(i.profile);
+          openTicket(i.id, i.profile);
+        }} />
         {version && version.version !== "dev" && <span className="muted small">v{version.version}</span>}
         {profile && (
           <button className="btn primary" onClick={() => setNewTicket("backlog")}>
@@ -167,10 +285,13 @@ export function App() {
           </button>
         </div>
       ) : (
-        <Board tickets={tickets} onOpen={setOpenId} onMove={move} onAdd={setNewTicket} />
+        <>
+          {q && shownTickets.length === 0 && <div className="banner info">No tickets match "{query}". <button className="link-btn" onClick={() => setQuery("")}>Clear search</button></div>}
+          <Board tickets={shownTickets} onOpen={(id) => openTicket(id)} onMove={move} onAdd={setNewTicket} />
+        </>
       )}
 
-      {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} onClose={() => setOpenId(null)} onError={setError} />}
+      {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} onClose={closeTicket} />}
       {profileDialog && (
         <ProfileDialog
           profile={profileDialog === "edit" ? profile : null}
@@ -197,7 +318,7 @@ export function App() {
             setTickets((ts) => (ts.some((x) => x.id === t.id) ? ts : [...ts, t]));
             setNewTicket(null);
             // Planning starts the interview immediately: open the ticket so the questions are in view.
-            if (t.status === "planning") setOpenId(t.id);
+            if (t.status === "planning") openTicket(t.id);
           }}
         />
       )}

@@ -38,12 +38,18 @@ const SPARK = (
   </svg>
 );
 
+const DONE_LIMIT = 10;
+
 function Column({ id, label, hint, claude, tickets, onOpen, onAdd }: {
   id: Status; label: string; hint: string; claude: boolean; tickets: Ticket[]; onOpen: (id: string) => void; onAdd: (s: Status) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${id}`, data: { status: id } });
   const needYou = tickets.filter((t) => t.attention && !t.running && t.status !== "in_progress").length;
   const canAdd = id !== "in_progress" && id !== "done";
+  // Done keeps growing: show the most recently finished cards unless expanded.
+  const [showAll, setShowAll] = useState(false);
+  const limited = id === "done" && !showAll && tickets.length > DONE_LIMIT;
+  const shown = limited ? tickets.slice(0, DONE_LIMIT) : tickets;
   return (
     <section className={`column col-${id} ${claude ? "claude-zone" : ""} ${isOver ? "over" : ""}`}>
       <header className="column-head">
@@ -57,11 +63,16 @@ function Column({ id, label, hint, claude, tickets, onOpen, onAdd }: {
         ) : <span className="icon-btn-placeholder" aria-hidden />}
       </header>
       <div className="column-hint">{hint}</div>
-      <SortableContext items={tickets.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+      <SortableContext items={shown.map((t) => t.id)} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className="column-body">
-          {tickets.map((t) => (
+          {shown.map((t) => (
             <SortableCard key={t.id} ticket={t} onOpen={onOpen} />
           ))}
+          {id === "done" && tickets.length > DONE_LIMIT && (
+            <button className="btn ghost small show-all" onClick={() => setShowAll((v) => !v)}>
+              {showAll ? "Show fewer" : `Show all ${tickets.length}`}
+            </button>
+          )}
           {tickets.length === 0 && claude && (
             <div className="column-drop-hint">
               {id === "in_progress" ? "Cards show up here while Claude works" : `Drop a card here and Claude ${id === "planning" ? "starts interviewing you" : "starts working on it"}`}
@@ -91,6 +102,8 @@ export function Board({ tickets, onOpen, onMove, onAdd }: Props) {
     const m = new Map<Status, Ticket[]>(COLUMNS.map((c) => [c.id, []]));
     for (const t of tickets) m.get(t.status)?.push(t);
     for (const list of m.values()) list.sort((a, b) => a.order - b.order);
+    // Done reads best newest-first.
+    m.get("done")?.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return m;
   }, [tickets]);
 
