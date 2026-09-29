@@ -4,7 +4,7 @@ export type TicketMode = "interview" | "auto";
 
 export const COLUMNS: { id: Status; label: string; hint: string }[] = [
   { id: "backlog", label: "Backlog", hint: "Ideas" },
-  { id: "planning", label: "Planning", hint: "Refine with Claude in terminal" },
+  { id: "planning", label: "Planning", hint: "Shape it with Claude in chat" },
   { id: "ready", label: "Ready", hint: "Claude picks these up" },
   { id: "in_progress", label: "In Progress", hint: "Claude working" },
   { id: "review", label: "Review", hint: "Your turn" },
@@ -60,12 +60,26 @@ export interface SessionSummary {
   updatedAt: string;
 }
 
+export interface QuestionOption {
+  label: string;
+  description?: string;
+  recommended: boolean;
+}
+
+export interface Question {
+  question: string;
+  options: QuestionOption[];
+  multiSelect: boolean;
+}
+
 export interface SessionEntry {
   uuid: string;
   at: string;
   role: "user" | "assistant";
-  kind: "text" | "tool";
+  kind: "text" | "tool" | "board";
   text: string;
+  questions?: Question[];
+  proposal?: { title: string; description: string };
 }
 
 export interface Comment {
@@ -155,6 +169,7 @@ export const api = {
   deleteTicket: (slug: string, id: string) => req<void>("DELETE", t(slug, id)),
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),
   addComment: (slug: string, id: string, text: string) => req<Comment>("POST", `${t(slug, id)}/comments`, { text }),
+  chat: (slug: string, id: string, text: string) => req<Ticket>("POST", `${t(slug, id)}/chat`, { text }),
   conversation: (slug: string, id: string, before?: number) =>
     req<{ entries: SessionEntry[]; start: number; total: number; title: string | null }>(
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),

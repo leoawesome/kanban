@@ -8,8 +8,10 @@ Local kanban board for [Claude Code](https://claude.com/claude-code). Drop a tic
    Git repos get a worktree + branch per ticket (`ck/<id>-<title>`); plain folders are worked in place.
 - **Auto pickup**: moving a card to Ready starts a run immediately, up to `maxParallel` per profile. Extra cards wait their turn.
 - **Live activity**: the card shows Claude's latest action; the ticket drawer shows the full transcript (tool calls, results, cost).
-- **Review loop**: comment on a ticket, click *Comment & send to Claude*, and the same session resumes with your feedback.
-- **Planning**: *Copy planning command* gives you a `claude` command for your terminal. Chat about the plan there; Claude rewrites the ticket description. Then move the card to Ready and the run continues the same session.
+- **One chat per ticket, like the terminal**: the ticket's Chat tab shows the whole Claude session (terminal messages and board runs) and has a message box. Send a message and Claude replies right away in the same session.
+  - **Backlog / Planning: refine.** Claude interviews you with a clickable question form, then proposes a clear title and description. Click *Apply to ticket*. Claude changes no files here.
+  - **Ready: do the work** on its own (queued, up to max parallel).
+  - **Review / Done: follow-up.** Your message is acted on straight away; the card shows In Progress, then returns to Review.
 - **Terminal handoff**: *Copy resume command* (`cd <dir> && claude --resume <id>`) to continue any ticket's session yourself.
 - **PR tracking**: Review cards with a PR are checked every 5 minutes via `gh`; merged → Done (worktree removed).
 

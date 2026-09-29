@@ -91,3 +91,31 @@ test("pollSessions emits session.updated when a linked session file changes", ()
   expect(e).toMatchObject({ type: "session.updated", profile: "p", id: t.id });
   expect(e.session.lastMessage.text).toBe("reply");
 });
+
+test("parseSession hides board instructions and extracts questions + proposals", () => {
+  const raw = [
+    user('<ckanban-context note="Board started work on the ticket">\nYou are an agent...\n</ckanban-context>', "2026-09-29T02:00:00Z"),
+    user('I want to build a habit tracker\n\n<ckanban-context>\nrefine rules\n</ckanban-context>', "2026-09-29T02:00:01Z"),
+    asst([{ type: "text", text: 'A few questions:\n<ckanban-questions>\n[{"question":"Who uses it?","options":[{"label":"Just me"},{"label":"Friends","description":"shared","recommended":true}],"multiSelect":false}]\n</ckanban-questions>' }], "2026-09-29T02:00:02Z"),
+    user("My answers:\n- Who uses it? → Friends", "2026-09-29T02:00:03Z"),
+    asst([{ type: "text", text: 'Here is the ticket:\n<ckanban-ticket>{"title":"Habit tracker MVP","description":"## Goal\\nTrack habits"}</ckanban-ticket>' }], "2026-09-29T02:00:04Z"),
+    asst([{ type: "text", text: "<ckanban-questions>not json</ckanban-questions>" }], "2026-09-29T02:00:05Z"),
+  ].join("\n");
+  const s = parseSession(raw);
+  expect(s.entries.map((e) => [e.role, e.kind, e.text])).toEqual([
+    ["user", "board", "Board started work on the ticket"],
+    ["user", "text", "I want to build a habit tracker"],
+    ["assistant", "text", "A few questions:"],
+    ["user", "text", "My answers:\n- Who uses it? → Friends"],
+    ["assistant", "text", "Here is the ticket:"],
+    ["assistant", "text", "<ckanban-questions>not json</ckanban-questions>"],
+  ]);
+  expect(s.entries[2].questions).toEqual([
+    { question: "Who uses it?", multiSelect: false, options: [
+      { label: "Just me", description: undefined, recommended: false },
+      { label: "Friends", description: "shared", recommended: true },
+    ] },
+  ]);
+  expect(s.entries[4].proposal).toEqual({ title: "Habit tracker MVP", description: "## Goal\nTrack habits" });
+  expect(s.lastMessage!.text).toBe("<ckanban-questions>not json</ckanban-questions>");
+});

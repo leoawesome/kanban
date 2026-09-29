@@ -251,6 +251,13 @@ export function createServer(deps: ServerDeps) {
         return json(board.addComment(slug, id, text), 201);
       }
     }
+    if (m === "POST" && action === "chat") {
+      const b = await body(req);
+      const text = String(b.text ?? "").trim();
+      if (!text) throw new HttpError(400, "text is required");
+      const t = await board.chat(slug, id, text);
+      return json(view(profile, t), 202);
+    }
     if (m === "POST" && action === "link-session") {
       const b = await body(req);
       try {

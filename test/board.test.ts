@@ -322,3 +322,71 @@ test("runs get an outputs folder and deliverables are listed", async () => {
     delete process.env.FAKE_OUTPUT;
   }
 });
+
+test("chat in Planning refines read-only and keeps the card in place", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "App idea", body: "habit tracker", status: "planning" });
+  await board.chat("p", t.id, "Help me shape this idea");
+  expect(board.isRunning("p", t.id)).toBe(true);
+  expect(board.running("p")).toBe(0);
+  await board.whenIdle();
+  const got = store.getTicket("p", t.id)!;
+  expect(got.status).toBe("planning");
+  expect(got.runCount).toBe(0);
+  expect(got.sessionStarted).toBe(true);
+  const call = readArgs()[0];
+  expect(call.args[call.args.indexOf("--permission-mode") + 1]).toBe("plan");
+  const prompt = call.args[1];
+  expect(prompt.startsWith("Help me shape this idea")).toBe(true);
+  expect(prompt).toContain("<ckanban-context");
+  expect(prompt).toContain("<ckanban-ticket>");
+  // second message resumes the same session
+  await board.chat("p", t.id, "Just for me");
+  await board.whenIdle();
+  expect(readArgs()[1].args).toContain("--resume");
+});
+
+test("chat in Review acts right away: In Progress then back to Review", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.whenIdle();
+  await board.chat("p", t.id, "Please also add tests");
+  expect(store.getTicket("p", t.id)!.status).toBe("in_progress");
+  await board.whenIdle();
+  const got = store.getTicket("p", t.id)!;
+  expect(got.status).toBe("review");
+  expect(got.runCount).toBe(2);
+  const call = readArgs()[1];
+  expect(call.args).toContain("--resume");
+  expect(call.args[call.args.indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
+  expect(call.args[1].startsWith("Please also add tests")).toBe(true);
+});
+
+test("chat is rejected while Claude is already working", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  const t = await board.createTicket("p", { title: "x", body: "", status: "planning" });
+  await board.chat("p", t.id, "hi");
+  await expect(board.chat("p", t.id, "again")).rejects.toThrow(/still working/);
+}, 15000);
+
+test("refine chat does not take a queue slot", async () => {
+  await setup({ maxParallel: 1 });
+  process.env.FAKE_MODE = "slow";
+  const a = await board.createTicket("p", { title: "plan", body: "", status: "planning" });
+  await board.chat("p", a.id, "hi");
+  const b = await board.createTicket("p", { title: "work", body: "", status: "ready" });
+  await Bun.sleep(300);
+  expect(store.getTicket("p", b.id)!.status).toBe("in_progress");
+}, 15000);
+
+test("last ticket event after a chat reply reports it idle", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "planning" });
+  const seen: boolean[] = [];
+  bus.on((e) => { if (e.type === "ticket.updated" && e.ticket.id === t.id) seen.push(board.isRunning("p", t.id)); });
+  await board.chat("p", t.id, "hi");
+  await board.whenIdle();
+  expect(seen[0]).toBe(true);
+  expect(seen.at(-1)).toBe(false);
+});

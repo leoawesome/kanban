@@ -21,8 +21,11 @@ function killGroup(pid: number, signal: "TERM" | "KILL") {
   }
 }
 
-export function buildArgs(prompt: string, sessionId: string, resume: boolean, model?: string | null): string[] {
-  const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions"];
+export function buildArgs(
+  prompt: string, sessionId: string, resume: boolean, model?: string | null,
+  permissionMode: "bypassPermissions" | "plan" = "bypassPermissions",
+): string[] {
+  const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", permissionMode];
   args.push(resume ? "--resume" : "--session-id", sessionId);
   if (model) args.push("--model", model);
   return args;

@@ -3,6 +3,7 @@ import { plainPreview, timeAgo } from "./time";
 
 export function outcomeBadge(t: Ticket) {
   if (t.status === "in_progress") return <span className="badge running"><span className="spinner" /> Running</span>;
+  if (t.running) return <span className="badge running"><span className="spinner" /> Replying</span>;
   if (t.error?.startsWith("corrupt")) return <span className="badge failed">Corrupt file</span>;
   switch (t.outcome) {
     case "blocked": return <span className="badge blocked">Blocked</span>;

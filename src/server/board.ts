@@ -5,7 +5,7 @@ import { extractFinalText, summarizeEvent } from "./activity";
 import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, worktreeDir } from "./git";
-import { firstRunPrompt, planningCommand, planningPrompt, resumePrompt } from "./prompts";
+import { chatPrompt, firstRunPrompt, planningCommand, planningPrompt, resumePrompt, type ChatMode } from "./prompts";
 import { parseResult } from "./result";
 import { buildArgs, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
@@ -28,6 +28,13 @@ interface ActiveRun {
   /** Status to land on when the run ends because the user moved the card. */
   targetStatus: Status | null;
   stopRequested: boolean;
+  /** Set for runs started from the ticket chat (not the Ready queue). */
+  chat?: { text: string; mode: ChatMode };
+}
+
+/** Backlog/Planning chats refine the ticket (read-only); everywhere else Claude acts on the message. */
+export function chatModeFor(status: Status): ChatMode {
+  return status === "backlog" || status === "planning" ? "refine" : "act";
 }
 
 const ACTIVITY_THROTTLE_MS = 1000;
@@ -69,9 +76,10 @@ export class Board {
     return t;
   }
 
+  /** Queue runs only: chat replies are interactive and don't take a maxParallel slot. */
   running(slug: string): number {
     let n = 0;
-    for (const r of this.runs.values()) if (r.slug === slug) n++;
+    for (const r of this.runs.values()) if (r.slug === slug && !r.chat) n++;
     return n;
   }
 
@@ -92,22 +100,45 @@ export class Board {
     }
   }
 
-  private start(slug: string, id: string) {
-    const run: ActiveRun = { slug, id, handle: null, promise: Promise.resolve(), targetStatus: null, stopRequested: false };
+  /** Send a chat message: resumes the ticket's session right away, like typing in the terminal. */
+  async chat(slug: string, id: string, text: string): Promise<Ticket> {
+    const t = this.store.getTicket(slug, id);
+    if (!t) throw new Error(`ticket ${id} not found`);
+    if (!text.trim()) throw new Error("message is empty");
+    if (t.error?.startsWith("corrupt")) throw new Error("ticket file is corrupt");
+    if (this.isRunning(slug, id)) throw new ConflictError("Claude is still working on this ticket; wait for the reply or stop it");
+    this.start(slug, id, { text, mode: chatModeFor(t.status) });
+    return this.store.getTicket(slug, id)!;
+  }
+
+  private start(slug: string, id: string, chat?: ActiveRun["chat"]) {
+    const run: ActiveRun = { slug, id, handle: null, promise: Promise.resolve(), targetStatus: null, stopRequested: false, chat };
     this.runs.set(this.key(slug, id), run);
-    this.patch(slug, id, { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…" });
+    const refine = chat?.mode === "refine";
+    this.patch(slug, id, refine
+      ? { error: null, lastActivity: "Claude is replying…" }
+      : { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…" });
     run.promise = this.execute(run)
       .catch((e) => {
         console.error(`run ${slug}/${id} crashed`, e);
         try {
-          this.patch(slug, id, { status: run.targetStatus ?? "review", outcome: "failed", error: String(e?.message ?? e) });
+          this.patch(slug, id, { ...this.endStatus(run), outcome: "failed", error: String(e?.message ?? e) });
         } catch {}
       })
       .finally(() => {
         this.runs.delete(this.key(slug, id));
+        // Tell the UI the run is over (earlier updates were sent while it was still registered).
+        const now = this.store.getTicket(slug, id);
+        if (now && !this.shuttingDown) this.emitTicket(slug, now);
         // When the user moved the card, updateTicket() writes the new status and dispatches itself.
         if (!this.shuttingDown && !run.targetStatus) this.dispatch(slug);
       });
+  }
+
+  /** Where the card lands after a run: refine chats never move it. */
+  private endStatus(run: ActiveRun): Partial<Ticket> {
+    if (run.chat?.mode === "refine") return run.targetStatus ? { status: run.targetStatus } : {};
+    return { status: run.targetStatus ?? "review" };
   }
 
   private async execute(run: ActiveRun): Promise<void> {
@@ -119,7 +150,7 @@ export class Board {
     } catch (e) {
       const msg = (e as Error).message;
       this.store.addComment(slug, id, "ai", `Could not start: ${msg}`);
-      this.patch(slug, id, { status: run.targetStatus ?? "review", outcome: "failed", error: msg, lastActivity: null });
+      this.patch(slug, id, { ...this.endStatus(run), outcome: "failed", error: msg, lastActivity: null });
       return;
     }
     if (this.shuttingDown) return;
@@ -127,24 +158,27 @@ export class Board {
       const t0 = this.store.getTicket(slug, id)!;
       const title = t0.workdir ? sessionTitle(t0.workdir, session.sessionId) : null;
       if (await this.isSessionLive(session.sessionId, title)) {
-        this.store.addComment(slug, id, "ai",
-          "This ticket's Claude session is still open in a terminal. Exit it there (Ctrl+D or /exit), then move the card back to Ready.");
-        this.patch(slug, id, { status: run.targetStatus ?? "review", outcome: "blocked", lastActivity: null });
+        const msg = "This ticket's Claude session is still open in a terminal. Exit it there (Ctrl+D or /exit), then try again.";
+        this.store.addComment(slug, id, "ai", msg);
+        this.patch(slug, id, { ...this.endStatus(run), outcome: "blocked", error: msg, lastActivity: null });
         return;
       }
     }
     if (run.stopRequested) {
       this.store.addComment(slug, id, "ai", "Run stopped by user.");
-      this.patch(slug, id, { status: run.targetStatus ?? "review", outcome: "stopped", lastActivity: null });
+      this.patch(slug, id, { ...this.endStatus(run), outcome: "stopped", lastActivity: null });
       return;
     }
 
     const t = this.store.getTicket(slug, id)!;
+    const refine = run.chat?.mode === "refine";
     const profile = this.store.getProfile(slug)!;
     const runNo = t.runCount + 1;
     const newComments = this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt));
     const outputDir = this.store.outputsDir(slug, id);
-    const prompt = t.runCount === 0
+    const prompt = run.chat
+      ? chatPrompt(t, run.chat.text, run.chat.mode, outputDir)
+      : t.runCount === 0
       ? firstRunPrompt(t, { isGit: session.isGit, linked: !!t.workdir, comments: t.workdir ? newComments : [], outputDir })
       : resumePrompt(t, newComments, outputDir);
 
@@ -153,7 +187,7 @@ export class Board {
     run.handle = startRun({
       bin: this.opts.claudeBin,
       cwd: session.dir,
-      args: buildArgs(prompt, session.sessionId, session.existed, profile.model),
+      args: buildArgs(prompt, session.sessionId, session.existed, profile.model, refine ? "plan" : "bypassPermissions"),
       env: { CKANBAN_OUTPUT_DIR: outputDir },
       onEvent: (ev) => {
         this.store.appendActivity(slug, id, runNo, ev);
@@ -176,9 +210,9 @@ export class Board {
     const finalText = extractFinalText(out.events);
     const result = parseResult(finalText);
     const base: Partial<Ticket> = {
-      status: run.targetStatus ?? "review",
-      lastRunAt: startedAt,
-      runCount: runNo,
+      ...this.endStatus(run),
+      sessionStarted: true,
+      ...(refine ? {} : { lastRunAt: startedAt, runCount: runNo }),
       lastActivity: pendingActivity ?? this.store.getTicket(slug, id)?.lastActivity ?? null,
     };
 
@@ -191,6 +225,10 @@ export class Board {
       const error = out.stderr.trim() || finalText.trim() || `claude exited with code ${out.code}`;
       this.store.addComment(slug, id, "ai", `Run failed (exit ${out.code}): ${error.split("\n").slice(-3).join("\n")}`);
       this.patch(slug, id, { ...base, outcome: "failed", error });
+      return;
+    }
+    if (refine) {
+      this.patch(slug, id, { ...base, lastActivity: null, error: null });
       return;
     }
     const current = this.store.getTicket(slug, id)!;
@@ -229,7 +267,7 @@ export class Board {
     return {
       dir: t.workdir ?? t.worktree ?? profile.path,
       sessionId,
-      existed: t.runCount > 0 || !!t.workdir || this.sessionExists(sessionId),
+      existed: !!t.sessionStarted || t.runCount > 0 || !!t.workdir || this.sessionExists(sessionId),
       isGit,
     };
   }

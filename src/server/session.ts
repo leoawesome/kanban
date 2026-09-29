@@ -5,12 +5,88 @@ import type { Bus } from "./events";
 import type { Store } from "./store";
 
 /** One visible item of a Claude Code session, as shown in the ticket's Conversation tab. */
+export interface QuestionOption {
+  label: string;
+  description?: string;
+  recommended: boolean;
+}
+
+export interface Question {
+  question: string;
+  options: QuestionOption[];
+  multiSelect: boolean;
+}
+
+export interface TicketProposal {
+  title: string;
+  description: string;
+}
+
 export interface SessionEntry {
   uuid: string;
   at: string;
   role: "user" | "assistant";
-  kind: "text" | "tool";
+  /** board: a prompt the board sent on the user's behalf (instructions hidden). */
+  kind: "text" | "tool" | "board";
   text: string;
+  /** Interview questions Claude asked (rendered as a form). */
+  questions?: Question[];
+  /** Improved title/description Claude proposed (rendered with an Apply button). */
+  proposal?: TicketProposal;
+}
+
+const CONTEXT_TAG = "<ckanban-context";
+const QUESTIONS_RE = /<ckanban-questions>([\s\S]*?)<\/ckanban-questions>/;
+const TICKET_RE = /<ckanban-ticket>([\s\S]*?)<\/ckanban-ticket>/;
+
+function parseQuestions(json: string): Question[] | null {
+  try {
+    const v = JSON.parse(json);
+    if (!Array.isArray(v) || !v.length) return null;
+    const qs = v.map((q: any) => ({
+      question: String(q?.question ?? "").trim(),
+      multiSelect: !!q?.multiSelect,
+      options: (Array.isArray(q?.options) ? q.options : []).map((o: any) => ({
+        label: String(o?.label ?? "").trim(),
+        description: typeof o?.description === "string" && o.description ? o.description : undefined,
+        recommended: !!o?.recommended,
+      })).filter((o: QuestionOption) => o.label),
+    }));
+    return qs.every((q) => q.question) ? qs : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseProposal(json: string): TicketProposal | null {
+  try {
+    const v = JSON.parse(json);
+    const title = typeof v?.title === "string" ? v.title.trim() : "";
+    const description = typeof v?.description === "string" ? v.description.trim() : "";
+    return title || description ? { title, description } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Split an assistant text block into visible text + structured questions/proposal. */
+function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" | "proposal"> {
+  let out = text;
+  let questions: Question[] | undefined;
+  let proposal: TicketProposal | undefined;
+  const q = out.match(QUESTIONS_RE);
+  const parsedQ = q ? parseQuestions(q[1].trim()) : null;
+  if (q && parsedQ) {
+    questions = parsedQ;
+    out = out.replace(q[0], "");
+  }
+  const t = out.match(TICKET_RE);
+  const parsedT = t ? parseProposal(t[1].trim()) : null;
+  if (t && parsedT) {
+    proposal = parsedT;
+    out = out.replace(t[0], "");
+  }
+  return { text: out.trim(), ...(questions ? { questions } : {}), ...(proposal ? { proposal } : {}) };
 }
 
 export interface SessionArtifact {
@@ -68,16 +144,24 @@ export function findSessionFile(sessionId: string, d: Dirs = {}): string | null 
 const TOOL_ARG_KEYS = ["file_path", "command", "url", "pattern", "query", "description", "prompt"];
 const PUBLISHED = /Published (\S+) at (https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9-]+)/g;
 
-function userText(content: unknown): string | null {
+function userText(content: unknown): { kind: "text" | "board"; text: string } | null {
   if (Array.isArray(content)) {
     if (content.some((c: any) => c?.type === "tool_result")) return null;
     content = content.map((c: any) => (c?.type === "text" ? c.text : "")).join("\n");
   }
   if (typeof content !== "string") return null;
+  const ctx = content.indexOf(CONTEXT_TAG);
+  if (ctx >= 0) {
+    // Board-sent prompt: show only what the user typed; pure instructions become a short note.
+    const typed = content.slice(0, ctx).trim();
+    if (typed) return { kind: "text", text: typed };
+    const note = content.slice(ctx).match(/note="([^"]*)"/)?.[1];
+    return { kind: "board", text: note || "Board sent instructions to Claude" };
+  }
   const t = content.trim();
   // Slash-command wrappers, hook output and skill preambles are stored as user messages too.
   if (!t || t.startsWith("<") || /^(Base directory for this skill|Caveat:|\[Request interrupted)/.test(t)) return null;
-  return t;
+  return { kind: "text", text: t };
 }
 
 function resultText(content: unknown): string {
@@ -125,25 +209,27 @@ export function parseSession(raw: string): ParsedSession {
           }
         }
       }
-      const text = userText(content);
-      if (text && !ev.isMeta) entries.push({ uuid, at, role: "user", kind: "text", text });
+      const u = userText(content);
+      if (u && !ev.isMeta) entries.push({ uuid, at, role: "user", kind: u.kind, text: u.text });
       continue;
     }
 
     if (!Array.isArray(content)) continue;
     content.forEach((b: any, i: number) => {
       const id = i ? `${uuid}:${i}` : uuid;
-      if (b?.type === "text" && b.text?.trim()) entries.push({ uuid: id, at, role: "assistant", kind: "text", text: b.text.trim() });
+      if (b?.type === "text" && b.text?.trim()) entries.push({ uuid: id, at, role: "assistant", kind: "text", ...assistantBlock(b.text.trim()) });
       else if (b?.type === "tool_use") entries.push({ uuid: id, at, role: "assistant", kind: "tool", text: toolLabel(b) });
     });
   }
 
-  const last = entries.findLast((e) => e.kind === "text");
+  const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal));
+  const lastText = !last ? "" : last.text
+    || (last.questions ? `Asked ${last.questions.length} question${last.questions.length > 1 ? "s" : ""}` : "Proposed an updated ticket");
   return {
     title: customTitle ?? aiTitle,
     entries,
     artifacts: [...artifacts.values()],
-    lastMessage: last ? { role: last.role, text: last.text, at: last.at } : null,
+    lastMessage: last ? { role: last.role, text: lastText, at: last.at } : null,
   };
 }
 

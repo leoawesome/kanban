@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type ClaudeSession, type Comment, type Profile, type Status, type Ticket } from "./api";
+import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type ClaudeSession, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { Conversation } from "./Conversation";
+import { Chat } from "./Chat";
 import { ModeToggle } from "./ModeToggle";
 import { Outputs } from "./Outputs";
 import { Select } from "./Select";
@@ -89,26 +89,17 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
   // Body the current edit started from; the server rejects the save if the file changed since
   // (Claude rewrites ticket.md during terminal planning without the board being notified).
   const [baseBody, setBaseBody] = useState(ticket.body);
-  const [comments, setComments] = useState<Comment[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
-  const [draft, setDraft] = useState("");
-  const [tab, setTab] = useState<"comments" | "conversation" | "outputs" | "transcript">(
-    ticket.status === "in_progress" ? "transcript"
-      : ticket.outcome === "needs_input" ? "comments"
-      : ticket.workdir && ticket.sessionId ? "conversation"
-      : "comments");
+  const [tab, setTab] = useState<"chat" | "outputs" | "transcript">("chat");
   const [outputCount, setOutputCount] = useState(0);
   const [copied, setCopied] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [picking, setPicking] = useState(false);
   const [linked, setLinked] = useState<ClaudeSession | null>(null);
-  const running = ticket.status === "in_progress";
+  const running = ticket.status === "in_progress" || !!ticket.running;
   const { width, dragging, handle } = useDrawerWidth();
 
-  const reloadComments = () => api.comments(slug, ticket.id).then(setComments).catch(() => {});
-
   useEffect(() => {
-    reloadComments();
     api.outputs(slug, ticket.id).then((o) => setOutputCount(o.length)).catch(() => {});
     api.activity(slug, ticket.id).then(setActivity).catch(() => {});
     // Claude may rewrite the body during planning; fetch fresh copy on open.
@@ -131,7 +122,6 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
       setActivity((a) => [...a, { run: e.run, at: new Date().toISOString(), event: e.event }]);
     }
     if (e.type === "ticket.updated" && e.profile === slug && e.ticket.id === ticket.id) {
-      reloadComments();
       api.outputs(slug, ticket.id).then((o) => setOutputCount(o.length)).catch(() => {});
     }
   }), [slug, ticket.id]);
@@ -142,6 +132,14 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
       setBaseBody(ticket.body);
     }
   }, [ticket.body]);
+
+  // Keep the title field in sync when it changes elsewhere (e.g. a proposal was applied), unless you're typing in it.
+  const titleRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (document.activeElement !== titleRef.current) setTitle(ticket.title);
+  }, [ticket.title]);
+  const [bodyExpanded, setBodyExpanded] = useState(false);
+  const longBody = body.length > 600 || body.split("\n").length > 14;
 
   const startEdit = async () => {
     try {
@@ -187,26 +185,13 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
     }
   };
 
-  const sendComment = async (thenReady: boolean) => {
-    const text = draft.trim();
-    if (!text) return;
-    await act(async () => {
-      await api.addComment(slug, ticket.id, text);
-      setDraft("");
-      await reloadComments();
-      if (thenReady) await api.updateTicket(slug, ticket.id, { status: "ready" });
-    });
-  };
-
-  const canPlan = (ticket.status === "backlog" || ticket.status === "planning") && !ticket.workdir;
-
   return (
     <div className="drawer-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <aside className={`drawer ${dragging ? "resizing" : ""}`} role="dialog" aria-label={ticket.title} style={{ width }}>
         <div className="drawer-resize" role="separator" aria-orientation="vertical" aria-label="Resize panel" tabIndex={0}
           title="Drag to resize · double-click to reset" {...handle} />
         <header className="drawer-head">
-          <input className="title-input" value={title} onChange={(e) => setTitle(e.target.value)} onBlur={saveTitle}
+          <input ref={titleRef} className="title-input" value={title} onChange={(e) => setTitle(e.target.value)} onBlur={saveTitle}
             onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
           <button className="icon-btn" onClick={onClose} aria-label="Close">×</button>
         </header>
@@ -227,22 +212,16 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           <span className="muted small">{ticket.id}</span>
         </div>
 
-        {ticket.error && <div className="banner error inline"><pre>{ticket.error}</pre></div>}
-        {running && ticket.lastActivity && <div className="live-line"><span className="spinner" /> {ticket.lastActivity}</div>}
+        {ticket.error?.startsWith("corrupt") && <div className="banner error inline"><pre>{ticket.error}</pre></div>}
 
         <div className="actions">
           {running && <button className="btn danger" onClick={() => act(() => api.stop(slug, ticket.id))}>Stop</button>}
-          {!running && ticket.status !== "ready" && ticket.status !== "done" && (
-            <button className="btn primary" onClick={() => setStatus("ready")}>
-              {ticket.runCount || ticket.workdir ? "Send to Claude" : "Move to Ready"}
+          {!running && (ticket.status === "backlog" || ticket.status === "planning") && (
+            <button className="btn primary" onClick={() => setStatus("ready")} title="Claude works on the ticket on its own">
+              Start work
             </button>
           )}
           {ticket.status === "review" && <button className="btn" onClick={() => setStatus("done")}>Mark done</button>}
-          {canPlan && (
-            <button className="btn" onClick={() => doCopy("plan", async () => (await api.planningCommand(slug, ticket.id)).command)}>
-              {copied === "plan" ? "Copied!" : "Copy planning command"}
-            </button>
-          )}
           {ticket.resumeCommand && (
             <button className="btn" disabled={running} title={running ? "Wait for the run to finish" : ticket.resumeCommand}
               onClick={() => doCopy("resume", async () => ticket.resumeCommand!)}>
@@ -277,13 +256,6 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           <SessionPicker slug={slug} folder={profile.path} currentTicketId={ticket.id} onClose={() => setPicking(false)}
             onPick={(s) => act(async () => { await api.linkSession(slug, ticket.id, s.id); setPicking(false); })} />
         )}
-        {canPlan && !ticket.workdir && (
-          <p className="hint">
-            Planning: copy the command, paste in a terminal and chat with Claude. When the plan is agreed Claude updates this
-            description. Exit the terminal session, then move the card to Ready.
-          </p>
-        )}
-
         <section className="section">
           <div className="section-head">
             <h4>Description</h4>
@@ -299,7 +271,12 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
               </div>
             </>
           ) : body.trim() ? (
-            <div className="body-view" onDoubleClick={startEdit}><Markdown text={body} /></div>
+            <>
+              <div className={`body-view ${longBody && !bodyExpanded ? "clamped" : ""}`} onDoubleClick={startEdit}><Markdown text={body} /></div>
+              {longBody && (
+                <button className="link-btn small" onClick={() => setBodyExpanded((v) => !v)}>{bodyExpanded ? "Show less" : "Show full description"}</button>
+              )}
+            </>
           ) : (
             <div className="muted">No description.</div>
           )}
@@ -317,16 +294,15 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
         )}
 
         <nav className="tabs">
-          <button className={tab === "comments" ? "active" : ""} onClick={() => setTab("comments")}>Comments ({comments.length})</button>
-          {ticket.sessionId && (
-            <button className={tab === "conversation" ? "active" : ""} onClick={() => setTab("conversation")}>Conversation</button>
-          )}
+          <button className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>
+            Chat {running && <span className="dot" />}
+          </button>
           {outputCount > 0 && (
             <button className={tab === "outputs" ? "active" : ""} onClick={() => setTab("outputs")}>Outputs ({outputCount})</button>
           )}
           {(ticket.runCount > 0 || running || activity.length > 0) && (
             <button className={tab === "transcript" ? "active" : ""} onClick={() => setTab("transcript")}>
-              Run log {running && <span className="dot" />}
+              Run log
             </button>
           )}
         </nav>
@@ -335,33 +311,9 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           <section className="section">
             <Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} />
           </section>
-        ) : tab === "conversation" && ticket.sessionId ? (
-          <section className="section">
-            <Conversation slug={slug} ticketId={ticket.id} resumeCommand={ticket.resumeCommand} />
-          </section>
-        ) : tab === "comments" ? (
-          <section className="section">
-            <div className="comments">
-              {comments.map((c) => (
-                <div key={c.id} className={`comment ${c.author}`}>
-                  <div className="comment-head">
-                    <b>{c.author === "ai" ? "Claude" : "You"}</b> <span className="muted small">{timeAgo(c.at)}</span>
-                  </div>
-                  <Markdown text={c.text} />
-                </div>
-              ))}
-              {!comments.length && <div className="muted">No comments yet.</div>}
-            </div>
-            <div className="comment-box">
-              <textarea rows={3} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={ticket.outcome === "needs_input" ? "Answer Claude's questions, e.g. 1a, 2c, 3: … or just \"go\"" : "Feedback for Claude…"}
-                onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendComment(false); }} />
-              <div className="form-actions">
-                <button className="btn ghost" disabled={!draft.trim()} onClick={() => sendComment(false)}>Comment</button>
-                {!running && ticket.status !== "ready" && (
-                  <button className="btn primary" disabled={!draft.trim()} onClick={() => sendComment(true)}>{ticket.outcome === "needs_input" ? "Reply & send to Claude" : "Comment & send to Claude"}</button>
-                )}
-              </div>
-            </div>
+        ) : tab === "chat" ? (
+          <section className="section chat-section">
+            <Chat slug={slug} ticket={ticket} onError={onError} />
           </section>
         ) : (
           <section className="section">
@@ -375,7 +327,7 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
             onCancel={() => setConfirmDelete(false)}
             onConfirm={async () => { await api.deleteTicket(slug, ticket.id); onClose(); }}
           >
-            <p>Removes the ticket, its comments and transcript.{running ? " The running Claude session will be stopped." : ""}</p>
+            <p>Removes the ticket and its board history.{running ? " The running Claude session will be stopped." : ""}</p>
             {ticket.worktree && <p className="muted">Its worktree is removed if it has no uncommitted changes. The branch and any PR stay.</p>}
           </ConfirmDialog>
         )}

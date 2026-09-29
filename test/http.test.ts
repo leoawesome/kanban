@@ -146,6 +146,19 @@ test("new tickets default to interview mode; outputs are served as sandboxed tex
   expect(r.status).toBe(404);
 });
 
+test("chat endpoint validates and conflicts", async () => {
+  const path = tempDir("ck-plain-");
+  await fetch(`${base}/api/profiles`, json("POST", { name: "Chatty", path }));
+  const t = (await (await fetch(`${base}/api/profiles/chatty/tickets`, json("POST", { title: "t", status: "planning" }))).json()) as any;
+  let r = await fetch(`${base}/api/profiles/chatty/tickets/${t.id}/chat`, json("POST", { text: " " }));
+  expect(r.status).toBe(400);
+  r = await fetch(`${base}/api/profiles/chatty/tickets/${t.id}/chat`, json("POST", { text: "hello" }));
+  expect(r.status).toBe(202);
+  expect(((await r.json()) as any).running).toBe(true);
+  r = await fetch(`${base}/api/profiles/chatty/tickets/${t.id}/chat`, json("POST", { text: "again" }));
+  expect([202, 409]).toContain(r.status);
+});
+
 test("health", async () => {
   const r = await fetch(`${base}/api/health`);
   const h = (await r.json()) as any;

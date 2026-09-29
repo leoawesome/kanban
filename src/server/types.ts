@@ -23,6 +23,8 @@ export interface Ticket {
   mode?: TicketMode;
   /** True once Claude has asked the user a round of questions on this ticket. */
   interviewed?: boolean;
+  /** True once any claude run used this ticket's sessionId (so later runs must --resume). */
+  sessionStarted?: boolean;
   order: number;
   sessionId: string | null;
   worktree: string | null;
