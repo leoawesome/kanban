@@ -6,10 +6,11 @@ import { Store } from "../src/server/store";
 import { tempDir } from "./helpers";
 
 let server: ReturnType<typeof createServer>;
+let store: Store;
 let base: string;
 
 beforeAll(() => {
-  const store = new Store(tempDir("ck-home-"));
+  store = new Store(tempDir("ck-home-"));
   const bus = new Bus();
   const board = new Board(store, bus, { claudeBin: "/bin/false" });
   server = createServer({ store, bus, board, port: 0, webDir: tempDir("ck-web-") });
@@ -157,6 +158,20 @@ test("chat endpoint validates and conflicts", async () => {
   expect(((await r.json()) as any).running).toBe(true);
   r = await fetch(`${base}/api/profiles/chatty/tickets/${t.id}/chat`, json("POST", { text: "again" }));
   expect([202, 409]).toContain(r.status);
+});
+
+test("inbox lists tickets across boards where Claude needs the user, not Review", async () => {
+  const a = tempDir("ck-plain-");
+  const b = tempDir("ck-plain-");
+  await fetch(`${base}/api/profiles`, json("POST", { name: "Inbox A", path: a }));
+  await fetch(`${base}/api/profiles`, json("POST", { name: "Inbox B", path: b }));
+  const failed = (await (await fetch(`${base}/api/profiles/inbox-a/tickets`, json("POST", { title: "broken", status: "backlog" }))).json()) as any;
+  store.updateTicket("inbox-a", failed.id, { outcome: "failed", error: "boom" });
+  const review = (await (await fetch(`${base}/api/profiles/inbox-b/tickets`, json("POST", { title: "check me", status: "backlog" }))).json()) as any;
+  store.updateTicket("inbox-b", review.id, { status: "review", outcome: "done" });
+  const inbox = (await (await fetch(`${base}/api/inbox`)).json()) as any[];
+  const mine = inbox.filter((i) => i.profile.startsWith("inbox-"));
+  expect(mine).toEqual([{ profile: "inbox-a", profileName: "Inbox A", id: failed.id, title: "broken", attention: { kind: "failed", label: "Run failed" } }]);
 });
 
 test("health", async () => {

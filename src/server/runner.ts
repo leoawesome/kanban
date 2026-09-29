@@ -25,7 +25,8 @@ export function buildArgs(
   prompt: string, sessionId: string, resume: boolean, model?: string | null,
   permissionMode: "bypassPermissions" | "plan" = "bypassPermissions",
 ): string[] {
-  const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", permissionMode];
+  // --include-partial-messages: token-level stream events, used for live replies in the chat.
+  const args = ["-p", prompt, "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", permissionMode];
   args.push(resume ? "--resume" : "--session-id", sessionId);
   if (model) args.push("--model", model);
   return args;
@@ -65,7 +66,8 @@ export function startRun(opts: {
         } catch {
           return;
         }
-        events.push(ev);
+        // Partial-message deltas are only for the live view; don't keep thousands of them in memory.
+        if (ev?.type !== "stream_event") events.push(ev);
         opts.onEvent(ev);
       };
       for await (const chunk of p.stdout as ReadableStream<Uint8Array>) {

@@ -18,7 +18,7 @@ test("ok run collects events and skips non-json lines", withMode("ok", async () 
   const r = await h.done;
   expect(r.code).toBe(0);
   expect(r.events.map((e) => e.type)).toEqual(["system", "assistant", "assistant", "result"]);
-  expect(seen.length).toBe(4);
+  expect(seen.filter((e) => e.type !== "stream_event").length).toBe(4);
   expect(r.events[1].message.content[0].name).toBe("Edit");
 }));
 
@@ -47,7 +47,7 @@ test("missing binary resolves with error", async () => {
 
 test("buildArgs", () => {
   const first = buildArgs("hello", "u1", false, "sonnet");
-  expect(first).toEqual(["-p", "hello", "--output-format", "stream-json", "--verbose",
+  expect(first).toEqual(["-p", "hello", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
     "--permission-mode", "bypassPermissions", "--session-id", "u1", "--model", "sonnet"]);
   const again = buildArgs("hello", "u1", true, null);
   expect(again).toContain("--resume");

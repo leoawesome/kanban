@@ -6,7 +6,9 @@ export type BusEvent =
   | { type: "ticket.deleted"; profile: string; id: string }
   | { type: "activity"; profile: string; id: string; run: number; event: unknown }
   | { type: "profile.updated"; slug: string; profile: Profile | null }
-  | { type: "session.updated"; profile: string; id: string; session: SessionSummary };
+  | { type: "session.updated"; profile: string; id: string; session: SessionSummary }
+  /** Text Claude is writing right now in this ticket's run ("" = cleared). Not persisted. */
+  | { type: "draft"; profile: string; id: string; text: string };
 
 export class Bus {
   private listeners = new Set<(e: BusEvent) => void>();

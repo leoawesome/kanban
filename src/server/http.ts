@@ -35,6 +35,7 @@ class HttpError extends Error {
 
 const LOCAL_HOSTS = ["localhost", "127.0.0.1"];
 const DEFAULT_MAX_PARALLEL = 5;
+const INBOX_KINDS = new Set(["questions", "proposal", "reply", "blocked", "failed"]);
 
 export function isAllowedRequest(req: Request, port: number): boolean {
   const host = req.headers.get("host") ?? new URL(req.url).host;
@@ -104,6 +105,17 @@ export function createServer(deps: ServerDeps) {
 
     if (parts[0] === "events" && m === "GET") return sse(req);
     if (parts[0] === "version" && m === "GET") return json(await updates.status());
+    if (parts[0] === "inbox" && m === "GET") {
+      // Every board: tickets where Claude is waiting on the user (Review is left out on purpose).
+      const out = [];
+      for (const p of store.listProfiles()) {
+        for (const t of store.listTickets(p.slug)) {
+          const att = view(p, t).attention;
+          if (att && INBOX_KINDS.has(att.kind)) out.push({ profile: p.slug, profileName: p.name, id: t.id, title: t.title, attention: att });
+        }
+      }
+      return json(out);
+    }
 
     if (parts[0] === "claude" && parts[1] === "projects" && m === "GET") {
       const taken = new Set(store.listProfiles().map((p) => p.path));

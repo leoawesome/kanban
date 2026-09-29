@@ -8,6 +8,7 @@ import { addWorktree, isGitRepo, removeWorktree, worktreeDir } from "./git";
 import { MOVE_TO_PLANNING_RE } from "./session";
 import { chatPrompt, firstRunPrompt, planningCommand, planningPrompt, resumePrompt, type ChatMode } from "./prompts";
 import { parseResult } from "./result";
+import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
 import type { Status, Ticket, TicketMode } from "./types";
@@ -39,6 +40,7 @@ export function chatModeFor(status: Status): ChatMode {
 }
 
 const ACTIVITY_THROTTLE_MS = 1000;
+const DRAFT_THROTTLE_MS = 120;
 
 export function claudeSessionExists(sessionId: string): boolean {
   const root = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
@@ -196,12 +198,27 @@ export class Board {
 
     let lastWrite = 0;
     let pendingActivity: string | null = null;
+    const draft = new DraftTracker();
+    let draftTimer: ReturnType<typeof setTimeout> | null = null;
+    const emitDraft = () => {
+      draftTimer = null;
+      this.bus.emit({ type: "draft", profile: slug, id, text: draft.text });
+    };
     run.handle = startRun({
       bin: this.opts.claudeBin,
       cwd: session.dir,
       args: buildArgs(prompt, session.sessionId, session.existed, profile.model, refine ? "plan" : "bypassPermissions"),
       env: { CKANBAN_OUTPUT_DIR: outputDir },
       onEvent: (ev) => {
+        const changed = draft.feed(ev);
+        if (changed !== null) {
+          // Clears go out at once; growing text is batched (~8 updates/s).
+          if (changed === "") {
+            if (draftTimer) clearTimeout(draftTimer);
+            emitDraft();
+          } else if (!draftTimer) draftTimer = setTimeout(emitDraft, DRAFT_THROTTLE_MS);
+        }
+        if (ev?.type === "stream_event") return;
         this.store.appendActivity(slug, id, runNo, ev);
         this.bus.emit({ type: "activity", profile: slug, id, run: runNo, event: ev });
         const s = summarizeEvent(ev);
@@ -217,6 +234,8 @@ export class Board {
     });
 
     const out = await run.handle.done;
+    if (draftTimer) clearTimeout(draftTimer);
+    if (draft.text) this.bus.emit({ type: "draft", profile: slug, id, text: "" });
     // Daemon is exiting: leave the ticket in_progress so recover() resumes it on next start.
     if (this.shuttingDown) return;
     const finalText = extractFinalText(out.events);

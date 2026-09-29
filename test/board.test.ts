@@ -482,3 +482,17 @@ test("normal Review chat still lands back in Review", async () => {
   await board.whenIdle();
   expect(store.getTicket("p", t.id)!.status).toBe("review");
 });
+
+test("streams Claude's text as draft events without persisting them", async () => {
+  await setup();
+  const drafts: string[] = [];
+  bus.on((e) => { if (e.type === "draft") drafts.push(e.text); });
+  process.env.FAKE_STREAM_DELAY = "200";
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.whenIdle();
+  delete process.env.FAKE_STREAM_DELAY;
+  expect(drafts.length).toBeGreaterThan(0);
+  expect(drafts.some((d) => d.startsWith("Work "))).toBe(true);
+  expect(drafts.at(-1)).toBe("");
+  expect(store.readActivity("p", t.id).some((a) => a.event?.type === "stream_event")).toBe(false);
+});
