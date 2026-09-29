@@ -35,7 +35,7 @@ ckanban open        # http://localhost:7777
 
 Or run in the foreground: `bun run dev`.
 
-`ckanban uninstall` removes the daemon. Logs: `~/.claude-kanban/daemon.log`.
+`ckanban restart` restarts it after pulling or building changes; `ckanban uninstall` removes it. Logs: `~/.claude-kanban/daemon.log`.
 
 `ckanban install` records your current shell `PATH` in the launchd plist so the daemon can find `claude`, `git`, and `gh`. Re-run it if those move.
 

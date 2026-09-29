@@ -12,6 +12,7 @@ Usage:
   ckanban dev          Run the server in the foreground
   ckanban start        Same as dev (used by launchd)
   ckanban install      Install and start the launchd background daemon (macOS)
+  ckanban restart      Restart the daemon (after pulling or building changes)
   ckanban uninstall    Stop and remove the launchd daemon
   ckanban open         Open the board in your browser
 `;
@@ -38,13 +39,32 @@ async function install() {
     home: homedir(),
   }));
   const domain = `gui/${process.getuid!()}`;
-  await Bun.spawn(["launchctl", "bootout", `${domain}/${LABEL}`], { stdout: "ignore", stderr: "ignore" }).exited;
-  const code = await sh(["launchctl", "bootstrap", domain, PLIST_PATH]);
+  await quiet(["launchctl", "bootout", `${domain}/${LABEL}`]);
+  // bootout returns before the old job is gone; bootstrap fails until it is.
+  for (let i = 0; i < 50 && (await quiet(["launchctl", "print", `${domain}/${LABEL}`])) === 0; i++) await Bun.sleep(100);
+  let code = 1;
+  for (let i = 0; i < 5 && code !== 0; i++) {
+    code = await quiet(["launchctl", "bootstrap", domain, PLIST_PATH]);
+    if (code !== 0) await Bun.sleep(500);
+  }
   if (code !== 0) {
     console.error("launchctl bootstrap failed");
     process.exit(code);
   }
   console.log(`Installed ${PLIST_PATH}\nBoard: ${boardUrl()}\nLogs: ${join(root, "daemon.log")}`);
+}
+
+async function quiet(cmd: string[]): Promise<number> {
+  return Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" }).exited;
+}
+
+async function restart() {
+  const code = await sh(["launchctl", "kickstart", "-k", `gui/${process.getuid!()}/${LABEL}`]);
+  if (code !== 0) {
+    console.error("daemon not installed; run: ckanban install");
+    process.exit(code);
+  }
+  console.log(`Restarted. Board: ${boardUrl()}`);
 }
 
 async function uninstall() {
@@ -61,6 +81,9 @@ switch (cmd) {
     break;
   case "install":
     await install();
+    break;
+  case "restart":
+    await restart();
     break;
   case "uninstall":
     await uninstall();
