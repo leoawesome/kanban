@@ -202,3 +202,12 @@ test("emits ticket.updated events", async () => {
   expect(seen).toContain("in_progress");
   expect(seen.at(-1)).toBe("review");
 });
+
+test("shutdown leaves running ticket in_progress for recovery", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await Bun.sleep(500);
+  await board.shutdown();
+  expect(store.getTicket("p", t.id)!.status).toBe("in_progress");
+}, 15000);

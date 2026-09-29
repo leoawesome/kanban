@@ -41,6 +41,7 @@ export function claudeSessionExists(sessionId: string): boolean {
 
 export class Board {
   private runs = new Map<string, ActiveRun>();
+  private shuttingDown = false;
   private sessionExists: (id: string) => boolean;
 
   constructor(private store: Store, private bus: Bus, private opts: BoardOptions) {
@@ -97,7 +98,7 @@ export class Board {
       })
       .finally(() => {
         this.runs.delete(this.key(slug, id));
-        this.dispatch(slug);
+        if (!this.shuttingDown) this.dispatch(slug);
       });
   }
 
@@ -147,6 +148,8 @@ export class Board {
     });
 
     const out = await run.handle.done;
+    // Daemon is exiting: leave the ticket in_progress so recover() resumes it on next start.
+    if (this.shuttingDown) return;
     const finalText = extractFinalText(out.events);
     const result = parseResult(finalText);
     const base: Partial<Ticket> = {
@@ -287,6 +290,13 @@ export class Board {
 
   stopAll(): void {
     for (const r of this.runs.values()) this.stopRun(r);
+  }
+
+  /** Kill all runs without recording an outcome; tickets stay in_progress for recover(). */
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    for (const r of this.runs.values()) r.handle?.stop();
+    await Promise.race([this.whenIdle(), Bun.sleep(6000)]);
   }
 
   recover(): void {
