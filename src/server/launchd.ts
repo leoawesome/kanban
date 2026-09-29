@@ -8,7 +8,8 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function plistXml(o: { bunPath: string; cliPath: string; path: string; logFile: string; home: string }): string {
+/** programArgs: [bun, cli.ts] from source, or [binary] for the standalone build. "start" is appended. */
+export function plistXml(o: { programArgs: string[]; path: string; logFile: string; home: string }): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -17,8 +18,7 @@ export function plistXml(o: { bunPath: string; cliPath: string; path: string; lo
   <string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${esc(o.bunPath)}</string>
-    <string>${esc(o.cliPath)}</string>
+${o.programArgs.map((a) => `    <string>${esc(a)}</string>`).join("\n")}
     <string>start</string>
   </array>
   <key>EnvironmentVariables</key>

@@ -7,6 +7,7 @@ import { detectBaseBranch, isGitRepo, which } from "./git";
 import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
 import { SessionCache } from "./session";
+import { UpdateChecker } from "./update";
 import type { Store } from "./store";
 import { STATUSES, type Profile, type Status, type Ticket } from "./types";
 import { nowIso, slugify } from "./util";
@@ -17,7 +18,10 @@ export interface ServerDeps {
   board: Board;
   port: number;
   webDir: string;
+  /** URL path → embedded file (standalone binary). When non-empty, used instead of webDir. */
+  assets?: Record<string, string>;
   sessions?: SessionCache;
+  updates?: UpdateChecker;
 }
 
 class HttpError extends Error {
@@ -54,6 +58,7 @@ async function body(req: Request): Promise<any> {
 export function createServer(deps: ServerDeps) {
   const { store, bus, board } = deps;
   const sessions = deps.sessions ?? new SessionCache();
+  const updates = deps.updates ?? new UpdateChecker();
 
   const profileOr404 = (slug: string): Profile => {
     const p = store.getProfile(slug);
@@ -88,6 +93,7 @@ export function createServer(deps: ServerDeps) {
     }
 
     if (parts[0] === "events" && m === "GET") return sse(req);
+    if (parts[0] === "version" && m === "GET") return json(await updates.status());
 
     if (parts[0] === "claude" && parts[1] === "projects" && m === "GET") {
       const taken = new Set(store.listProfiles().map((p) => p.path));
@@ -309,6 +315,12 @@ export function createServer(deps: ServerDeps) {
   }
 
   function staticFile(url: URL): Response {
+    const assets = deps.assets ?? {};
+    if (Object.keys(assets).length) {
+      const hit = assets[url.pathname] ?? assets["/index.html"];
+      if (!hit) return new Response("not found", { status: 404 });
+      return new Response(Bun.file(hit));
+    }
     const rel = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
     const file = join(deps.webDir, rel);
     if (file.startsWith(deps.webDir) && existsSync(file) && statSync(file).isFile()) return new Response(Bun.file(file));

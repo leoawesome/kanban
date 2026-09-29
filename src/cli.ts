@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { LABEL, PLIST_PATH, plistXml } from "./server/launchd";
 import { startDaemon } from "./server/main";
 import { defaultRoot, Store } from "./server/store";
+import { latestRelease } from "./server/update";
+import { IS_BINARY, VERSION } from "./server/version";
 
 const USAGE = `ckanban — kanban board for Claude Code
 
@@ -15,6 +17,8 @@ Usage:
   ckanban restart      Restart the daemon (after pulling or building changes)
   ckanban uninstall    Stop and remove the launchd daemon
   ckanban open         Open the board in your browser
+  ckanban update       Update to the latest release and restart the daemon
+  ckanban --version    Print the version
 `;
 
 async function sh(cmd: string[]): Promise<number> {
@@ -31,10 +35,12 @@ async function install() {
   const root = defaultRoot();
   mkdirSync(root, { recursive: true });
   mkdirSync(dirname(PLIST_PATH), { recursive: true });
+  // Common tool locations first-class, so the daemon finds claude/git/gh even from a minimal shell.
+  const extra = [join(homedir(), ".local/bin"), join(homedir(), ".bun/bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+  const pathDirs = [...new Set([...(process.env.PATH ?? "").split(":").filter(Boolean), ...extra])];
   writeFileSync(PLIST_PATH, plistXml({
-    bunPath: process.execPath,
-    cliPath: join(import.meta.dir, "cli.ts"),
-    path: process.env.PATH ?? "/usr/bin:/bin",
+    programArgs: IS_BINARY ? [process.execPath] : [process.execPath, join(import.meta.dir, "cli.ts")],
+    path: pathDirs.join(":"),
     logFile: join(root, "daemon.log"),
     home: homedir(),
   }));
@@ -67,6 +73,40 @@ async function restart() {
   console.log(`Restarted. Board: ${boardUrl()}`);
 }
 
+async function update() {
+  if (!IS_BINARY) {
+    console.log("Running from source: use `git pull && bun install && bun run build:web && ckanban restart`.");
+    return;
+  }
+  const rel = await latestRelease();
+  if (!rel) {
+    console.error("Could not reach GitHub to check for updates.");
+    process.exit(1);
+  }
+  if (rel.version === VERSION) {
+    console.log(`Already on the latest version (v${VERSION}).`);
+    return;
+  }
+  const asset = rel.assets.find((a) => a.name === `ckanban-darwin-${process.arch}`);
+  if (!asset) {
+    console.error(`No build for darwin-${process.arch} in release v${rel.version}.`);
+    process.exit(1);
+  }
+  console.log(`Updating v${VERSION} → v${rel.version}…`);
+  const res = await fetch(asset.url);
+  if (!res.ok) {
+    console.error(`Download failed: ${res.status} ${res.statusText}`);
+    process.exit(1);
+  }
+  const tmp = `${process.execPath}.new`;
+  await Bun.write(tmp, res);
+  chmodSync(tmp, 0o755);
+  renameSync(tmp, process.execPath);
+  const running = (await quiet(["launchctl", "print", `gui/${process.getuid!()}/${LABEL}`])) === 0;
+  if (running) await quiet(["launchctl", "kickstart", "-k", `gui/${process.getuid!()}/${LABEL}`]);
+  console.log(`Updated to v${rel.version}.${running ? " Daemon restarted; refresh the board." : ""}`);
+}
+
 async function uninstall() {
   await sh(["launchctl", "bootout", `gui/${process.getuid!()}/${LABEL}`]);
   rmSync(PLIST_PATH, { force: true });
@@ -90,6 +130,14 @@ switch (cmd) {
     break;
   case "open":
     await sh(["open", boardUrl()]);
+    break;
+  case "update":
+    await update();
+    break;
+  case "--version":
+  case "-v":
+  case "version":
+    console.log(VERSION);
     break;
   default:
     console.log(USAGE);

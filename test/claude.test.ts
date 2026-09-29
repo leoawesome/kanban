@@ -24,7 +24,7 @@ function fixture() {
 }
 
 test("encodeProjectDir matches Claude's folder naming", () => {
-  expect(encodeProjectDir("/Users/leo/dev/my.app")).toBe("-Users-leo-dev-my-app");
+  expect(encodeProjectDir("/Users/me/dev/my.app")).toBe("-Users-me-dev-my-app");
 });
 
 test("listClaudeProjects: existing dirs, newest session first, tmp excluded", () => {

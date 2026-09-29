@@ -15,29 +15,48 @@ Local kanban board for [Claude Code](https://claude.com/claude-code). Drop a tic
 
 Columns: Backlog → Planning → Ready → In Progress → Review → Done.
 
-## Requirements
+## Install (macOS)
 
-- macOS (the daemon uses launchd; `ckanban dev` runs anywhere)
-- [Bun](https://bun.sh) ≥ 1.1
-- `claude` CLI, logged in
-- `git`, and `gh` authenticated for PRs
-
-## Install
+You need [Claude Code](https://claude.com/claude-code) installed and logged in, plus `git`. For PRs, also install `gh` and run `gh auth login`.
 
 ```bash
-bun install
-bun run build:web
-bun link            # optional: puts `ckanban` on your PATH
-
-ckanban install     # launchd background daemon, starts at login
-ckanban open        # http://localhost:7777
+curl -fsSL https://raw.githubusercontent.com/leoawesome/kanban/main/install.sh | bash
 ```
 
-Or run in the foreground: `bun run dev`.
+This downloads one self-contained binary to `~/.local/bin/ckanban` (no Bun/Node needed), starts it as a background service that launches at login, and opens http://localhost:7777.
 
-`ckanban restart` restarts it after pulling or building changes; `ckanban uninstall` removes it. Logs: `~/.claude-kanban/daemon.log`.
+Then click the profile menu → **New profile…**, pick a folder you've used Claude Code in, and create a ticket.
 
-`ckanban install` records your current shell `PATH` in the launchd plist so the daemon can find `claude`, `git`, and `gh`. Re-run it if those move.
+### Ask your AI to install it
+
+Paste this into Claude Code (or any coding assistant with a terminal):
+
+```text
+Install Claude Kanban for me by following
+https://raw.githubusercontent.com/leoawesome/kanban/main/docs/install-ai.md
+```
+
+The guide walks the assistant through prerequisites, install, PATH, verification and troubleshooting.
+
+### Runs in the background, survives restarts
+
+The installer registers a macOS launch agent, so the board:
+- starts automatically when you log in (after a reboot too),
+- restarts itself if it crashes,
+- keeps running when you close the browser or terminal.
+
+Tickets that were **In Progress** when the Mac shut down or the service restarted go back to Ready and resume the same Claude session automatically. Nothing needs to stay open except your Mac being on.
+
+### Everyday commands
+
+```bash
+ckanban update      # get the latest release (the board also shows a banner when one is out)
+ckanban restart     # restart the background service
+ckanban open        # open the board
+ckanban uninstall   # stop and remove the service (your boards in ~/.claude-kanban stay)
+```
+
+Logs: `~/.claude-kanban/daemon.log`. If `ckanban` isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc`.
 
 ## Security
 
@@ -60,10 +79,27 @@ Env overrides: `CKANBAN_HOME`, `CKANBAN_PORT`, `CKANBAN_CLAUDE_BIN`.
 
 ## Development
 
+Requires [Bun](https://bun.sh) ≥ 1.1.
+
 ```bash
-bun test test        # server tests (uses a fake claude binary)
-bun run dev          # API + built UI on :7777
+bun install && (cd web && bun install)
+bun test test          # server tests (use a fake claude binary)
+bun run build:web      # build the UI into web/dist
+bun run dev            # API + UI on :7777 from source
 cd web && bun run dev  # Vite dev server with /api proxy
+bun run build:bin      # standalone binaries in dist/ (UI embedded)
 ```
+
+Run from source as the daemon: `bun src/cli.ts install`.
+
+### Releasing
+
+Bump `version` in `package.json`, then:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+GitHub Actions runs the tests, builds `ckanban-darwin-arm64` / `ckanban-darwin-x64` with the UI embedded, and publishes a GitHub Release. Users get it with `ckanban update`.
 
 Design: `docs/superpowers/specs/2026-09-29-claude-kanban-design.md`.

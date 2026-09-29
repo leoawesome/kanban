@@ -6,6 +6,8 @@ import { createServer } from "./http";
 import { startPoller } from "./prpoller";
 import { SessionCache, startSessionWatcher } from "./session";
 import { defaultRoot, Store } from "./store";
+import { VERSION } from "./version";
+import { WEB_ASSETS } from "./web-assets.gen";
 
 export async function startDaemon(): Promise<void> {
   const store = new Store(defaultRoot());
@@ -14,10 +16,11 @@ export async function startDaemon(): Promise<void> {
   const bus = new Bus();
   const board = new Board(store, bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
   const webDir = join(import.meta.dir, "..", "..", "web", "dist");
-  if (!existsSync(join(webDir, "index.html"))) console.warn("web UI not built yet: run `bun run build:web`");
+  const embedded = Object.keys(WEB_ASSETS).length > 0;
+  if (!embedded && !existsSync(join(webDir, "index.html"))) console.warn("web UI not built yet: run `bun run build:web`");
   const sessions = new SessionCache();
-  const server = createServer({ store, bus, board, port, webDir, sessions });
-  console.log(`ckanban listening on http://localhost:${server.port} (data: ${store.root})`);
+  const server = createServer({ store, bus, board, port, webDir, sessions, assets: WEB_ASSETS });
+  console.log(`ckanban v${VERSION} listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();
   const stopPoller = startPoller(board, store, config.prPollMinutes);
   const stopWatcher = startSessionWatcher(store, bus, sessions);

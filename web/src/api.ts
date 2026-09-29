@@ -130,6 +130,7 @@ export const api = {
   claudeProjects: () => req<ClaudeProject[]>("GET", "/api/claude/projects"),
   claudeDefaults: () => req<{ model: string | null }>("GET", "/api/claude/defaults"),
   pickFolder: () => req<{ path: string | null }>("POST", "/api/pick-folder"),
+  version: () => req<{ version: string; latest: string | null; updateAvailable: boolean; url: string | null }>("GET", "/api/version"),
   health: () => req<{ claude: boolean; git: boolean; gh: boolean }>("GET", "/api/health"),
   profiles: () => req<Profile[]>("GET", "/api/profiles"),
   createProfile: (p: { name: string; path: string; maxParallel?: number; model?: string; baseBranch?: string }) =>

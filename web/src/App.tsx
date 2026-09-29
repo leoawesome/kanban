@@ -25,6 +25,7 @@ export function App() {
   const [profileDialog, setProfileDialog] = useState<"new" | "edit" | null>(null);
   const [newTicket, setNewTicket] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState<{ version: string; latest: string | null; updateAvailable: boolean } | null>(null);
 
   const loadProfiles = useCallback(async () => {
     const ps = await api.profiles();
@@ -35,6 +36,7 @@ export function App() {
   useEffect(() => {
     loadProfiles().catch((e) => setError(e.message));
     api.health().then(setHealth).catch(() => {});
+    api.version().then(setVersion).catch(() => {});
   }, [loadProfiles]);
 
   useEffect(() => {
@@ -125,6 +127,7 @@ export function App() {
           </>
         )}
         <div className="spacer" />
+        {version && version.version !== "dev" && <span className="muted small">v{version.version}</span>}
         {profile && (
           <button className="btn primary" onClick={() => setNewTicket("backlog")}>
             New ticket
@@ -132,6 +135,11 @@ export function App() {
         )}
       </header>
 
+      {version?.updateAvailable && (
+        <div className="banner info">
+          Claude Kanban v{version.latest} is available (you have v{version.version}). Run <code>ckanban update</code> in a terminal.
+        </div>
+      )}
       {missing.length > 0 && (
         <div className="banner warn">
           Not found on PATH: <b>{missing.join(", ")}</b>. {missing.includes("claude") ? "Tickets cannot run." : "PR features limited."}
