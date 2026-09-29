@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { extractFinalText, summarizeEvent } from "./activity";
 import type { Bus } from "./events";
+import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, worktreeDir } from "./git";
 import { firstRunPrompt, planningCommand, planningPrompt, resumePrompt } from "./prompts";
 import { parseResult } from "./result";
@@ -15,6 +16,8 @@ export interface BoardOptions {
   claudeBin: string;
   /** Whether Claude has a stored session with this id (used to pick --resume vs --session-id). */
   sessionExists?: (sessionId: string) => boolean;
+  /** Whether an interactive claude process currently has this session open. */
+  isSessionLive?: (sessionId: string, title: string | null) => Promise<boolean>;
 }
 
 interface ActiveRun {
@@ -45,9 +48,11 @@ export class Board {
   private runs = new Map<string, ActiveRun>();
   private shuttingDown = false;
   private sessionExists: (id: string) => boolean;
+  private isSessionLive: (id: string, title: string | null) => Promise<boolean>;
 
   constructor(private store: Store, private bus: Bus, private opts: BoardOptions) {
     this.sessionExists = opts.sessionExists ?? claudeSessionExists;
+    this.isSessionLive = opts.isSessionLive ?? psSessionLive;
   }
 
   private key(slug: string, id: string) {
@@ -118,6 +123,16 @@ export class Board {
       return;
     }
     if (this.shuttingDown) return;
+    if (session.existed && !run.stopRequested) {
+      const t0 = this.store.getTicket(slug, id)!;
+      const title = t0.workdir ? sessionTitle(t0.workdir, session.sessionId) : null;
+      if (await this.isSessionLive(session.sessionId, title)) {
+        this.store.addComment(slug, id, "ai",
+          "This ticket's Claude session is still open in a terminal. Exit it there (Ctrl+D or /exit), then move the card back to Ready.");
+        this.patch(slug, id, { status: run.targetStatus ?? "review", outcome: "blocked", lastActivity: null });
+        return;
+      }
+    }
     if (run.stopRequested) {
       this.store.addComment(slug, id, "ai", "Run stopped by user.");
       this.patch(slug, id, { status: run.targetStatus ?? "review", outcome: "stopped", lastActivity: null });
@@ -127,9 +142,10 @@ export class Board {
     const t = this.store.getTicket(slug, id)!;
     const profile = this.store.getProfile(slug)!;
     const runNo = t.runCount + 1;
+    const newComments = this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt));
     const prompt = t.runCount === 0
-      ? firstRunPrompt(t, session.isGit)
-      : resumePrompt(t, this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt)));
+      ? firstRunPrompt(t, session.isGit, !!t.workdir, t.workdir ? newComments : [])
+      : resumePrompt(t, newComments);
 
     let lastWrite = 0;
     let pendingActivity: string | null = null;
@@ -194,7 +210,8 @@ export class Board {
     if (!t) throw new Error(`ticket ${id} not found`);
     const isGit = await isGitRepo(profile.path);
     const patch: Partial<Ticket> = {};
-    if (isGit && (!t.worktree || !existsSync(t.worktree))) {
+    if (t.workdir && !existsSync(t.workdir)) throw new Error(`linked session folder no longer exists: ${t.workdir}`);
+    if (isGit && !t.workdir && (!t.worktree || !existsSync(t.worktree))) {
       const dir = worktreeDir(profile, id);
       const branch = t.branch ?? `ck/${id}-${slugify(t.title)}`;
       if (!existsSync(dir)) await addWorktree(profile.path, dir, branch, profile.baseBranch);
@@ -205,9 +222,9 @@ export class Board {
     if (Object.keys(patch).length) t = this.patch(slug, id, patch);
     const sessionId = t.sessionId!;
     return {
-      dir: t.worktree ?? profile.path,
+      dir: t.workdir ?? t.worktree ?? profile.path,
       sessionId,
-      existed: t.runCount > 0 || this.sessionExists(sessionId),
+      existed: t.runCount > 0 || !!t.workdir || this.sessionExists(sessionId),
       isGit,
     };
   }
@@ -281,6 +298,22 @@ export class Board {
     if (t?.worktree && profile) await removeWorktree(profile.path, t.worktree).catch(() => {});
     this.store.deleteTicket(slug, id);
     this.bus.emit({ type: "ticket.deleted", profile: slug, id });
+  }
+
+  /** Attach a Claude session the user already started in the profile folder (null unlinks). */
+  async linkSession(slug: string, id: string, sessionId: string | null): Promise<Ticket> {
+    const profile = this.store.getProfile(slug);
+    const t = this.store.getTicket(slug, id);
+    if (!profile || !t) throw new Error("ticket not found");
+    if (this.isRunning(slug, id)) throw new Error("ticket is running; stop it before linking a session");
+    if (sessionId !== null && !/^[0-9a-f-]{36}$/i.test(sessionId)) throw new Error("invalid session id");
+    if (t.worktree && sessionId !== null) {
+      const r = await removeWorktree(profile.path, t.worktree);
+      if (!r.removed) throw new Error(`ticket already has a worktree with changes (${t.worktree}); cannot switch session`);
+    }
+    return this.patch(slug, id, sessionId === null
+      ? { sessionId: null, workdir: null }
+      : { sessionId, workdir: profile.path, worktree: null, runCount: 0, lastRunAt: new Date().toISOString() });
   }
 
   addComment(slug: string, id: string, text: string) {

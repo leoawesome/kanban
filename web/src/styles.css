@@ -315,3 +315,26 @@ textarea { resize: vertical; font-size: 13.5px; }
 .confirm-text p { margin: 0 0 8px; font-size: 13.5px; }
 .confirm-text code { font-size: 12px; background: var(--surface-2); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
 .confirm-actions { padding: 8px 20px 16px; }
+
+/* session picker */
+.picker-list.sessions { max-height: 380px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.session-row {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between; text-align: left;
+  padding: 9px 12px; border: 0; border-bottom: 1px solid var(--border); background: transparent; cursor: pointer;
+}
+.session-row:last-child { border-bottom: 0; }
+.session-row:hover:not(:disabled) { background: var(--accent-soft); }
+.session-row:disabled { opacity: 0.45; cursor: not-allowed; }
+.session-main { display: flex; flex-direction: column; min-width: 0; }
+.session-title { font-weight: 580; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-meta { display: flex; gap: 6px; align-items: center; flex: none; }
+.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.session-chip {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px;
+  background: var(--accent-soft); font-size: 13px; min-width: 0;
+}
+.session-chip .session-title { flex: 1; min-width: 0; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-weight: 560; font-size: 13px; text-align: left; }
+.link-btn:hover { text-decoration: underline; }
+.session-box { margin: 0 20px 12px; display: flex; flex-direction: column; gap: 6px; }

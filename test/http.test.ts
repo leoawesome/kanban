@@ -113,6 +113,23 @@ test("claude discovery endpoints respond", async () => {
   expect("model" in defaults).toBe(true);
 });
 
+test("link session endpoint and sessions list", async () => {
+  const path = tempDir("ck-plain-");
+  await fetch(`${base}/api/profiles`, json("POST", { name: "Linky", path }));
+  let r = await fetch(`${base}/api/profiles/linky/sessions`);
+  expect(r.status).toBe(200);
+  const t = (await (await fetch(`${base}/api/profiles/linky/tickets`, json("POST", {
+    title: "linked", status: "review", sessionId: "11111111-2222-3333-4444-555555555555",
+  }))).json()) as any;
+  expect(t.sessionId).toBe("11111111-2222-3333-4444-555555555555");
+  expect(t.status).toBe("review");
+  expect(t.resumeCommand).toContain(`--resume 11111111-2222-3333-4444-555555555555`);
+  r = await fetch(`${base}/api/profiles/linky/tickets/${t.id}/link-session`, json("POST", { sessionId: "bad" }));
+  expect(r.status).toBe(400);
+  r = await fetch(`${base}/api/profiles/linky/tickets/${t.id}/link-session`, json("POST", { sessionId: null }));
+  expect(((await r.json()) as any).sessionId).toBeNull();
+});
+
 test("health", async () => {
   const r = await fetch(`${base}/api/health`);
   const h = (await r.json()) as any;

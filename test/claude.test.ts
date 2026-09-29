@@ -48,3 +48,43 @@ test("claudeDefaults reads model from settings.json", () => {
   writeFileSync(join(configDir, "settings.json"), "{broken");
   expect(claudeDefaults({ configDir })).toEqual({ model: null });
 });
+
+import { listSessions, liveSessionMatch } from "../src/server/claude";
+
+test("listSessions reads titles, first prompt, newest first", () => {
+  const configDir = tempDir();
+  const project = "/Users/x/dev/app";
+  const dir = join(configDir, "projects", encodeProjectDir(project));
+  mkdirSync(dir, { recursive: true });
+  const a = join(dir, "aaaaaaaa-0000-0000-0000-000000000001.jsonl");
+  const b = join(dir, "bbbbbbbb-0000-0000-0000-000000000002.jsonl");
+  writeFileSync(a, [
+    JSON.stringify({ type: "user", message: { role: "user", content: "<command-name>/clear</command-name>" } }),
+    JSON.stringify({ type: "user", message: { role: "user", content: "Base directory for this skill: /x/skills/y" } }),
+    JSON.stringify({ type: "user", message: { role: "user", content: "Improve OpenSearch message status" } }),
+    JSON.stringify({ type: "custom-title", customTitle: "old name", sessionId: "a" }),
+    JSON.stringify({ type: "custom-title", customTitle: "OS improvement planning", sessionId: "a" }),
+    "not json",
+  ].join("\n"));
+  writeFileSync(b, JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: "Fix the queue" }] } }) + "\n");
+  utimesSync(a, new Date("2026-09-01"), new Date("2026-09-01"));
+  utimesSync(b, new Date("2026-09-02"), new Date("2026-09-02"));
+  const list = listSessions(project, { configDir });
+  expect(list.map((s) => s.id)).toEqual(["bbbbbbbb-0000-0000-0000-000000000002", "aaaaaaaa-0000-0000-0000-000000000001"]);
+  expect(list[1]).toMatchObject({ title: "OS improvement planning", firstPrompt: "Improve OpenSearch message status" });
+  expect(list[0]).toMatchObject({ title: null, firstPrompt: "Fix the queue" });
+  expect(listSessions("/nope", { configDir })).toEqual([]);
+});
+
+test("liveSessionMatch finds claude processes by id or title", () => {
+  const ps = [
+    "/usr/bin/zsh",
+    "claude --resume OS improvement planning",
+    "node /opt/claude/cli.js -r aaaaaaaa-0000-0000-0000-000000000001",
+    "vim notes.txt --resume x",
+  ];
+  expect(liveSessionMatch(ps, { id: "zzz", title: "OS improvement planning" })).toBe(true);
+  expect(liveSessionMatch(ps, { id: "aaaaaaaa-0000-0000-0000-000000000001", title: null })).toBe(true);
+  expect(liveSessionMatch(ps, { id: "bbbb", title: "Other" })).toBe(false);
+  expect(liveSessionMatch(["vim --resume Other"], { id: "bbbb", title: "Other" })).toBe(false);
+});

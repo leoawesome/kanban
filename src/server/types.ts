@@ -20,6 +20,8 @@ export interface Ticket {
   order: number;
   sessionId: string | null;
   worktree: string | null;
+  /** Folder of a linked pre-existing Claude session (runs happen here instead of a worktree). */
+  workdir?: string | null;
   branch: string | null;
   prUrl: string | null;
   outcome: Outcome;

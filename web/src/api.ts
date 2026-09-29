@@ -29,6 +29,7 @@ export interface Ticket {
   order: number;
   sessionId: string | null;
   worktree: string | null;
+  workdir?: string | null;
   branch: string | null;
   prUrl: string | null;
   outcome: Outcome;
@@ -61,6 +62,15 @@ export interface ClaudeProject {
   name: string;
   lastUsed: string | null;
   hasProfile: boolean;
+}
+
+export interface ClaudeSession {
+  id: string;
+  title: string | null;
+  firstPrompt: string | null;
+  lastActive: string;
+  live: boolean;
+  ticket: { id: string; title: string } | null;
 }
 
 export type BusEvent =
@@ -97,7 +107,10 @@ export const api = {
   deleteProfile: (slug: string) => req<void>("DELETE", `/api/profiles/${slug}`),
   tickets: (slug: string) => req<Ticket[]>("GET", t(slug)),
   ticket: (slug: string, id: string) => req<Ticket>("GET", t(slug, id)),
-  createTicket: (slug: string, input: { title: string; body: string; status: Status }) =>
+  sessions: (slug: string) => req<ClaudeSession[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/sessions`),
+  linkSession: (slug: string, id: string, sessionId: string | null) =>
+    req<Ticket>("POST", `${t(slug, id)}/link-session`, { sessionId }),
+  createTicket: (slug: string, input: { title: string; body: string; status: Status; sessionId?: string }) =>
     req<Ticket>("POST", t(slug), input),
   updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order">> & { expectedBody?: string }) =>
     req<Ticket>("PATCH", t(slug, id), patch),

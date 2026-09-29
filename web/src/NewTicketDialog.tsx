@@ -1,15 +1,20 @@
 import { useState } from "react";
-import { COLUMNS, type Status } from "./api";
+import { COLUMNS, type ClaudeSession, type Status } from "./api";
 import { Modal } from "./Modal";
 import { Select } from "./Select";
+import { SessionPicker, sessionLabel } from "./SessionPicker";
 
 const ALLOWED = COLUMNS.filter((c) => c.id !== "in_progress" && c.id !== "done");
 
-export function NewTicketDialog({ initialStatus, onClose, onCreate }: {
+export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate }: {
+  slug: string;
+  folder: string;
   initialStatus: Status;
   onClose: () => void;
-  onCreate: (input: { title: string; body: string; status: Status }) => Promise<void>;
+  onCreate: (input: { title: string; body: string; status: Status; sessionId?: string }) => Promise<void>;
 }) {
+  const [session, setSession] = useState<ClaudeSession | null>(null);
+  const [picking, setPicking] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [status, setStatus] = useState<Status>(ALLOWED.some((c) => c.id === initialStatus) ? initialStatus : "backlog");
@@ -21,7 +26,7 @@ export function NewTicketDialog({ initialStatus, onClose, onCreate }: {
     if (!title.trim()) return;
     setBusy(true);
     try {
-      await onCreate({ title: title.trim(), body, status });
+      await onCreate({ title: title.trim(), body, status, sessionId: session?.id });
     } catch (e: any) {
       setErr(e.message);
       setBusy(false);
@@ -31,6 +36,17 @@ export function NewTicketDialog({ initialStatus, onClose, onCreate }: {
   return (
     <Modal title="New ticket" onClose={onClose}>
       <form className="form" onSubmit={submit}>
+        <div className="field">
+          {session ? (
+            <div className="session-chip">
+              <span className="muted small">From session</span>
+              <span className="session-title">{sessionLabel(session)}</span>
+              <button type="button" className="link-btn" onClick={() => setSession(null)}>Remove</button>
+            </div>
+          ) : (
+            <button type="button" className="link-btn" onClick={() => setPicking(true)}>Start from an existing Claude session…</button>
+          )}
+        </div>
         <label>
           Title
           <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should be done?" />
@@ -55,6 +71,13 @@ export function NewTicketDialog({ initialStatus, onClose, onCreate }: {
           <button type="submit" className="btn primary" disabled={busy || !title.trim()}>Create</button>
         </div>
       </form>
+      {picking && (
+        <SessionPicker slug={slug} folder={folder} onClose={() => setPicking(false)} onPick={(s) => {
+          setSession(s);
+          if (!title.trim()) setTitle(s.title ?? s.firstPrompt?.slice(0, 80) ?? "");
+          setPicking(false);
+        }} />
+      )}
     </Modal>
   );
 }

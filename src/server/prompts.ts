@@ -5,16 +5,21 @@ const RESULT_RULE = `When you are finished, end your final message with exactly 
 CKANBAN_RESULT: {"status":"done"|"blocked","prUrl":<string or null>,"summary":"<1-3 sentence summary for the user>"}
 Use "blocked" if you could not complete the task and need the user (explain why in summary).`;
 
-export function firstRunPrompt(t: Ticket, isGit: boolean): string {
-  const where = isGit
+export function firstRunPrompt(t: Ticket, isGit: boolean, linked = false, comments: Comment[] = []): string {
+  const intro = linked
+    ? `This conversation is now linked to a kanban ticket and continues unattended. Use everything above as context and carry the ticket forward.`
+    : `You are an autonomous agent working a kanban ticket. No human is watching; do not ask questions, make reasonable decisions.`;
+  const where = linked
+    ? `You are working in the main checkout of this project (not an isolated worktree). If you change code, create or reuse a feature branch; never commit directly to the default branch.`
+    : isGit
     ? `You are working in a dedicated git worktree on branch for this ticket.`
     : `You are working in a folder that is NOT a git repository.`;
-  return `You are an autonomous agent working a kanban ticket. No human is watching; do not ask questions, make reasonable decisions.
+  return `${intro}
 
 # Ticket: ${t.title}
 
 ${t.body.trim() || "(no description)"}
-
+${comments.length ? `\n# User notes\n${comments.map((c) => `- ${c.text}`).join("\n")}\n` : ""}
 # Rules
 - ${where}
 - Decide whether this task requires changing files in a code project.

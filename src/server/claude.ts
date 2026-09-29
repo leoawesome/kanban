@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { run } from "./git";
@@ -81,4 +81,79 @@ export async function pickFolder(): Promise<string | null> {
   if (r.code !== 0) return null;
   const path = r.stdout.trim().replace(/\/+$/, "");
   return path && existsSync(path) ? path : null;
+}
+
+export interface ClaudeSession {
+  id: string;
+  title: string | null;
+  firstPrompt: string | null;
+  lastActive: string;
+}
+
+function promptText(content: unknown): string | null {
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content) ? content.map((c: any) => (c?.type === "text" ? c.text : "")).join(" ") : "";
+  const t = text.trim();
+  // Skip slash-command / hook wrappers Claude Code stores as user messages.
+  if (!t || t.startsWith("<") || /^(Base directory for this skill|Caveat:|\[Request interrupted)/.test(t)) return null;
+  return t.replace(/\s+/g, " ").slice(0, 160);
+}
+
+/** Claude Code sessions started in `projectPath`, most recently active first. */
+export function listSessions(projectPath: string, d: Dirs = {}, limit = 50): ClaudeSession[] {
+  const dir = join(configDirOf(d), "projects", encodeProjectDir(projectPath));
+  let files: { id: string; file: string; mtime: Date }[];
+  try {
+    files = readdirSync(dir)
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => ({ id: f.slice(0, -6), file: join(dir, f), mtime: statSync(join(dir, f)).mtime }));
+  } catch {
+    return [];
+  }
+  files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+  return files.slice(0, limit).map(({ id, file, mtime }) => {
+    let title: string | null = null;
+    let firstPrompt: string | null = null;
+    let raw = "";
+    try {
+      raw = readFileSync(file, "utf8");
+    } catch {}
+    for (const line of raw.split("\n")) {
+      if (!line) continue;
+      const isTitle = line.includes('"custom-title"');
+      if (!isTitle && (firstPrompt || !line.includes('"user"'))) continue;
+      let ev: any;
+      try {
+        ev = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (ev.type === "custom-title" && typeof ev.customTitle === "string") title = ev.customTitle;
+      else if (!firstPrompt && ev.type === "user" && ev.message?.role === "user") firstPrompt = promptText(ev.message.content);
+    }
+    return { id, title, firstPrompt, lastActive: mtime.toISOString() };
+  });
+}
+
+/** True if any process command line looks like a claude CLI resuming this session (by id or title). */
+export function liveSessionMatch(commands: string[], s: { id: string; title: string | null }): boolean {
+  return commands.some((cmd) => {
+    if (!/(^|[\s/])claude(\s|$)|claude(-code)?\/cli\.js/.test(cmd)) return false;
+    if (cmd.includes(s.id)) return true;
+    return !!s.title && cmd.includes(s.title);
+  });
+}
+
+export async function processCommands(): Promise<string[]> {
+  const r = await run(["ps", "-axo", "args="], homedir());
+  return r.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
+}
+
+export async function isSessionLive(id: string, title: string | null): Promise<boolean> {
+  return liveSessionMatch(await processCommands(), { id, title });
+}
+
+export function sessionTitle(projectPath: string, id: string, d: Dirs = {}): string | null {
+  return listSessions(projectPath, d, 500).find((s) => s.id === id)?.title ?? null;
 }

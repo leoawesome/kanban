@@ -19,7 +19,7 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
     <article className={`card ${dragging ? "dragging" : ""} ${ticket.status === "in_progress" ? "is-running" : ""}`} onClick={onClick}>
       <div className="card-title">{ticket.title}</div>
       {showActivity && <div className="card-activity" title={ticket.lastActivity!}>{ticket.lastActivity}</div>}
-      {(badge || ticket.prUrl || ticket.runCount > 0) && (
+      {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir) && (
         <div className="card-meta">
           {badge}
           {ticket.prUrl && (
@@ -27,6 +27,7 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
               PR #{ticket.prUrl.split("/").pop()}
             </a>
           )}
+          {ticket.workdir && <span className="badge stopped" title="Linked to an existing Claude session">session</span>}
           {ticket.runCount > 0 && <span className="muted small">{ticket.runCount} run{ticket.runCount > 1 ? "s" : ""}</span>}
         </div>
       )}

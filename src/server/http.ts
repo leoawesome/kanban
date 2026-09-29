@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { ConflictError, type Board } from "./board";
-import { claudeDefaults, listClaudeProjects, pickFolder } from "./claude";
+import { claudeDefaults, listClaudeProjects, listSessions, liveSessionMatch, pickFolder, processCommands } from "./claude";
 import type { Bus, BusEvent } from "./events";
 import { detectBaseBranch, isGitRepo, which } from "./git";
 import { checkPr } from "./prpoller";
@@ -65,7 +65,7 @@ export function createServer(deps: ServerDeps) {
   const view = (p: Profile, t: Ticket) => ({
     ...t,
     running: board.isRunning(p.slug, t.id),
-    resumeCommand: t.sessionId ? resumeCommand(t.worktree ?? p.path, t.sessionId) : null,
+    resumeCommand: t.sessionId ? resumeCommand(t.workdir ?? t.worktree ?? p.path, t.sessionId) : null,
   });
 
   async function api(req: Request, url: URL): Promise<Response> {
@@ -147,6 +147,17 @@ export function createServer(deps: ServerDeps) {
       }
     }
 
+    // /profiles/:p/sessions — Claude Code sessions started in the profile folder
+    if (parts[2] === "sessions" && parts.length === 3 && m === "GET") {
+      const commands = await processCommands();
+      const linked = new Map(store.listTickets(slug).filter((t) => t.sessionId).map((t) => [t.sessionId!, t]));
+      return json(listSessions(profile.path).map((s) => ({
+        ...s,
+        live: liveSessionMatch(commands, s),
+        ticket: linked.has(s.id) ? { id: linked.get(s.id)!.id, title: linked.get(s.id)!.title } : null,
+      })));
+    }
+
     // /profiles/:p/tickets
     if (parts[2] !== "tickets") throw new HttpError(404, "not found");
     if (parts.length === 3) {
@@ -156,8 +167,17 @@ export function createServer(deps: ServerDeps) {
         const title = String(b.title ?? "").trim();
         if (!title) throw new HttpError(400, "title is required");
         const status: Status = STATUSES.includes(b.status) ? b.status : "backlog";
-        const t = await board.createTicket(slug, { title, body: String(b.body ?? ""), status });
-        return json(view(profile, t), 201);
+        let t = await board.createTicket(slug, { title, body: String(b.body ?? ""), status: b.sessionId ? "backlog" : status });
+        if (b.sessionId) {
+          try {
+            await board.linkSession(slug, t.id, String(b.sessionId));
+            t = await board.updateTicket(slug, t.id, { status });
+          } catch (e) {
+            await board.deleteTicket(slug, t.id);
+            throw new HttpError(400, (e as Error).message);
+          }
+        }
+        return json(view(profile, store.getTicket(slug, t.id)!), 201);
       }
     }
 
@@ -193,6 +213,15 @@ export function createServer(deps: ServerDeps) {
         const text = String(b.text ?? "").trim();
         if (!text) throw new HttpError(400, "text is required");
         return json(board.addComment(slug, id, text), 201);
+      }
+    }
+    if (m === "POST" && action === "link-session") {
+      const b = await body(req);
+      try {
+        const t = await board.linkSession(slug, id, b.sessionId ? String(b.sessionId) : null);
+        return json(view(profile, t));
+      } catch (e) {
+        throw new HttpError(400, (e as Error).message);
       }
     }
     if (m === "POST" && action === "stop") return json({ stopped: board.stop(slug, id) });

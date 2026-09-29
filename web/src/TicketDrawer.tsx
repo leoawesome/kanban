@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type Comment, type Profile, type Status, type Ticket } from "./api";
+import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type ClaudeSession, type Comment, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Select } from "./Select";
+import { SessionPicker, sessionLabel } from "./SessionPicker";
 import { timeAgo } from "./time";
 import { Markdown, Transcript } from "./Transcript";
 
@@ -25,6 +26,8 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
   const [tab, setTab] = useState<"comments" | "transcript">(ticket.status === "in_progress" ? "transcript" : "comments");
   const [copied, setCopied] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [linked, setLinked] = useState<ClaudeSession | null>(null);
   const running = ticket.status === "in_progress";
 
   const reloadComments = () => api.comments(slug, ticket.id).then(setComments).catch(() => {});
@@ -38,6 +41,14 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [slug, ticket.id]);
+
+  useEffect(() => {
+    if (!ticket.workdir || !ticket.sessionId) {
+      setLinked(null);
+      return;
+    }
+    api.sessions(slug).then((ss) => setLinked(ss.find((s) => s.id === ticket.sessionId) ?? null)).catch(() => {});
+  }, [slug, ticket.sessionId, ticket.workdir, ticket.status]);
 
   useEffect(() => subscribe((e) => {
     if (e.type === "activity" && e.profile === slug && e.id === ticket.id) {
@@ -139,8 +150,11 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
         <div className="actions">
           {running && <button className="btn danger" onClick={() => act(() => api.stop(slug, ticket.id))}>Stop</button>}
           {!running && ticket.status !== "ready" && ticket.status !== "done" && (
-            <button className="btn primary" onClick={() => setStatus("ready")}>{ticket.runCount ? "Send back to Claude" : "Move to Ready"}</button>
+            <button className="btn primary" onClick={() => setStatus("ready")}>
+              {ticket.runCount || ticket.workdir ? "Send to Claude" : "Move to Ready"}
+            </button>
           )}
+          {ticket.status === "review" && <button className="btn" onClick={() => setStatus("done")}>Mark done</button>}
           {canPlan && (
             <button className="btn" onClick={() => doCopy("plan", async () => (await api.planningCommand(slug, ticket.id)).command)}>
               {copied === "plan" ? "Copied!" : "Copy planning command"}
@@ -158,7 +172,29 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           <div className="spacer" />
           <button className="btn ghost danger-text" onClick={() => setConfirmDelete(true)}>Delete</button>
         </div>
-        {canPlan && (
+        {ticket.workdir && ticket.sessionId ? (
+          <div className="session-box">
+            <div className="session-chip">
+              <span className="muted small">Linked session</span>
+              <span className="session-title" title={ticket.sessionId}>{linked ? sessionLabel(linked) : ticket.sessionId.slice(0, 8)}</span>
+              {linked?.live && <span className="badge running"><span className="live-dot" /> open in terminal</span>}
+              {!running && <button className="link-btn" onClick={() => setPicking(true)}>Change</button>}
+              {!running && <button className="link-btn" onClick={() => act(() => api.linkSession(slug, ticket.id, null))}>Unlink</button>}
+            </div>
+            {linked?.live && ticket.status !== "in_progress" && (
+              <span className="muted small">Exit the terminal session before sending this ticket to Claude.</span>
+            )}
+          </div>
+        ) : !running && ticket.status !== "done" && ticket.runCount === 0 && (
+          <div className="session-box">
+            <button className="link-btn" onClick={() => setPicking(true)}>Link an existing Claude session…</button>
+          </div>
+        )}
+        {picking && (
+          <SessionPicker slug={slug} folder={profile.path} currentTicketId={ticket.id} onClose={() => setPicking(false)}
+            onPick={(s) => act(async () => { await api.linkSession(slug, ticket.id, s.id); setPicking(false); })} />
+        )}
+        {canPlan && !ticket.workdir && (
           <p className="hint">
             Planning: copy the command, paste in a terminal and chat with Claude. When the plan is agreed Claude updates this
             description. Exit the terminal session, then move the card to Ready.

@@ -13,6 +13,7 @@ let store: Store;
 let bus: Bus;
 let board: Board;
 let argsFile: string;
+let liveSessions: Set<string>;
 
 async function setup(opts: { git?: boolean; maxParallel?: number } = {}): Promise<Profile> {
   const path = opts.git === false ? tempDir("ck-plain-") : await makeRepo();
@@ -32,7 +33,8 @@ function readArgs(): { args: string[]; cwd: string }[] {
 beforeEach(() => {
   store = new Store(tempDir("ck-home-"));
   bus = new Bus();
-  board = new Board(store, bus, { claudeBin: FAKE });
+  liveSessions = new Set();
+  board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async (id) => liveSessions.has(id) });
   argsFile = join(tempDir("ck-args-"), "args.jsonl");
   process.env.FAKE_ARGS_FILE = argsFile;
   process.env.FAKE_MODE = "ok";
@@ -241,3 +243,51 @@ test("body update with stale expectedBody is rejected", async () => {
   await board.updateTicket("p", t.id, { body: "mine", expectedBody: "plan from claude" });
   expect(store.getTicket("p", t.id)!.body).toBe("mine");
 });
+
+test("linked session runs in profile folder with --resume and no worktree", async () => {
+  const p = await setup();
+  const t = await board.createTicket("p", { title: "OS status", body: "", status: "review" });
+  await board.linkSession("p", t.id, "11111111-2222-3333-4444-555555555555");
+  const linked = store.getTicket("p", t.id)!;
+  expect(linked.sessionId).toBe("11111111-2222-3333-4444-555555555555");
+  expect(linked.workdir).toBe(p.path);
+  await board.updateTicket("p", t.id, { status: "ready" });
+  await board.whenIdle();
+  const call = readArgs()[0];
+  expect(call.cwd).toBe(p.path);
+  expect(call.args).toContain("--resume");
+  expect(call.args).toContain("11111111-2222-3333-4444-555555555555");
+  const got = store.getTicket("p", t.id)!;
+  expect(got.worktree).toBeNull();
+  expect(got.status).toBe("review");
+});
+
+test("run refuses when the linked session is still open in a terminal", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "review" });
+  await board.linkSession("p", t.id, "11111111-2222-3333-4444-555555555555");
+  liveSessions.add("11111111-2222-3333-4444-555555555555");
+  await board.updateTicket("p", t.id, { status: "ready" });
+  await board.whenIdle();
+  expect(readArgs().length).toBe(0);
+  const got = store.getTicket("p", t.id)!;
+  expect(got.status).toBe("review");
+  expect(got.outcome).toBe("blocked");
+  expect(store.listComments("p", t.id).at(-1)!.text).toContain("still open in a terminal");
+});
+
+test("done on linked ticket never removes the profile folder", async () => {
+  const p = await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "review" });
+  await board.linkSession("p", t.id, "11111111-2222-3333-4444-555555555555");
+  await board.updateTicket("p", t.id, { status: "done" });
+  expect(existsSync(p.path)).toBe(true);
+});
+
+test("cannot link while running", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await Bun.sleep(300);
+  await expect(board.linkSession("p", t.id, "11111111-2222-3333-4444-555555555555")).rejects.toThrow(/running/);
+}, 15000);

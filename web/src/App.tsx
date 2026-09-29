@@ -177,6 +177,8 @@ export function App() {
       )}
       {newTicket && profile && (
         <NewTicketDialog
+          slug={profile.slug}
+          folder={profile.path}
           initialStatus={newTicket}
           onClose={() => setNewTicket(null)}
           onCreate={async (input) => {
