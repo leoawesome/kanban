@@ -130,11 +130,19 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
         )}
         {empty && (
           <div className="chat-empty">
-            {refine ? (
+            {ticket.status === "backlog" ? (
               <>
-                <p><b>Shape this ticket with Claude.</b> Tell it your idea in your own words. It will ask a few questions, then propose a clear title and description you can apply.{ticket.status === "backlog" ? " (Moving the card to Planning starts this automatically.)" : ""}</p>
+                <p><b>Parked.</b> Move it to Planning when you want Claude to help shape it: it will ask a few questions, then propose a clear title and description.</p>
+                <button className="btn" onClick={() => api.updateTicket(slug, ticket.id, { status: "planning" }).catch((e) => onError(e.message))}>
+                  Move to Planning
+                </button>
+              </>
+            ) : ticket.status === "planning" ? (
+              <>
+                {/* Only shown if the automatic start didn't happen (e.g. session was open in a terminal). */}
+                <p><b>Shape this ticket with Claude.</b> Describe your idea below, or let Claude start the interview.</p>
                 <button className="btn" onClick={() => send("Help me refine this ticket. Interview me about what's unclear, then propose an improved title and description.")}>
-                  Help me refine this ticket
+                  Start the interview
                 </button>
               </>
             ) : (
