@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, copy, COLUMNS, safeHref, subscribe, type ActivityEntry, type ClaudeSession, type Comment, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { Conversation } from "./Conversation";
 import { Select } from "./Select";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
 import { timeAgo } from "./time";
@@ -23,7 +24,8 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
   const [comments, setComments] = useState<Comment[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [draft, setDraft] = useState("");
-  const [tab, setTab] = useState<"comments" | "transcript">(ticket.status === "in_progress" ? "transcript" : "comments");
+  const [tab, setTab] = useState<"comments" | "conversation" | "transcript">(
+    ticket.status === "in_progress" ? "transcript" : ticket.workdir && ticket.sessionId ? "conversation" : "comments");
   const [copied, setCopied] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -119,7 +121,7 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
     });
   };
 
-  const canPlan = ticket.status === "backlog" || ticket.status === "planning";
+  const canPlan = (ticket.status === "backlog" || ticket.status === "planning") && !ticket.workdir;
 
   return (
     <div className="drawer-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -222,14 +224,34 @@ export function TicketDrawer({ profile, ticket, onClose, onError }: {
           )}
         </section>
 
+        {!!ticket.session?.artifacts.length && (
+          <div className="artifacts">
+            <span className="muted small">Artifacts</span>
+            {ticket.session.artifacts.slice().reverse().map((a) => (
+              <a key={a.url} className="artifact-chip" href={safeHref(a.url)} target="_blank" rel="noreferrer" title={a.url}>
+                {a.label} <span aria-hidden>↗</span>
+              </a>
+            ))}
+          </div>
+        )}
+
         <nav className="tabs">
           <button className={tab === "comments" ? "active" : ""} onClick={() => setTab("comments")}>Comments ({comments.length})</button>
-          <button className={tab === "transcript" ? "active" : ""} onClick={() => setTab("transcript")}>
-            Transcript {running && <span className="dot" />}
-          </button>
+          {ticket.sessionId && (
+            <button className={tab === "conversation" ? "active" : ""} onClick={() => setTab("conversation")}>Conversation</button>
+          )}
+          {(ticket.runCount > 0 || running || activity.length > 0) && (
+            <button className={tab === "transcript" ? "active" : ""} onClick={() => setTab("transcript")}>
+              Run log {running && <span className="dot" />}
+            </button>
+          )}
         </nav>
 
-        {tab === "comments" ? (
+        {tab === "conversation" && ticket.sessionId ? (
+          <section className="section">
+            <Conversation slug={slug} ticketId={ticket.id} resumeCommand={ticket.resumeCommand} />
+          </section>
+        ) : tab === "comments" ? (
           <section className="section">
             <div className="comments">
               {comments.map((c) => (

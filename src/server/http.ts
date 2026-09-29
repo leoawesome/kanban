@@ -6,6 +6,7 @@ import type { Bus, BusEvent } from "./events";
 import { detectBaseBranch, isGitRepo, which } from "./git";
 import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
+import { SessionCache } from "./session";
 import type { Store } from "./store";
 import { STATUSES, type Profile, type Status, type Ticket } from "./types";
 import { nowIso, slugify } from "./util";
@@ -16,6 +17,7 @@ export interface ServerDeps {
   board: Board;
   port: number;
   webDir: string;
+  sessions?: SessionCache;
 }
 
 class HttpError extends Error {
@@ -51,6 +53,7 @@ async function body(req: Request): Promise<any> {
 
 export function createServer(deps: ServerDeps) {
   const { store, bus, board } = deps;
+  const sessions = deps.sessions ?? new SessionCache();
 
   const profileOr404 = (slug: string): Profile => {
     const p = store.getProfile(slug);
@@ -66,6 +69,7 @@ export function createServer(deps: ServerDeps) {
     ...t,
     running: board.isRunning(p.slug, t.id),
     resumeCommand: t.sessionId ? resumeCommand(t.workdir ?? t.worktree ?? p.path, t.sessionId) : null,
+    session: t.sessionId ? sessions.summary(t.sessionId) : null,
   });
 
   async function api(req: Request, url: URL): Promise<Response> {
@@ -206,6 +210,17 @@ export function createServer(deps: ServerDeps) {
 
     const action = parts[4];
     if (action === "activity" && m === "GET") return json(store.readActivity(slug, id));
+    if (action === "conversation" && m === "GET") {
+      // Read-only view of the ticket's Claude session file (terminal chat + board runs), newest last.
+      const t = store.getTicket(slug, id)!;
+      const parsed = t.sessionId ? sessions.get(t.sessionId) : null;
+      const all = parsed?.entries ?? [];
+      const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit")) || 100));
+      const before = url.searchParams.has("before") ? Number(url.searchParams.get("before")) : all.length;
+      const end = Math.max(0, Math.min(all.length, before));
+      const start = Math.max(0, end - limit);
+      return json({ entries: all.slice(start, end), start, total: all.length, title: parsed?.title ?? null });
+    }
     if (action === "comments") {
       if (m === "GET") return json(store.listComments(slug, id));
       if (m === "POST") {

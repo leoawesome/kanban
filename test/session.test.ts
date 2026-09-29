@@ -1,0 +1,93 @@
+import { expect, test } from "bun:test";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { Bus, type BusEvent } from "../src/server/events";
+import { SessionCache, findSessionFile, parseSession, pollSessions } from "../src/server/session";
+import { Store } from "../src/server/store";
+import { tempDir } from "./helpers";
+
+const L = (o: unknown) => JSON.stringify(o);
+const user = (text: any, at: string, extra: object = {}) =>
+  L({ type: "user", uuid: `u${at}`, timestamp: at, message: { role: "user", content: text }, ...extra });
+const asst = (content: any[], at: string, extra: object = {}) =>
+  L({ type: "assistant", uuid: `a${at}`, timestamp: at, message: { role: "assistant", content }, ...extra });
+
+const RAW = [
+  L({ type: "custom-title", customTitle: "flight proposal." }),
+  user("<command-name>/clear</command-name>", "2026-09-29T01:00:00Z"),
+  user("Draft the flight proposal", "2026-09-29T01:00:01Z"),
+  asst([{ type: "thinking", thinking: "hmm" }, { type: "text", text: "On it." }], "2026-09-29T01:00:02Z"),
+  asst([{ type: "tool_use", id: "t1", name: "Artifact", input: { action: "publish", file_path: "/x/flight-autopilot.html" } }], "2026-09-29T01:00:03Z"),
+  user([{ type: "tool_result", tool_use_id: "t1", content: "Published /x/flight-autopilot.html at https://claude.ai/artifact/EHESGk3 (Version 1)" }], "2026-09-29T01:00:04Z"),
+  user([{ type: "tool_result", tool_use_id: "t2", content: [{ type: "text", text: "Published /x/flight-autopilot.html at https://claude.ai/artifact/EHESGk3 (Version 2)" }] }], "2026-09-29T01:00:05Z"),
+  asst([{ type: "tool_use", id: "t3", name: "Bash", input: { command: "ls -la" } }], "2026-09-29T01:00:06Z"),
+  asst([{ type: "text", text: "sidechain noise" }], "2026-09-29T01:00:07Z", { isSidechain: true }),
+  user("looks good, ship it", "2026-09-29T01:00:08Z"),
+  "garbage line",
+].join("\n");
+
+test("parseSession: timeline, artifacts deduped, last message", () => {
+  const s = parseSession(RAW);
+  expect(s.title).toBe("flight proposal.");
+  expect(s.entries.map((e) => [e.role, e.kind, e.text])).toEqual([
+    ["user", "text", "Draft the flight proposal"],
+    ["assistant", "text", "On it."],
+    ["assistant", "tool", "Artifact: /x/flight-autopilot.html"],
+    ["assistant", "tool", "Bash: ls -la"],
+    ["user", "text", "looks good, ship it"],
+  ]);
+  expect(s.artifacts).toEqual([
+    { url: "https://claude.ai/artifact/EHESGk3", label: "flight-autopilot", at: "2026-09-29T01:00:05Z" },
+  ]);
+  expect(s.lastMessage).toEqual({ role: "user", text: "looks good, ship it", at: "2026-09-29T01:00:08Z" });
+});
+
+test("parseSession falls back to ai-title and handles empty", () => {
+  expect(parseSession(L({ type: "ai-title", aiTitle: "Auto name" })).title).toBe("Auto name");
+  const empty = parseSession("");
+  expect(empty.entries).toEqual([]);
+  expect(empty.lastMessage).toBeNull();
+});
+
+test("findSessionFile + cache reparses only on change", () => {
+  const configDir = tempDir();
+  const dir = join(configDir, "projects", "-some-folder");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "11111111-2222-3333-4444-555555555555.jsonl");
+  writeFileSync(file, user("hi", "2026-09-29T01:00:00Z") + "\n");
+  expect(findSessionFile("11111111-2222-3333-4444-555555555555", { configDir })).toBe(file);
+  expect(findSessionFile("nope", { configDir })).toBeNull();
+  const cache = new SessionCache({ configDir });
+  const a = cache.get("11111111-2222-3333-4444-555555555555")!;
+  expect(cache.get("11111111-2222-3333-4444-555555555555")).toBe(a);
+  appendFileSync(file, asst([{ type: "text", text: "hello" }], "2026-09-29T01:00:01Z") + "\n");
+  expect(cache.get("11111111-2222-3333-4444-555555555555")!.lastMessage!.text).toBe("hello");
+});
+
+test("pollSessions emits session.updated when a linked session file changes", () => {
+  const configDir = tempDir();
+  const dir = join(configDir, "projects", "-f");
+  mkdirSync(dir, { recursive: true });
+  const sid = "11111111-2222-3333-4444-555555555555";
+  const file = join(dir, `${sid}.jsonl`);
+  writeFileSync(file, user("first", "2026-09-29T01:00:00Z") + "\n");
+  const store = new Store(tempDir());
+  store.saveProfile({ name: "P", slug: "p", path: tempDir(), baseBranch: "main", maxParallel: 1, createdAt: "" });
+  const t = store.createTicket("p", { title: "x", body: "", status: "review" });
+  store.updateTicket("p", t.id, { sessionId: sid });
+  const bus = new Bus();
+  const seen: BusEvent[] = [];
+  bus.on((e) => seen.push(e));
+  const cache = new SessionCache({ configDir });
+  const state = new Map<string, string>();
+  pollSessions(store, bus, cache, state);
+  expect(seen.length).toBe(1);
+  pollSessions(store, bus, cache, state);
+  expect(seen.length).toBe(1);
+  appendFileSync(file, asst([{ type: "text", text: "reply" }], "2026-09-29T01:00:01Z") + "\n");
+  pollSessions(store, bus, cache, state);
+  expect(seen.length).toBe(2);
+  const e = seen[1] as any;
+  expect(e).toMatchObject({ type: "session.updated", profile: "p", id: t.id });
+  expect(e.session.lastMessage.text).toBe("reply");
+});

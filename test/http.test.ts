@@ -124,6 +124,8 @@ test("link session endpoint and sessions list", async () => {
   expect(t.sessionId).toBe("11111111-2222-3333-4444-555555555555");
   expect(t.status).toBe("review");
   expect(t.resumeCommand).toContain(`--resume 11111111-2222-3333-4444-555555555555`);
+  const conv = (await (await fetch(`${base}/api/profiles/linky/tickets/${t.id}/conversation`)).json()) as any;
+  expect(conv).toMatchObject({ entries: [], total: 0 });
   r = await fetch(`${base}/api/profiles/linky/tickets/${t.id}/link-session`, json("POST", { sessionId: "bad" }));
   expect(r.status).toBe(400);
   r = await fetch(`${base}/api/profiles/linky/tickets/${t.id}/link-session`, json("POST", { sessionId: null }));

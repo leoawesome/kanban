@@ -42,6 +42,28 @@ export interface Ticket {
   body: string;
   running?: boolean;
   resumeCommand?: string | null;
+  session?: SessionSummary | null;
+}
+
+export interface SessionMessage {
+  role: "user" | "assistant";
+  text: string;
+  at: string;
+}
+
+export interface SessionSummary {
+  title: string | null;
+  lastMessage: SessionMessage | null;
+  artifacts: { url: string; label: string; at: string }[];
+  updatedAt: string;
+}
+
+export interface SessionEntry {
+  uuid: string;
+  at: string;
+  role: "user" | "assistant";
+  kind: "text" | "tool";
+  text: string;
 }
 
 export interface Comment {
@@ -77,7 +99,8 @@ export type BusEvent =
   | { type: "ticket.updated"; profile: string; ticket: Ticket }
   | { type: "ticket.deleted"; profile: string; id: string }
   | { type: "activity"; profile: string; id: string; run: number; event: any }
-  | { type: "profile.updated"; slug: string; profile: Profile | null };
+  | { type: "profile.updated"; slug: string; profile: Profile | null }
+  | { type: "session.updated"; profile: string; id: string; session: SessionSummary };
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const hasBody = method === "POST" || method === "PATCH";
@@ -117,6 +140,9 @@ export const api = {
   deleteTicket: (slug: string, id: string) => req<void>("DELETE", t(slug, id)),
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),
   addComment: (slug: string, id: string, text: string) => req<Comment>("POST", `${t(slug, id)}/comments`, { text }),
+  conversation: (slug: string, id: string, before?: number) =>
+    req<{ entries: SessionEntry[]; start: number; total: number; title: string | null }>(
+      "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),
   activity: (slug: string, id: string) => req<ActivityEntry[]>("GET", `${t(slug, id)}/activity`),
   stop: (slug: string, id: string) => req<{ stopped: boolean }>("POST", `${t(slug, id)}/stop`),
   checkPr: (slug: string, id: string) => req<{ state: string | null }>("POST", `${t(slug, id)}/check-pr`),

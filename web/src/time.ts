@@ -6,3 +6,15 @@ export function timeAgo(iso: string): string {
   if (s < 86400 * 30) return `${Math.floor(s / 86400)}d ago`;
   return new Date(iso).toLocaleDateString();
 }
+
+/** Plain one-line preview of markdown text (for cards). */
+export function plainPreview(md: string, max = 160): string {
+  return md
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_`~>#|]+/g, "")
+    .replace(/^\s*[-+]\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}

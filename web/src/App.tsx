@@ -63,6 +63,9 @@ export function App() {
             return next;
           });
         }
+        if (e.type === "session.updated" && e.profile === slug) {
+          setTickets((ts) => ts.map((t) => (t.id === e.id ? { ...t, session: e.session } : t)));
+        }
         if (e.type === "ticket.deleted" && e.profile === slug) {
           setTickets((ts) => ts.filter((t) => t.id !== e.id));
         }

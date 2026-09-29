@@ -114,6 +114,7 @@ export function listSessions(projectPath: string, d: Dirs = {}, limit = 50): Cla
   files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
   return files.slice(0, limit).map(({ id, file, mtime }) => {
     let title: string | null = null;
+    let aiTitle: string | null = null;
     let firstPrompt: string | null = null;
     let raw = "";
     try {
@@ -121,7 +122,7 @@ export function listSessions(projectPath: string, d: Dirs = {}, limit = 50): Cla
     } catch {}
     for (const line of raw.split("\n")) {
       if (!line) continue;
-      const isTitle = line.includes('"custom-title"');
+      const isTitle = line.includes('"custom-title"') || line.includes('"ai-title"');
       if (!isTitle && (firstPrompt || !line.includes('"user"'))) continue;
       let ev: any;
       try {
@@ -130,9 +131,10 @@ export function listSessions(projectPath: string, d: Dirs = {}, limit = 50): Cla
         continue;
       }
       if (ev.type === "custom-title" && typeof ev.customTitle === "string") title = ev.customTitle;
+      else if (ev.type === "ai-title" && typeof ev.aiTitle === "string") aiTitle = ev.aiTitle;
       else if (!firstPrompt && ev.type === "user" && ev.message?.role === "user") firstPrompt = promptText(ev.message.content);
     }
-    return { id, title, firstPrompt, lastActive: mtime.toISOString() };
+    return { id, title: title ?? aiTitle, firstPrompt, lastActive: mtime.toISOString() };
   });
 }
 
