@@ -42,7 +42,9 @@ export function worktreeDir(profile: Pick<Profile, "path" | "slug">, id: string)
 
 export async function addWorktree(repo: string, dir: string, branch: string, base: string): Promise<void> {
   mkdirSync(dirname(dir), { recursive: true });
-  const r = await run(["git", "worktree", "add", "-b", branch, dir, base], repo);
+  const exists = (await run(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo)).code === 0;
+  const args = exists ? ["git", "worktree", "add", dir, branch] : ["git", "worktree", "add", "-b", branch, dir, base];
+  const r = await run(args, repo);
   if (r.code !== 0) throw new Error(`git worktree add failed: ${r.stderr.trim()}`);
 }
 
