@@ -7,7 +7,7 @@ import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, worktreeDir } from "./git";
 import { MOVE_TO_PLANNING_RE } from "./session";
-import { chatPrompt, firstRunPrompt, planningCommand, planningPrompt, resumePrompt, type ChatMode } from "./prompts";
+import { chatPrompt, firstRunPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode } from "./prompts";
 import { parseResult } from "./result";
 import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
@@ -33,6 +33,8 @@ interface ActiveRun {
   stopRequested: boolean;
   /** Set for runs started from the ticket chat (not the Ready queue). */
   chat?: { text: string; mode: ChatMode };
+  /** Chat messages sent while running that Claude has not been handed yet (run still starting, or finishing). */
+  queued: string[];
 }
 
 /** Backlog/Planning chats refine the ticket (read-only); everywhere else Claude acts on the message. */
@@ -110,15 +112,28 @@ export class Board {
     }
   }
 
-  /** Send a chat message: resumes the ticket's session right away, like typing in the terminal. */
+  /**
+   * Send a chat message: resumes the ticket's session right away, like typing in the terminal.
+   * While Claude is working the message steers the run instead: Claude reads it at its next step.
+   */
   async chat(slug: string, id: string, text: string): Promise<Ticket> {
     const t = this.store.getTicket(slug, id);
     if (!t) throw new Error(`ticket ${id} not found`);
     if (!text.trim()) throw new Error("message is empty");
     if (t.error?.startsWith("corrupt")) throw new Error("ticket file is corrupt");
-    if (this.isRunning(slug, id)) throw new ConflictError("Claude is still working on this ticket; wait for the reply or stop it");
+    const active = this.runs.get(this.key(slug, id));
+    if (active) {
+      if (active.stopRequested || this.shuttingDown) throw new ConflictError("Claude is stopping; send your message once it has stopped");
+      if (!this.steer(active, text)) active.queued.push(text);
+      return t;
+    }
     this.start(slug, id, { text, mode: chatModeFor(t.status) });
     return this.store.getTicket(slug, id)!;
+  }
+
+  /** Hand a message to the live claude process; false when there is none to take it. */
+  private steer(run: ActiveRun, text: string): boolean {
+    return !!run.handle?.send(localizeImages(steerPrompt(text), this.store.attachmentsDir));
   }
 
   /** Entering Planning means "shape this with Claude": start the interview once, without a click. */
@@ -132,12 +147,9 @@ export class Board {
   }
 
   private start(slug: string, id: string, chat?: ActiveRun["chat"]) {
-    const run: ActiveRun = { slug, id, handle: null, promise: Promise.resolve(), targetStatus: null, stopRequested: false, chat };
+    const run: ActiveRun = { slug, id, handle: null, promise: Promise.resolve(), targetStatus: null, stopRequested: false, chat, queued: [] };
     this.runs.set(this.key(slug, id), run);
-    const refine = chat?.mode === "refine";
-    this.patch(slug, id, refine
-      ? { error: null, lastActivity: "Claude is replying…", refineStarted: true }
-      : { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…" });
+    this.begin(run);
     run.promise = this.execute(run)
       .catch((e) => {
         console.error(`run ${slug}/${id} crashed`, e);
@@ -155,13 +167,32 @@ export class Board {
       });
   }
 
+  private begin(run: ActiveRun) {
+    this.patch(run.slug, run.id, run.chat?.mode === "refine"
+      ? { error: null, lastActivity: "Claude is replying…", refineStarted: true }
+      : { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…" });
+  }
+
+  /** One claude run, then a chat reply for each message that came in too late for it. */
+  private async execute(run: ActiveRun): Promise<void> {
+    await this.executeOnce(run);
+    while (run.queued.length && !run.stopRequested && !this.shuttingDown) {
+      const t = this.store.getTicket(run.slug, run.id);
+      if (!t) return;
+      run.chat = { text: run.queued.shift()!, mode: chatModeFor(t.status) };
+      run.handle = null;
+      this.begin(run);
+      await this.executeOnce(run);
+    }
+  }
+
   /** Where the card lands after a run: refine chats never move it. */
   private endStatus(run: ActiveRun): Partial<Ticket> {
     if (run.chat?.mode === "refine") return run.targetStatus ? { status: run.targetStatus } : {};
     return { status: run.targetStatus ?? "review" };
   }
 
-  private async execute(run: ActiveRun): Promise<void> {
+  private async executeOnce(run: ActiveRun): Promise<void> {
     const { slug, id } = run;
     const startedAt = nowIso();
     let session: { dir: string; sessionId: string; existed: boolean; isGit: boolean };
@@ -214,7 +245,8 @@ export class Board {
     run.handle = startRun({
       bin: this.opts.claudeBin,
       cwd: session.dir,
-      args: buildArgs(prompt, session.sessionId, session.existed, profile.model, refine ? "plan" : "bypassPermissions"),
+      args: buildArgs(session.sessionId, session.existed, profile.model, refine ? "plan" : "bypassPermissions"),
+      input: prompt,
       env: { CKANBAN_OUTPUT_DIR: outputDir },
       onEvent: (ev) => {
         const changed = draft.feed(ev);
@@ -241,13 +273,20 @@ export class Board {
       },
     });
 
+    // Messages sent while the run was starting up.
+    for (const text of run.queued.splice(0)) if (!this.steer(run, text)) run.queued.push(text);
+
     const out = await run.handle.done;
     if (draftTimer) clearTimeout(draftTimer);
     if (draft.text) this.bus.emit({ type: "draft", profile: slug, id, text: "" });
     // Daemon is exiting: leave the ticket in_progress so recover() resumes it on next start.
     if (this.shuttingDown) return;
     const finalText = extractFinalText(out.events);
-    const result = parseResult(finalText);
+    // A steering message can get its own turn after the result line; the ticket outcome is still the last one given.
+    const result = parseResult(finalText) ?? out.events
+      .filter((e) => e?.type === "result" && typeof e.result === "string")
+      .map((e) => parseResult(e.result))
+      .findLast((r) => r !== null) ?? null;
     const base: Partial<Ticket> = {
       ...this.endStatus(run),
       sessionStarted: true,

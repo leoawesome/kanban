@@ -1,11 +1,58 @@
 #!/usr/bin/env bun
 // Fake `claude` CLI for tests. Behaviour controlled by env:
 // FAKE_MODE=ok|fail|slow|blocked|noresult, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
+// With --input-format stream-json it reads user messages from stdin like the real CLI: messages that
+// arrive mid-run are picked up at the next step (replayed with --replay-user-messages), later ones
+// get their own turn, and it exits at end of input.
 import { appendFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
+const streamIn = args.includes("--input-format");
+const replay = args.includes("--replay-user-messages");
+
+const inbox: string[] = [];
+let eof = false;
+let wake = (): void => {};
+if (streamIn) {
+  (async () => {
+    const decoder = new TextDecoder();
+    let buf = "";
+    const line = (l: string) => {
+      if (!l.trim()) return;
+      const m = JSON.parse(l);
+      inbox.push(m.message.content.map((c: any) => c.text ?? "").join(""));
+    };
+    for await (const chunk of Bun.stdin.stream()) {
+      buf += decoder.decode(chunk, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        line(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      }
+      wake();
+    }
+    line(buf);
+    eof = true;
+    wake();
+  })();
+}
+async function nextMessage(): Promise<string | null> {
+  while (!inbox.length && !eof) await new Promise<void>((r) => (wake = r));
+  return inbox.shift() ?? null;
+}
+const heard: string[] = [];
+function take(text: string) {
+  heard.push(text);
+  if (replay) emit({ type: "user", message: { role: "user", content: [{ type: "text", text }] }, isReplay: true });
+}
+/** Pick up messages sent while "working", as the real CLI does between steps. */
+function drain() {
+  while (inbox.length) take(inbox.shift()!);
+}
+
+const first = streamIn ? await nextMessage() : null;
 if (process.env.FAKE_ARGS_FILE) {
-  appendFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify({ args, cwd: process.cwd() }) + "\n");
+  appendFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify({ args, cwd: process.cwd(), prompt: first }) + "\n");
 }
 const mode = process.env.FAKE_MODE ?? "ok";
 const idx = Math.max(args.indexOf("--session-id"), args.indexOf("--resume"));
@@ -23,6 +70,7 @@ if (mode === "fail") {
 }
 
 emit({ type: "system", subtype: "init", session_id: sessionId, cwd: process.cwd() });
+if (first !== null) take(first);
 
 // one event split across two chunks to exercise line buffering
 const split = JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Edit", input: { file_path: `${process.cwd()}/src/app.ts` } }] } }) + "\n";
@@ -37,6 +85,7 @@ if (stepMs) {
     emit({ type: "assistant", message: { content: [{ type: "tool_use", id: cmd, name: "Bash", input: { command: cmd } }] } });
     await Bun.sleep(stepMs);
     emit({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: cmd, content: `ok: ${cmd}` }] } });
+    drain();
   }
 }
 
@@ -56,13 +105,25 @@ if (process.env.FAKE_OUTPUT && process.env.CKANBAN_OUTPUT_DIR) {
   writeFileSync(`${process.env.CKANBAN_OUTPUT_DIR}/report.md`, process.env.FAKE_OUTPUT);
 }
 
+drain();
+const steered = heard.slice(1);
 const status = mode === "blocked" ? "blocked" : mode === "questions" ? "questions" : "done";
 const text = mode === "noresult"
   ? "All done, no result line."
-  : `Work complete.${process.env.FAKE_EXTRA ?? ""}\nCKANBAN_RESULT: ${JSON.stringify({ status, prUrl: pr, summary: `fake ${status}` })}`;
+  : `Work complete.${steered.length ? `\nSteered: ${steered.join(" | ")}` : ""}${process.env.FAKE_EXTRA ?? ""}\nCKANBAN_RESULT: ${JSON.stringify({ status, prUrl: pr, summary: `fake ${status}` })}`;
 for (const chunk of ["Work ", "complete."]) {
   if (process.env.FAKE_STREAM_DELAY) await Bun.sleep(Number(process.env.FAKE_STREAM_DELAY));
   emit({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: chunk } } });
 }
 emit({ type: "assistant", message: { content: [{ type: "text", text }] } });
 emit({ type: "result", subtype: "success", is_error: false, result: text, total_cost_usd: 0.01, duration_ms: 100, session_id: sessionId });
+
+// Messages that arrive after the turn ended get a turn of their own.
+while (streamIn) {
+  const next = await nextMessage();
+  if (next === null) break;
+  take(next);
+  const reply = `Reply: ${next}\nCKANBAN_RESULT: ${JSON.stringify({ status: "done", prUrl: pr, summary: `reply ${next}` })}`;
+  emit({ type: "assistant", message: { content: [{ type: "text", text: reply }] } });
+  emit({ type: "result", subtype: "success", is_error: false, result: reply, session_id: sessionId });
+}

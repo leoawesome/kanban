@@ -46,10 +46,10 @@ test("missing binary resolves with error", async () => {
 });
 
 test("buildArgs", () => {
-  const first = buildArgs("hello", "u1", false, "sonnet");
-  expect(first).toEqual(["-p", "hello", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-    "--permission-mode", "bypassPermissions", "--session-id", "u1", "--model", "sonnet"]);
-  const again = buildArgs("hello", "u1", true, null);
+  const first = buildArgs("u1", false, "sonnet");
+  expect(first).toEqual(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages",
+    "--include-partial-messages", "--permission-mode", "bypassPermissions", "--session-id", "u1", "--model", "sonnet"]);
+  const again = buildArgs("u1", true, null);
   expect(again).toContain("--resume");
   expect(again).not.toContain("--session-id");
   expect(again).not.toContain("--model");
@@ -75,3 +75,49 @@ test("stop kills the whole process group (grandchildren too)", async () => {
     delete process.env.FAKE_CHILD_PID_FILE;
   }
 }, 10000);
+
+const STREAM = buildArgs("u1", false, null);
+
+test("messages sent mid-run reach Claude at its next step, in order", async () => {
+  process.env.FAKE_STEP_MS = "150";
+  try {
+    const h = startRun({ bin: FAKE, cwd: tempDir(), args: STREAM, input: "do it", onEvent: () => {} });
+    await Bun.sleep(100);
+    expect(h.send("also A")).toBe(true);
+    expect(h.send("also B")).toBe(true);
+    const r = await h.done;
+    expect(r.code).toBe(0);
+    const replays = r.events.filter((e) => e.type === "user" && e.isReplay).map((e) => e.message.content[0].text);
+    expect(replays).toEqual(["do it", "also A", "also B"]);
+    expect(r.events.filter((e) => e.type === "result").length).toBe(1);
+    expect(r.events.at(-1).result).toContain("Steered: also A | also B");
+    expect(h.send("too late")).toBe(false);
+  } finally {
+    delete process.env.FAKE_STEP_MS;
+  }
+});
+
+test("a message that lands after Claude's result gets its own turn before exit", async () => {
+  let h: ReturnType<typeof startRun>;
+  let sent = false;
+  h = startRun({
+    bin: FAKE, cwd: tempDir(), args: STREAM, input: "do it",
+    // Sent while the final message is being written, i.e. just before the result line.
+    onEvent: (e) => {
+      if (e.type === "assistant" && e.message.content[0]?.type === "text" && !sent) sent = h.send("one more thing");
+    },
+  });
+  const r = await h.done;
+  expect(sent).toBe(true);
+  expect(r.code).toBe(0);
+  const results = r.events.filter((e) => e.type === "result");
+  expect(results.length).toBe(2);
+  expect(results[1].result).toContain("Reply: one more thing");
+});
+
+test("run without follow-ups exits once Claude has answered", async () => {
+  const t0 = Date.now();
+  const r = await startRun({ bin: FAKE, cwd: tempDir(), args: STREAM, input: "hi", onEvent: () => {} }).done;
+  expect(r.code).toBe(0);
+  expect(Date.now() - t0).toBeLessThan(5000);
+});
