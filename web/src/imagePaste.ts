@@ -1,5 +1,6 @@
-import { useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { api } from "./api";
+import { insertBlock, mapIndex, swapHolder, type Edit } from "./imageText";
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 let seq = 0;
@@ -9,8 +10,8 @@ function imagesOf(list: DataTransfer | null): File[] {
 }
 
 /**
- * Paste or drop images into a markdown textarea: each one is uploaded and inserted at the cursor as
- * `![image](/api/attachments/…)`. Text paste is left alone.
+ * Paste or drop images into a markdown textarea: each one is uploaded and inserted at the cursor, on its
+ * own line, as `![image](/api/attachments/…)`. Text paste is left alone.
  */
 export function useImagePaste(setValue: Dispatch<SetStateAction<string>>) {
   const [error, setError] = useState<string | null>(null);
@@ -18,23 +19,37 @@ export function useImagePaste(setValue: Dispatch<SetStateAction<string>>) {
   const uploads = useRef(0);
   const [uploading, setUploading] = useState(false);
 
+  // Where the caret should go once the edited value is rendered (a controlled textarea loses it otherwise).
+  const caret = useRef<{ el: HTMLTextAreaElement; value: string; start: number; end: number } | null>(null);
+  useLayoutEffect(() => {
+    const c = caret.current;
+    caret.current = null;
+    if (c && c.el.value === c.value && document.activeElement === c.el) c.el.setSelectionRange(c.start, c.end);
+  });
+
+  // Apply an edit to the latest state. The textarea's selection refers to what it shows, which can lag
+  // behind state by a not-yet-rendered update, so it is mapped onto the state first.
+  const edit = (el: HTMLTextAreaElement, f: (v: string, start: number, end: number) => Edit) =>
+    setValue((v) => {
+      const shown = el.value;
+      const r = f(v, mapIndex(shown, v, el.selectionStart ?? shown.length), mapIndex(shown, v, el.selectionEnd ?? shown.length));
+      caret.current = { el, ...r };
+      return r.value;
+    });
+
   const insert = (el: HTMLTextAreaElement, files: File[]) => {
     setError(null);
-    const start = el.selectionStart ?? el.value.length;
-    const end = el.selectionEnd ?? start;
     const holders = files.map(() => `![uploading image ${++seq}…]()`);
-    const text = holders.join("\n");
-    setValue((v) => v.slice(0, start) + text + v.slice(end));
-    requestAnimationFrame(() => el.setSelectionRange(start + text.length, start + text.length));
+    edit(el, (v, start, end) => insertBlock(v, start, end, holders));
     files.forEach(async (file, i) => {
       uploads.current++;
       setUploading(true);
       try {
         if (!IMAGE_TYPES.includes(file.type)) throw new Error("only PNG, JPEG, GIF and WebP images are supported");
         const { url } = await api.uploadImage(file);
-        setValue((v) => v.replace(holders[i], `![image](${url})`));
+        edit(el, (v, start, end) => swapHolder(v, holders[i], `![image](${url})`, start, end));
       } catch (e: any) {
-        setValue((v) => v.replace(new RegExp(`\\n?${holders[i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), ""));
+        edit(el, (v, start, end) => swapHolder(v, holders[i], "", start, end));
         setError(`Image not added: ${e.message}`);
       } finally {
         if (--uploads.current === 0) setUploading(false);
