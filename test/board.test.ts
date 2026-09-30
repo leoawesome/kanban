@@ -515,3 +515,17 @@ test("prompts get image file paths; deleting the ticket deletes its images", asy
   expect(existsSync(join(store.attachmentsDir, inComment))).toBe(false);
   expect(existsSync(join(store.attachmentsDir, other))).toBe(true);
 });
+
+test("a finished run lands on top of Review; dragging to Ready keeps the drop slot", async () => {
+  await setup();
+  const old = await board.createTicket("p", { title: "old", body: "", status: "review" });
+  await board.createTicket("p", { title: "older", body: "", status: "review" });
+  const t = await board.createTicket("p", { title: "new", body: "", status: "ready" });
+  await board.whenIdle();
+  const review = store.listTickets("p").filter((x) => x.status === "review").map((x) => x.title);
+  expect(review).toEqual(["new", "older", "old"]);
+  await board.updateTicket("p", old.id, { order: 100 });
+  expect(store.getTicket("p", old.id)!.order).toBe(100);
+  await board.updateTicket("p", t.id, { status: "backlog", order: 7 });
+  expect(store.getTicket("p", t.id)!.order).toBe(7);
+});
