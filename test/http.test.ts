@@ -167,7 +167,7 @@ test("inbox lists tickets across boards where Claude needs the user, not Review"
   await fetch(`${base}/api/profiles`, json("POST", { name: "Inbox A", path: a }));
   await fetch(`${base}/api/profiles`, json("POST", { name: "Inbox B", path: b }));
   const failed = (await (await fetch(`${base}/api/profiles/inbox-a/tickets`, json("POST", { title: "broken", status: "backlog" }))).json()) as any;
-  store.updateTicket("inbox-a", failed.id, { outcome: "failed", error: "boom" });
+  store.updateTicket("inbox-a", failed.id, { status: "planning", outcome: "failed", error: "boom" });
   const review = (await (await fetch(`${base}/api/profiles/inbox-b/tickets`, json("POST", { title: "check me", status: "backlog" }))).json()) as any;
   store.updateTicket("inbox-b", review.id, { status: "review", outcome: "done" });
   const inbox = (await (await fetch(`${base}/api/inbox`)).json()) as any[];

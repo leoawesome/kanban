@@ -40,3 +40,15 @@ test("review column and Claude replies in planning", () => {
   expect(attentionFor(T({ status: "done" }), replied, false)).toBeNull();
   expect(attentionFor(T({}), S({ lastMessage: { role: "user", text: "hi", at: "" } }), false)).toBeNull();
 });
+
+test("done and backlog tickets never need the user", () => {
+  const prop = { title: "New", description: "D" };
+  for (const status of ["done", "backlog"] as const) {
+    expect(attentionFor(T({ status }), S({ openQuestions: 2 }), false)).toBeNull();
+    expect(attentionFor(T({ status, outcome: "failed" }), null, false)).toBeNull();
+    expect(attentionFor(T({ status, outcome: "blocked" }), null, false)).toBeNull();
+    expect(attentionFor(T({ status, outcome: "needs_input" }), null, false)).toBeNull();
+    expect(attentionFor(T({ status }), S({ pendingProposal: prop }), false)).toBeNull();
+  }
+  expect(attentionFor(T({ status: "review" }), S({ openQuestions: 2 }), false)!.kind).toBe("questions");
+});
