@@ -63,6 +63,10 @@ ckanban uninstall   # stop and remove the service (your boards in ~/.claude-kanb
 
 Logs: `~/.claude-kanban/daemon.log`. If `ckanban` isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc`.
 
+### claude.ai artifacts from board runs
+
+Board runs are headless (`claude -p`), where Claude Code turns the built-in Artifact tool off. Runs are told to use `ckanban artifact publish <file> [--url <artifact url>]` and `ckanban artifact read <url> --out <file>` instead. These start a short interactive `claude` in a hidden tmux session (in `~/.claude-kanban/artifact-helper`), which has the tool, and read the result from its transcript. Needs `tmux` (`brew install tmux`) and Claude Code signed in with `/login`. Published pages show on the ticket.
+
 ## Security
 
 Runs use `--permission-mode bypassPermissions`: Claude can execute any command in the ticket's folder without asking. Only put tickets on boards whose folders you trust Claude to modify.

@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { runArtifactJob } from "./server/artifact";
 import { LABEL, PLIST_PATH, plistXml } from "./server/launchd";
 import { startDaemon } from "./server/main";
 import { defaultRoot, Store } from "./server/store";
@@ -18,6 +19,10 @@ Usage:
   ckanban uninstall    Stop and remove the launchd daemon
   ckanban open         Open the board in your browser
   ckanban update       Update to the latest release and restart the daemon
+  ckanban artifact publish <file> [--url <artifact url>] [--title <title>]
+                       Publish a page to claude.ai (works from headless board runs)
+  ckanban artifact read <url> [--out <file>]
+                       Save an artifact's page source to a local file
   ckanban --version    Print the version
 `;
 
@@ -113,6 +118,46 @@ async function uninstall() {
   console.log("Uninstalled ckanban daemon");
 }
 
+function flag(args: string[], name: string): string | undefined {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+async function artifact(args: string[]) {
+  const [action, target] = args;
+  const opts = { bin: process.env.CKANBAN_CLAUDE_BIN, model: process.env.CKANBAN_ARTIFACT_MODEL };
+  if (action === "publish" && target) {
+    const file = resolve(target);
+    if (!existsSync(file)) {
+      console.error(`no such file: ${file}`);
+      process.exit(1);
+    }
+    const r = await runArtifactJob({ kind: "publish", file, url: flag(args, "--url"), title: flag(args, "--title") }, opts);
+    if (!r.ok) {
+      console.error(`artifact publish failed: ${r.error}`);
+      process.exit(1);
+    }
+    // Same wording as the Artifact tool, so the board lists the page on the ticket.
+    if (r.kind === "publish") console.log(r.text);
+    return;
+  }
+  if (action === "read" && target) {
+    const r = await runArtifactJob({ kind: "read", url: target }, opts);
+    if (!r.ok) {
+      console.error(`artifact read failed: ${r.error}`);
+      process.exit(1);
+    }
+    if (r.kind !== "read") return;
+    const out = resolve(flag(args, "--out") ?? join(tmpdir(), `artifact-${target.split("/").pop()}.html`));
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(out, r.html);
+    console.log(`Saved ${target} to ${out}`);
+    return;
+  }
+  console.error("usage: ckanban artifact publish <file> [--url <artifact url>] [--title <title>]\n       ckanban artifact read <url> [--out <file>]");
+  process.exit(1);
+}
+
 const cmd = process.argv[2];
 switch (cmd) {
   case "dev":
@@ -133,6 +178,9 @@ switch (cmd) {
     break;
   case "update":
     await update();
+    break;
+  case "artifact":
+    await artifact(process.argv.slice(3));
     break;
   case "--version":
   case "-v":

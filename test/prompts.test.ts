@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { extractFinalText, summarizeEvent } from "../src/server/activity";
-import { firstRunPrompt, planningCommand, planningPrompt, resumeCommand, resumePrompt } from "../src/server/prompts";
+import { chatPrompt, firstRunPrompt, planningCommand, planningPrompt, resumeCommand, resumePrompt } from "../src/server/prompts";
 import { parseResult } from "../src/server/result";
 import type { Ticket } from "../src/server/types";
 
@@ -85,4 +85,13 @@ test("auto mode keeps autonomous wording and still asks for a deliverable", () =
 
 test("parseResult accepts questions status", () => {
   expect(parseResult('CKANBAN_RESULT: {"status":"questions","prUrl":null,"summary":"4 questions"}')!.status).toBe("questions");
+});
+
+test("run prompts point Claude at the artifact helper", () => {
+  const t = { ...ticket, mode: "auto", runCount: 1 } as Ticket;
+  for (const p of [firstRunPrompt(t, { isGit: true, outputDir: "/o" }), resumePrompt(t, [], "/o"), chatPrompt(t, "hi", "act", "/o")]) {
+    expect(p).toContain("Artifact tool is not available");
+    expect(p).toContain("artifact publish <file.html> --url <url>");
+  }
+  expect(chatPrompt(t, "hi", "refine", "/o")).not.toContain("artifact publish");
 });
