@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, onReconnect, subscribe, type InboxItem, type McpState, type Profile, type Status, type Ticket } from "./api";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Status, type Ticket } from "./api";
 import { ConnectionsDialog } from "./ConnectionsDialog";
 import { Inbox } from "./Inbox";
 import { Board } from "./Board";
@@ -7,6 +7,10 @@ import { NewTicketDialog } from "./NewTicketDialog";
 import { ProfileDialog } from "./ProfileDialog";
 import { Select } from "./Select";
 import { TicketDrawer } from "./TicketDrawer";
+
+// xterm.js and highlight.js only load once the panel is opened.
+const Dock = lazy(() => import("./Dock"));
+const DOCK_OPEN = "ckanban.dock.open";
 
 const LAST_PROFILE = "ckanban.profile";
 
@@ -38,7 +42,14 @@ export function App() {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
   const [slug, setSlug] = useState<string | null>(parseHash().slug ?? readLast());
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [health, setHealth] = useState<{ claude: boolean; git: boolean; gh: boolean } | null>(null);
+  const [health, setHealth] = useState<Health | null>(null);
+  const [dockOpen, setDockOpen] = useState(() => {
+    try {
+      return localStorage.getItem(DOCK_OPEN) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [openId, setOpenId] = useState<string | null>(parseHash().ticket);
   // True when the open ticket was pushed onto browser history by us, so closing can go Back.
   const pushedOpen = useRef(false);
@@ -120,9 +131,20 @@ export function App() {
     document.title = needYou ? `(${needYou}) Claude Kanban` : "Claude Kanban";
   }, [needYou]);
 
-  // Shortcuts: N new ticket, / search. Esc is handled by the panel and dialogs.
+  useEffect(() => {
+    try {
+      localStorage.setItem(DOCK_OPEN, dockOpen ? "1" : "0");
+    } catch {}
+  }, [dockOpen]);
+
+  // Shortcuts: N new ticket, / search, Ctrl+` terminal & files. Esc is handled by the panel and dialogs.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "`") {
+        e.preventDefault();
+        setDockOpen((o) => !o);
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
       if (openId || profileDialog || newTicket || connections || document.querySelector(".overlay")) return;
       if (e.key === "n" || e.key === "N") {
@@ -240,6 +262,10 @@ export function App() {
             <button className="btn ghost" onClick={() => setProfileDialog("edit")}>
               Settings
             </button>
+            <button className={`btn ghost${dockOpen ? " on" : ""}`} onClick={() => setDockOpen((o) => !o)}
+              aria-pressed={dockOpen} title="Terminal and files for this folder (Ctrl+`)">
+              Terminal & files
+            </button>
           </>
         )}
         <div className="spacer" />
@@ -304,6 +330,12 @@ export function App() {
           {q && shownTickets.length === 0 && <div className="banner info">No tickets match "{query}". <button className="link-btn" onClick={() => setQuery("")}>Clear search</button></div>}
           <Board tickets={shownTickets} onOpen={(id) => openTicket(id)} onMove={move} onAdd={setNewTicket} />
         </>
+      )}
+
+      {dockOpen && profile && (
+        <Suspense fallback={null}>
+          <Dock profile={profile} pty={health?.pty ?? true} onClose={() => setDockOpen(false)} />
+        </Suspense>
       )}
 
       {connections && <ConnectionsDialog state={mcp} onClose={() => setConnections(false)} />}

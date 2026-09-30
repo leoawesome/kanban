@@ -412,23 +412,24 @@ export class McpManager {
       timedOut = true;
       p.kill();
     }, timeoutMs);
-    const read = async (stream: ReadableStream<Uint8Array>, cb?: (s: string) => void) => {
-      let out = "";
+    const out = { stdout: "", stderr: "" };
+    const read = async (stream: ReadableStream<Uint8Array>, key: "stdout" | "stderr", cb?: (s: string) => void) => {
       const dec = new TextDecoder();
       for await (const chunk of stream) {
-        out += dec.decode(chunk, { stream: true });
-        cb?.(out);
+        out[key] += dec.decode(chunk, { stream: true });
+        cb?.(out[key]);
       }
-      return out;
     };
-    const [stdout, stderr, code] = await Promise.all([
-      read(p.stdout as ReadableStream<Uint8Array>, onStdout),
-      read(p.stderr as ReadableStream<Uint8Array>),
-      p.exited,
+    const reads = Promise.all([
+      read(p.stdout as ReadableStream<Uint8Array>, "stdout", onStdout),
+      read(p.stderr as ReadableStream<Uint8Array>, "stderr"),
     ]);
+    const code = await p.exited;
     clearTimeout(timer);
-    if (timedOut) return { code: -1, stdout, stderr: `timed out after ${Math.round(timeoutMs / 1000)}s` };
-    return { code, stdout, stderr };
+    // Children of a killed CLI (e.g. MCP servers) can hold the pipes open: don't wait for them after a timeout.
+    if (timedOut) return { code: -1, stdout: out.stdout, stderr: `timed out after ${Math.round(timeoutMs / 1000)}s` };
+    await reads;
+    return { code, ...out };
   }
 }
 

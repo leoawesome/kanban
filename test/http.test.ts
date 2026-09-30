@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Board } from "../src/server/board";
 import { Bus } from "../src/server/events";
 import { createServer, isAllowedRequest } from "../src/server/http";
+import { ptySupported } from "../src/server/shell";
 import { Store } from "../src/server/store";
 import { tempDir } from "./helpers";
 
@@ -206,3 +207,68 @@ test("attachments: upload, serve, and reject bad input", async () => {
   });
   expect(r.status).toBe(403);
 });
+
+test("files API lists and reads inside the profile, rejects escapes", async () => {
+  const path = tempDir("ck-files-");
+  await Bun.write(join(path, "hello.ts"), "export {};\n");
+  const r0 = await fetch(`${base}/api/profiles`, json("POST", { name: "Files", path }));
+  const { slug } = (await r0.json()) as any;
+  let r = await fetch(`${base}/api/profiles/${slug}/files?path=`);
+  expect(((await r.json()) as any).entries).toEqual([{ name: "hello.ts", path: "hello.ts", type: "file" }]);
+  r = await fetch(`${base}/api/profiles/${slug}/file?path=hello.ts`);
+  expect(((await r.json()) as any).content).toBe("export {};\n");
+  r = await fetch(`${base}/api/profiles/${slug}/file?path=${encodeURIComponent("../etc/passwd")}`);
+  expect(r.status).toBe(400);
+  r = await fetch(`${base}/api/profiles/${slug}/files?path=${encodeURIComponent("/etc")}`);
+  expect(r.status).toBe(404);
+});
+
+const openSocket = (url: string, origin: string) =>
+  new Promise<{ ok: boolean; ws: WebSocket }>((resolve) => {
+    const ws = new WebSocket(url, { headers: { origin } } as any);
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => resolve({ ok: true, ws });
+    ws.onerror = () => resolve({ ok: false, ws });
+    ws.onclose = () => resolve({ ok: false, ws });
+  });
+
+test("shell socket rejects a foreign Origin", async () => {
+  const r0 = await fetch(`${base}/api/profiles`, json("POST", { name: "Sock", path: tempDir("ck-sock-") }));
+  const { slug } = (await r0.json()) as any;
+  const port = server.port;
+  const { ok } = await openSocket(`ws://localhost:${port}/api/profiles/${slug}/shell`, "http://evil.com");
+  expect(ok).toBe(false);
+  const r = await fetch(`${base}/api/profiles/${slug}/shell`, { headers: { host: `localhost:${port}` } });
+  expect(r.status).toBe(ptySupported() ? 403 : 501);
+});
+
+test.skipIf(!ptySupported())("shell socket runs commands on a PTY and replays output on reconnect", async () => {
+  const path = tempDir("ck-shell-");
+  const r0 = await fetch(`${base}/api/profiles`, json("POST", { name: "Shell", path }));
+  const { slug } = (await r0.json()) as any;
+  const port = server.port;
+  const url = `ws://localhost:${port}/api/profiles/${slug}/shell?cols=90&rows=20`;
+  const origin = `http://localhost:${port}`;
+  const read = (ws: WebSocket, want: string) =>
+    new Promise<string>((resolve) => {
+      let out = "";
+      const dec = new TextDecoder();
+      ws.onmessage = (e) => {
+        if (typeof e.data !== "string") out += dec.decode(e.data as ArrayBuffer);
+        if (out.includes(want)) resolve(out);
+      };
+    });
+  const a = await openSocket(url, origin);
+  expect(a.ok).toBe(true);
+  const got = read(a.ws, "MARK-90");
+  a.ws.send(JSON.stringify({ type: "input", data: "tty; pwd; echo MARK-$(tput cols)\n" }));
+  const out = await got;
+  expect(out).toContain("/dev/ttys");
+  expect(out).toContain(path);
+  a.ws.close();
+
+  const b = await openSocket(url, origin);
+  expect(await read(b.ws, "MARK-90")).toContain("MARK-90");
+  b.ws.send(JSON.stringify({ type: "input", data: "exit\n" }));
+  b.ws.close();
+}, 15_000);

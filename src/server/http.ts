@@ -8,8 +8,10 @@ import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
 import { attentionFor } from "./attention";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
+import { FileError, listDir, readFileForView } from "./files";
 import { McpError, McpManager } from "./mcp";
 import { SessionCache } from "./session";
+import { ptySupported, ShellManager, type Shell } from "./shell";
 import type { TerminalWatcher } from "./terminals";
 import { UpdateChecker } from "./update";
 import type { Store } from "./store";
@@ -27,7 +29,17 @@ export interface ServerDeps {
   sessions?: SessionCache;
   updates?: UpdateChecker;
   terminals?: TerminalWatcher;
+  shells?: ShellManager;
   mcp?: McpManager;
+}
+
+interface ShellSocket {
+  slug: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+  shell?: Shell;
+  unsubscribe?: () => void;
 }
 
 class HttpError extends Error {
@@ -50,6 +62,12 @@ export function isAllowedRequest(req: Request, port: number): boolean {
   return true;
 }
 
+/** WebSocket upgrades are GETs, so they need their own Origin check (browsers always send one). */
+export function isAllowedSocket(req: Request, port: number): boolean {
+  const origin = req.headers.get("origin");
+  return isAllowedRequest(req, port) && !!origin && LOCAL_HOSTS.some((h) => origin === `http://${h}:${port}`);
+}
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 }
@@ -66,6 +84,7 @@ export function createServer(deps: ServerDeps) {
   const { store, bus, board } = deps;
   const sessions = deps.sessions ?? new SessionCache();
   const updates = deps.updates ?? new UpdateChecker();
+  const shells = deps.shells ?? new ShellManager();
   const mcp = deps.mcp ?? new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
 
   const profileOr404 = (slug: string): Profile => {
@@ -92,7 +111,7 @@ export function createServer(deps: ServerDeps) {
     };
   };
 
-  async function api(req: Request, url: URL): Promise<Response> {
+  async function api(req: Request, url: URL): Promise<Response | undefined> {
     const parts = url.pathname.split("/").filter(Boolean).slice(1).map(decodeURIComponent);
     const m = req.method;
     const type = (req.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
@@ -133,7 +152,7 @@ export function createServer(deps: ServerDeps) {
       const [claude, git, gh] = await Promise.all([
         which(process.env.CKANBAN_CLAUDE_BIN ?? "claude"), which("git"), which("gh"),
       ]);
-      return json({ claude, git, gh });
+      return json({ claude, git, gh, pty: ptySupported() });
     }
 
     if (parts[0] === "events" && m === "GET") return sse(req);
@@ -230,6 +249,7 @@ export function createServer(deps: ServerDeps) {
         if (b.baseBranch !== undefined) next.baseBranch = String(b.baseBranch);
         if (b.maxParallel !== undefined) next.maxParallel = Math.max(1, Number(b.maxParallel) || 1);
         if (b.model !== undefined) next.model = b.model || null;
+        if (next.path !== profile.path) shells.kill(slug);
         store.saveProfile(next);
         bus.emit({ type: "profile.updated", slug, profile: next });
         board.dispatch(slug);
@@ -238,6 +258,7 @@ export function createServer(deps: ServerDeps) {
       if (m === "DELETE") {
         if (board.running(slug) > 0) throw new HttpError(409, "profile has running tickets");
         store.deleteProfile(slug);
+        shells.kill(slug);
         bus.emit({ type: "profile.updated", slug, profile: null });
         return new Response(null, { status: 204 });
       }
@@ -252,6 +273,28 @@ export function createServer(deps: ServerDeps) {
         live: liveSessionMatch(commands, s),
         ticket: linked.has(s.id) ? { id: linked.get(s.id)!.id, title: linked.get(s.id)!.title } : null,
       })));
+    }
+
+    // /profiles/:p/files?path= (one directory level) and /profiles/:p/file?path= (read-only contents)
+    if ((parts[2] === "files" || parts[2] === "file") && parts.length === 3 && m === "GET") {
+      const rel = url.searchParams.get("path") ?? "";
+      try {
+        if (parts[2] === "files") return json({ path: rel, entries: await listDir(profile.path, rel) });
+        return json(readFileForView(profile.path, rel));
+      } catch (e) {
+        if (e instanceof FileError) throw new HttpError(e.status, e.message);
+        throw e;
+      }
+    }
+
+    // /profiles/:p/shell — WebSocket to the profile's interactive shell
+    if (parts[2] === "shell" && parts.length === 3 && m === "GET") {
+      if (!ptySupported()) throw new HttpError(501, `terminal needs Bun 1.3.5 or newer (running ${Bun.version})`);
+      if (!isAllowedSocket(req, server.port ?? deps.port)) throw new HttpError(403, "forbidden");
+      const dim = (k: string, d: number) => Math.min(1000, Math.max(1, Number(url.searchParams.get(k)) || d));
+      const data: ShellSocket = { slug, cwd: profile.path, cols: dim("cols", 80), rows: dim("rows", 24) };
+      if (server.upgrade(req, { data })) return undefined;
+      throw new HttpError(400, "expected a WebSocket upgrade");
     }
 
     // /profiles/:p/tickets
@@ -428,7 +471,28 @@ export function createServer(deps: ServerDeps) {
     return new Response("UI not built. Run: bun run build:web", { status: 404 });
   }
 
-  const server = Bun.serve({
+  function attachShell(ws: import("bun").ServerWebSocket<ShellSocket>, restart = false) {
+    const d = ws.data;
+    d.unsubscribe?.();
+    let shell: Shell;
+    try {
+      shell = shells.get(d.slug, d.cwd, d.cols, d.rows, restart);
+    } catch (e) {
+      ws.send(JSON.stringify({ type: "error", message: (e as Error).message }));
+      return;
+    }
+    d.shell = shell;
+    const back = shell.scrollback();
+    if (back.length) ws.sendBinary(back);
+    if (shell.exited) ws.send(JSON.stringify({ type: "exit", code: shell.exitCode }));
+    else shell.resize(d.cols, d.rows);
+    d.unsubscribe = shell.subscribe((e) => {
+      if (e.type === "data") ws.sendBinary(e.data);
+      else ws.send(JSON.stringify({ type: "exit", code: e.code }));
+    });
+  }
+
+  const server = Bun.serve<ShellSocket>({
     hostname: "127.0.0.1",
     port: deps.port,
     idleTimeout: 0,
@@ -437,7 +501,7 @@ export function createServer(deps: ServerDeps) {
       const url = new URL(req.url);
       if (!url.pathname.startsWith("/api/")) return staticFile(url);
       try {
-        return await api(req, url);
+        return (await api(req, url)) as Response;
       } catch (e) {
         if (e instanceof HttpError) return json({ error: e.message }, e.status);
         if (e instanceof ConflictError) return json({ error: e.message }, 409);
@@ -446,6 +510,29 @@ export function createServer(deps: ServerDeps) {
         console.error(e);
         return json({ error: (e as Error).message ?? "internal error" }, 500);
       }
+    },
+    websocket: {
+      open: (ws) => attachShell(ws),
+      message(ws, raw) {
+        let msg: any;
+        try {
+          msg = JSON.parse(typeof raw === "string" ? raw : raw.toString());
+        } catch {
+          return;
+        }
+        const shell = ws.data.shell;
+        if (msg.type === "input" && typeof msg.data === "string") shell?.write(msg.data);
+        else if (msg.type === "resize") {
+          ws.data.cols = Math.min(1000, Math.max(1, Number(msg.cols) || 80));
+          ws.data.rows = Math.min(1000, Math.max(1, Number(msg.rows) || 24));
+          shell?.resize(ws.data.cols, ws.data.rows);
+        } else if (msg.type === "restart") {
+          // Another tab may already have restarted it: then just join the new shell.
+          ws.send(JSON.stringify({ type: "reset" }));
+          attachShell(ws, shells.current(ws.data.slug) === shell);
+        }
+      },
+      close: (ws) => ws.data.unsubscribe?.(),
     },
   });
   return server;

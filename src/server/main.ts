@@ -6,6 +6,7 @@ import { createServer } from "./http";
 import { McpManager } from "./mcp";
 import { startPoller } from "./prpoller";
 import { SessionCache, startSessionWatcher } from "./session";
+import { ShellManager } from "./shell";
 import { TerminalWatcher } from "./terminals";
 import { defaultRoot, Store } from "./store";
 import { VERSION } from "./version";
@@ -22,8 +23,9 @@ export async function startDaemon(): Promise<void> {
   if (!embedded && !existsSync(join(webDir, "index.html"))) console.warn("web UI not built yet: run `bun run build:web`");
   const sessions = new SessionCache();
   const terminals = new TerminalWatcher(store, bus, sessions);
+  const shells = new ShellManager();
   const mcp = new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude", seenFile: join(store.root, "mcp-seen.json") });
-  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, mcp, assets: WEB_ASSETS });
+  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, mcp, assets: WEB_ASSETS });
   console.log(`ckanban v${VERSION} listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();
   const stopPoller = startPoller(board, store, config.prPollMinutes);
@@ -36,6 +38,7 @@ export async function startDaemon(): Promise<void> {
     stopPoller();
     stopWatcher();
     stopTerminals();
+    shells.killAll();
     stopMcp();
     await board.shutdown();
     server.stop(true);

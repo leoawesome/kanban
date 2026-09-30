@@ -18,6 +18,32 @@ export function startWorkTarget(t: Ticket): "planning" | "ready" {
   return t.status === "backlog" && untouched ? "planning" : "ready";
 }
 
+export interface Health {
+  claude: boolean;
+  git: boolean;
+  gh: boolean;
+  /** Server can run the embedded terminal (Bun ≥ 1.3.5). */
+  pty?: boolean;
+}
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  type: "dir" | "file";
+}
+
+export interface FileContent {
+  path: string;
+  size: number;
+  content: string | null;
+  binary: boolean;
+  tooLarge: boolean;
+}
+
+/** WebSocket URL of the profile's interactive shell. */
+export const shellSocketUrl = (slug: string, cols: number, rows: number) =>
+  `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/profiles/${encodeURIComponent(slug)}/shell?cols=${cols}&rows=${rows}`;
+
 export type AttentionKind = "failed" | "blocked" | "questions" | "proposal" | "review" | "reply";
 
 export interface Profile {
@@ -208,13 +234,17 @@ export const api = {
   claudeDefaults: () => req<{ model: string | null }>("GET", "/api/claude/defaults"),
   pickFolder: () => req<{ path: string | null }>("POST", "/api/pick-folder"),
   version: () => req<{ version: string; latest: string | null; updateAvailable: boolean; url: string | null }>("GET", "/api/version"),
-  health: () => req<{ claude: boolean; git: boolean; gh: boolean }>("GET", "/api/health"),
+  health: () => req<Health>("GET", "/api/health"),
   profiles: () => req<Profile[]>("GET", "/api/profiles"),
   createProfile: (p: { name: string; path: string; maxParallel?: number; model?: string; baseBranch?: string }) =>
     req<Profile>("POST", "/api/profiles", p),
   updateProfile: (slug: string, p: Partial<Profile>) => req<Profile>("PATCH", `/api/profiles/${slug}`, p),
   deleteProfile: (slug: string) => req<void>("DELETE", `/api/profiles/${slug}`),
   tickets: (slug: string) => req<Ticket[]>("GET", t(slug)),
+  files: (slug: string, path: string) =>
+    req<{ path: string; entries: FileEntry[] }>("GET", `/api/profiles/${encodeURIComponent(slug)}/files?path=${encodeURIComponent(path)}`),
+  file: (slug: string, path: string) =>
+    req<FileContent>("GET", `/api/profiles/${encodeURIComponent(slug)}/file?path=${encodeURIComponent(path)}`),
   ticket: (slug: string, id: string) => req<Ticket>("GET", t(slug, id)),
   sessions: (slug: string) => req<ClaudeSession[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/sessions`),
   linkSession: (slug: string, id: string, sessionId: string | null) =>

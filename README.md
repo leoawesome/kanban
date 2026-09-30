@@ -13,9 +13,10 @@ Local kanban board for [Claude Code](https://claude.com/claude-code). Drop a tic
   - **Ready: do the work** on its own (queued, up to max parallel).
   - **Review / Done: follow-up.** Your message is acted on straight away; the card shows In Progress, then returns to Review.
 - **Terminal handoff**: *Copy resume command* (`cd <dir> && claude --resume <id>`) to continue any ticket's session yourself.
+- **Terminal & files**: *Terminal & files* in the top bar (or ``Ctrl+` ``) opens a bottom panel for the board's folder: a real interactive shell (vim, `claude`, colours all work) and a read-only file tree with syntax highlighting (gitignored files hidden). The shell keeps running when you close the panel or reload, and picks up where you left off.
 - **Live replies**: Claude's text appears in the chat while it is being written.
 - **"Need you" inbox**: the top bar counts tickets on every board where Claude is waiting on you (questions, proposal, reply, blocked, failed); the browser tab shows the count too. Click to jump to one.
-- **Links and shortcuts**: an open ticket is in the URL (`#/<board>/<ticket>`), so refresh keeps it and Back closes it. `N` new ticket, `/` search this board, `Esc` close.
+- **Links and shortcuts**: an open ticket is in the URL (`#/<board>/<ticket>`), so refresh keeps it and Back closes it. `N` new ticket, `/` search this board, ``Ctrl+` `` terminal & files, `Esc` close.
 - **Connections**: the top bar's *Connections* opens your Claude Code MCP servers, like `/mcp` (as `claude mcp list` sees them from your home folder, re-checked every 10 minutes). Log in again when an OAuth server expires (the browser opens; the status updates by itself), log out, add or remove user-scope servers. The badge counts servers that failed or used to work and now need you to log in.
 - **PR tracking**: Review cards with a PR are checked every 5 minutes via `gh`; merged → Done (worktree removed).
 
@@ -86,7 +87,7 @@ Env overrides: `CKANBAN_HOME`, `CKANBAN_PORT`, `CKANBAN_CLAUDE_BIN`.
 
 ## Development
 
-Requires [Bun](https://bun.sh) ≥ 1.1.
+Requires [Bun](https://bun.sh) ≥ 1.3.5 (the embedded terminal uses Bun's built-in PTY; on older Bun everything else works and the terminal says to upgrade).
 
 ```bash
 bun install && (cd web && bun install)
