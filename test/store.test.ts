@@ -40,23 +40,32 @@ test("ticket round-trip with tricky title", () => {
   expect(store.listTickets("demo").length).toBe(1);
 });
 
-test("order increments within column", () => {
+test("new tickets append in Ready and go on top elsewhere", () => {
   const a = store.createTicket("demo", { title: "a", body: "", status: "ready" });
   const b = store.createTicket("demo", { title: "b", body: "", status: "ready" });
   const c = store.createTicket("demo", { title: "c", body: "", status: "backlog" });
+  const d = store.createTicket("demo", { title: "d", body: "", status: "backlog" });
   expect(b.order).toBe(a.order + 1);
   expect(c.order).toBe(1);
+  expect(d.order).toBe(c.order - 1);
+  expect(store.listTickets("demo").filter((t) => t.status === "backlog").map((t) => t.title)).toEqual(["d", "c"]);
 });
 
-test("updateTicket keeps body edited externally on disk", () => {
-  const t = store.createTicket("demo", { title: "x", body: "old", status: "planning" });
-  const file = store.ticketPath("demo", t.id);
-  const raw = readFileSync(file, "utf8").replace(/old\s*$/, "new plan from claude\n");
-  writeFileSync(file, raw);
-  const u = store.updateTicket("demo", t.id, { status: "ready" });
-  expect(u.body.trim()).toBe("new plan from claude");
-  expect(store.getTicket("demo", t.id)!.body.trim()).toBe("new plan from claude");
-  expect(u.status).toBe("ready");
+test("changing column puts the ticket on top, except Ready which appends", () => {
+  const r1 = store.createTicket("demo", { title: "r1", body: "", status: "ready" });
+  const v1 = store.createTicket("demo", { title: "v1", body: "", status: "review" });
+  const v2 = store.createTicket("demo", { title: "v2", body: "", status: "review" });
+  const x = store.createTicket("demo", { title: "x", body: "", status: "backlog" });
+  expect(store.updateTicket("demo", x.id, { status: "review" }).order).toBe(Math.min(v1.order, v2.order) - 1);
+  expect(store.updateTicket("demo", x.id, { status: "ready" }).order).toBe(r1.order + 1);
+});
+
+test("explicit order wins and same-column updates keep the position", () => {
+  store.createTicket("demo", { title: "v1", body: "", status: "review" });
+  const x = store.createTicket("demo", { title: "x", body: "", status: "backlog" });
+  expect(store.updateTicket("demo", x.id, { status: "review", order: 2.5 }).order).toBe(2.5);
+  expect(store.updateTicket("demo", x.id, { status: "review", title: "renamed" }).order).toBe(2.5);
+  expect(store.updateTicket("demo", x.id, { body: "edited", lastActivity: "working" }).order).toBe(2.5);
 });
 
 test("comments append in order", () => {

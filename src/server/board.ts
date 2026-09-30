@@ -272,7 +272,7 @@ export class Board {
     // A Review/Done message that only asked for planning: show the ticket where it really is.
     if (run.chat?.mode === "act" && !run.targetStatus && result?.status !== "blocked" && MOVE_TO_PLANNING_RE.test(finalText)) {
       this.patch(slug, id, {
-        ...base, status: "planning", order: this.store.nextOrder(slug, "planning"),
+        ...base, status: "planning",
         outcome: null, error: null, refineStarted: true, lastActivity: null,
       });
       return;
@@ -372,10 +372,8 @@ export class Board {
       await active.promise;
       current = this.store.getTicket(slug, id)!;
     }
-    if (status && status !== current.status) {
-      clean.status = status;
-      if (patch.order === undefined) clean.order = this.store.nextOrder(slug, status);
-    }
+    // The store places the ticket in its new column unless the patch carries a drop position.
+    if (status && status !== current.status) clean.status = status;
     let t = this.patch(slug, id, clean);
 
     if (clean.status === "done") t = await this.cleanupWorktree(slug, t);
@@ -433,8 +431,7 @@ export class Board {
     return this.patch(slug, id, sessionId === null
       ? { sessionId: null, workdir: null }
       // Linked work already exists and the next step is the user's: land in Review ("Your turn").
-      : { sessionId, workdir: profile.path, worktree: null, runCount: 0, lastRunAt: new Date().toISOString(), status: "review",
-        order: t.status === "review" ? t.order : this.store.nextOrder(slug, "review") });
+      : { sessionId, workdir: profile.path, worktree: null, runCount: 0, lastRunAt: new Date().toISOString(), status: "review" });
   }
 
   addComment(slug: string, id: string, text: string) {

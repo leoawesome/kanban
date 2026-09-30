@@ -138,10 +138,20 @@ export class Store {
     return orders.length ? Math.max(...orders) + 1 : 1;
   }
 
+  topOrder(slug: string, status: Status): number {
+    const orders = this.listTickets(slug).filter((t) => t.status === status).map((t) => t.order);
+    return orders.length ? Math.min(...orders) - 1 : 1;
+  }
+
+  /** Where a ticket lands when it enters a column: on top, except Ready, which is a FIFO run queue. */
+  entryOrder(slug: string, status: Status): number {
+    return status === "ready" ? this.nextOrder(slug, status) : this.topOrder(slug, status);
+  }
+
   createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode }): Ticket {
     const at = nowIso();
     const t: Ticket = {
-      id: newTicketId(), title: input.title, status: input.status, mode: input.mode ?? "auto", order: this.nextOrder(slug, input.status),
+      id: newTicketId(), title: input.title, status: input.status, mode: input.mode ?? "auto", order: this.entryOrder(slug, input.status),
       sessionId: null, worktree: null, branch: null, prUrl: null, outcome: null, lastActivity: null,
       lastRunAt: null, runCount: 0, error: null, createdAt: at, updatedAt: at, body: input.body,
     };
@@ -152,6 +162,10 @@ export class Store {
   updateTicket(slug: string, id: string, patch: Partial<Ticket>): Ticket {
     const current = parseTicket(readFileSync(this.ticketPath(slug, id), "utf8"));
     const next: Ticket = { ...current, ...patch, id, updatedAt: nowIso() };
+    // Changing column without an explicit position (drag drop) places the ticket by entryOrder().
+    if (patch.status !== undefined && patch.status !== current.status && patch.order === undefined) {
+      next.order = this.entryOrder(slug, patch.status);
+    }
     if (patch.body === undefined) next.body = current.body;
     atomicWrite(this.ticketPath(slug, id), serializeTicket(next));
     return next;

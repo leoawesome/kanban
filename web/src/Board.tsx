@@ -102,8 +102,6 @@ export function Board({ tickets, onOpen, onMove, onAdd }: Props) {
     const m = new Map<Status, Ticket[]>(COLUMNS.map((c) => [c.id, []]));
     for (const t of tickets) m.get(t.status)?.push(t);
     for (const list of m.values()) list.sort((a, b) => a.order - b.order);
-    // Done reads best newest-first.
-    m.get("done")?.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return m;
   }, [tickets]);
 
