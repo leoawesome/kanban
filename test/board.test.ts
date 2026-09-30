@@ -152,6 +152,50 @@ test("stop moves to review with stopped outcome", async () => {
   expect(got.outcome).toBe("stopped");
 }, 15000);
 
+test("stop during worktree setup shows Stopping… and never spawns claude", async () => {
+  await setup();
+  const seen: (string | null)[] = [];
+  bus.on((e) => { if (e.type === "ticket.updated") seen.push(e.ticket.lastActivity); });
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  expect(board.stop("p", t.id)).toBe(true);
+  expect(store.getTicket("p", t.id)!.lastActivity).toBe("Stopping…");
+  await board.whenIdle();
+  expect(readArgs().length).toBe(0);
+  expect(seen).toContain("Stopping…");
+  const got = store.getTicket("p", t.id)!;
+  expect(got.status).toBe("review");
+  expect(got.outcome).toBe("stopped");
+  expect(got.lastActivity).toBeNull();
+});
+
+test("stop keeps Stopping… on the card while the process shuts down", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await Bun.sleep(500);
+  board.stop("p", t.id);
+  expect(store.getTicket("p", t.id)!.lastActivity).toBe("Stopping…");
+  await board.whenIdle();
+  expect(store.getTicket("p", t.id)!.lastActivity).toBeNull();
+}, 15000);
+
+test("stop on an in_progress ticket with no live run clears it", async () => {
+  await setup();
+  const t = store.createTicket("p", { title: "x", body: "", status: "in_progress" });
+  expect(board.stop("p", t.id)).toBe(true);
+  const got = store.getTicket("p", t.id)!;
+  expect(got.status).toBe("review");
+  expect(got.outcome).toBe("stopped");
+  expect(store.listComments("p", t.id).some((c) => c.text === "Run stopped by user.")).toBe(true);
+});
+
+test("stop with nothing running is a no-op", async () => {
+  await setup();
+  const t = store.createTicket("p", { title: "x", body: "", status: "backlog" });
+  expect(board.stop("p", t.id)).toBe(false);
+  expect(store.getTicket("p", t.id)!.status).toBe("backlog");
+});
+
 test("recover moves in_progress back to ready and runs", async () => {
   await setup();
   const t = store.createTicket("p", { title: "x", body: "", status: "in_progress" });

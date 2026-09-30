@@ -38,6 +38,23 @@ const REFINE = (s: Ticket["status"]) => s === "backlog" || s === "planning";
  * The ticket's single conversation with Claude, like the terminal: everything in the session
  * (terminal chat, board runs, messages typed here) in one timeline, plus a box to send more.
  */
+/** Stop Claude with instant feedback: "Stopping…" from the click until the run is gone. */
+export function useStop(slug: string, ticket: Ticket, working: boolean, onError: (m: string) => void) {
+  const [clicked, setClicked] = useState(false);
+  useEffect(() => {
+    if (!working) setClicked(false);
+  }, [working]);
+  const stopping = working && (clicked || ticket.lastActivity === "Stopping…");
+  const stop = () => {
+    setClicked(true);
+    api.stop(slug, ticket.id).catch((e) => {
+      setClicked(false);
+      onError(e.message);
+    });
+  };
+  return { stopping, stop };
+}
+
 export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; onError: (m: string) => void }) {
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -51,6 +68,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const keepOffset = useRef<number | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const running = !!ticket.running;
+  const { stopping, stop } = useStop(slug, ticket, running, onError);
   const refine = REFINE(ticket.status);
 
   const loadTail = useCallback(async () => {
@@ -263,7 +281,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
             {refine ? "Refine mode: Claude won't change any files." : "Claude will act on your message, like in the terminal."} Enter to send, Shift+Enter for a new line.
           </span>
           {running
-            ? <button className="btn danger small" onClick={() => api.stop(slug, ticket.id).catch((e) => onError(e.message))}>Stop</button>
+            ? <button className="btn danger small" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop"}</button>
             : <button className="btn primary small" disabled={!draft.trim() || images.uploading} onClick={() => send(draft)}>{images.uploading ? "Uploading…" : "Send"}</button>}
         </div>
       </div>

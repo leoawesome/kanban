@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-export function ConfirmDialog({ title, children, confirmLabel, onConfirm, onCancel }: {
+export function ConfirmDialog({ title, children, confirmLabel, busyLabel = "Deleting…", tone = "danger", onConfirm, onCancel }: {
   title: string;
   children: ReactNode;
   confirmLabel: string;
+  busyLabel?: string;
+  tone?: "danger" | "primary";
   onConfirm: () => Promise<void> | void;
   onCancel: () => void;
 }) {
@@ -43,7 +45,7 @@ export function ConfirmDialog({ title, children, confirmLabel, onConfirm, onCanc
         </div>
         <div className="form-actions confirm-actions">
           <button ref={cancelRef} className="btn ghost" onClick={onCancel}>Cancel</button>
-          <button className="btn danger" onClick={confirm} disabled={busy}>{busy ? "Deleting…" : confirmLabel}</button>
+          <button className={`btn ${tone}`} onClick={confirm} disabled={busy}>{busy ? busyLabel : confirmLabel}</button>
         </div>
       </div>
     </div>
