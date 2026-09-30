@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, onReconnect, subscribe, type Health, type InboxItem, type Profile, type Status, type Ticket } from "./api";
+import { api, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Status, type Ticket } from "./api";
+import { ConnectionsDialog } from "./ConnectionsDialog";
 import { Inbox } from "./Inbox";
 import { Board } from "./Board";
 import { NewTicketDialog } from "./NewTicketDialog";
@@ -59,6 +60,8 @@ export function App() {
   const [profileDialog, setProfileDialog] = useState<"new" | "edit" | null>(null);
   const [newTicket, setNewTicket] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mcp, setMcp] = useState<McpState | null>(null);
+  const [connections, setConnections] = useState(false);
   const [version, setVersion] = useState<{ version: string; latest: string | null; updateAvailable: boolean } | null>(null);
 
   const loadProfiles = useCallback(async () => {
@@ -81,6 +84,7 @@ export function App() {
     loadInbox();
     api.health().then(setHealth).catch(() => {});
     api.version().then(setVersion).catch(() => {});
+    api.mcp().then(setMcp).catch(() => {});
   }, [loadProfiles, loadInbox]);
 
   // Browser Back/Forward and pasted links drive the open board and ticket.
@@ -118,6 +122,7 @@ export function App() {
   useEffect(() => onReconnect(() => {
     loadProfiles().catch(() => {});
     loadInbox();
+    api.mcp().then(setMcp).catch(() => {});
     if (slug) api.tickets(slug).then(setTickets).catch(() => {});
   }), [slug, loadProfiles, loadInbox]);
 
@@ -141,7 +146,7 @@ export function App() {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
-      if (openId || profileDialog || newTicket || document.querySelector(".overlay")) return;
+      if (openId || profileDialog || newTicket || connections || document.querySelector(".overlay")) return;
       if (e.key === "n" || e.key === "N") {
         e.preventDefault();
         if (slug) setNewTicket("backlog");
@@ -152,7 +157,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openId, profileDialog, newTicket, slug]);
+  }, [openId, profileDialog, newTicket, connections, slug]);
 
   useEffect(() => {
     if (!slug) return;
@@ -166,6 +171,10 @@ export function App() {
   useEffect(
     () =>
       subscribe((e) => {
+        if (e.type === "mcp.updated") {
+          setMcp(e.state);
+          return;
+        }
         if (e.type === "profile.updated") {
           loadProfiles().catch(() => {});
           refreshInboxSoon();
@@ -212,6 +221,7 @@ export function App() {
     }
   };
 
+  const mcpAttention = mcp?.servers.filter((s) => s.attention).length ?? 0;
   const missing = health ? (["claude", "git", "gh"] as const).filter((k) => !health[k]) : [];
   const running = tickets.filter((t) => t.status === "in_progress").length;
 
@@ -271,6 +281,11 @@ export function App() {
           if (i.profile !== slug) setSlug(i.profile);
           openTicket(i.id, i.profile);
         }} />
+        <button className="btn ghost connections-btn" onClick={() => setConnections(true)}
+          title={mcpAttention ? `${mcpAttention} MCP server${mcpAttention === 1 ? "" : "s"} failed or need you to log in again` : "Claude Code MCP servers"}>
+          Connections
+          {mcpAttention > 0 && <span className="need-chip">{mcpAttention}</span>}
+        </button>
         {version && version.version !== "dev" && <span className="muted small">v{version.version}</span>}
         {profile && (
           <button className="btn primary" onClick={() => setNewTicket("backlog")}>
@@ -323,6 +338,7 @@ export function App() {
         </Suspense>
       )}
 
+      {connections && <ConnectionsDialog state={mcp} onClose={() => setConnections(false)} />}
       {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} onClose={closeTicket} />}
       {profileDialog && (
         <ProfileDialog

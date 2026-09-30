@@ -8,7 +8,7 @@ Local kanban board for [Claude Code](https://claude.com/claude-code). Drop a tic
    Git repos get a worktree + branch per ticket (`ck/<id>-<title>`); plain folders are worked in place.
 - **Auto pickup**: moving a card to Ready starts a run immediately, up to `maxParallel` per profile. Extra cards wait their turn.
 - **Live activity**: the card shows Claude's latest action; the ticket drawer shows the full transcript (tool calls, results, cost).
-- **One chat per ticket, like the terminal**: the ticket's Chat tab shows the whole Claude session (terminal messages and board runs) and has a message box. Send a message and Claude replies right away in the same session.
+- **One chat per ticket, like the terminal**: the ticket's Chat tab shows the whole Claude session (terminal messages and board runs) and has a message box. Send a message and Claude replies right away in the same session. Send one while Claude is working to steer it: like typing in interactive Claude Code, the current step finishes and Claude reads your message at its next step, without a restart.
   - **Backlog / Planning: refine.** Claude interviews you with a clickable question form, then proposes a clear title and description. Click *Apply to ticket*. Claude changes no files here.
   - **Ready: do the work** on its own (queued, up to max parallel).
   - **Review / Done: follow-up.** Your message is acted on straight away; the card shows In Progress, then returns to Review.
@@ -17,6 +17,7 @@ Local kanban board for [Claude Code](https://claude.com/claude-code). Drop a tic
 - **Live replies**: Claude's text appears in the chat while it is being written.
 - **"Need you" inbox**: the top bar counts tickets on every board where Claude is waiting on you (questions, proposal, reply, blocked, failed); the browser tab shows the count too. Click to jump to one.
 - **Links and shortcuts**: an open ticket is in the URL (`#/<board>/<ticket>`), so refresh keeps it and Back closes it. `N` new ticket, `/` search this board, ``Ctrl+` `` terminal & files, `Esc` close.
+- **Connections**: the top bar's *Connections* opens your Claude Code MCP servers, like `/mcp` (as `claude mcp list` sees them from your home folder, re-checked every 10 minutes). Log in again when an OAuth server expires (the browser opens; the status updates by itself), log out, add or remove user-scope servers. The badge counts servers that failed or used to work and now need you to log in.
 - **PR tracking**: Review cards with a PR are checked every 5 minutes via `gh`; merged → Done (worktree removed).
 
 Columns: Backlog → Planning → Ready → In Progress → Review → Done.
@@ -75,6 +76,7 @@ The server binds to `127.0.0.1` only and rejects requests with a non-localhost `
 ```
 ~/.claude-kanban/
   config.json                    { "port": 7777, "prPollMinutes": 5 }
+  mcp-seen.json                  MCP servers seen connected (so "needs auth" there counts as expired)
   profiles/<slug>/profile.json
   profiles/<slug>/tickets/<id>/ticket.md        YAML frontmatter + description
   profiles/<slug>/tickets/<id>/comments.jsonl

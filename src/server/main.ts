@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Board } from "./board";
 import { Bus } from "./events";
 import { createServer } from "./http";
+import { McpManager } from "./mcp";
 import { startPoller } from "./prpoller";
 import { SessionCache, startSessionWatcher } from "./session";
 import { ShellManager } from "./shell";
@@ -23,12 +24,14 @@ export async function startDaemon(): Promise<void> {
   const sessions = new SessionCache();
   const terminals = new TerminalWatcher(store, bus, sessions);
   const shells = new ShellManager();
-  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, assets: WEB_ASSETS });
+  const mcp = new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude", seenFile: join(store.root, "mcp-seen.json") });
+  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, mcp, assets: WEB_ASSETS });
   console.log(`ckanban v${VERSION} listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();
   const stopPoller = startPoller(board, store, config.prPollMinutes);
   const stopWatcher = startSessionWatcher(store, bus, sessions);
   const stopTerminals = terminals.start();
+  const stopMcp = mcp.start();
 
   const shutdown = async () => {
     console.log("ckanban shutting down");
@@ -36,6 +39,7 @@ export async function startDaemon(): Promise<void> {
     stopWatcher();
     stopTerminals();
     shells.killAll();
+    stopMcp();
     await board.shutdown();
     server.stop(true);
     process.exit(0);

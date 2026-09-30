@@ -25,7 +25,7 @@ async function setup(opts: { git?: boolean; maxParallel?: number } = {}): Promis
   return p;
 }
 
-function readArgs(): { args: string[]; cwd: string }[] {
+function readArgs(): { args: string[]; cwd: string; prompt: string }[] {
   if (!existsSync(argsFile)) return [];
   return readFileSync(argsFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
 }
@@ -68,7 +68,7 @@ test("ready ticket runs to review with PR and AI comment", async () => {
   expect(call.args).toContain("--session-id");
   expect(call.args).toContain(got.sessionId!);
   expect(call.cwd).toBe(got.worktree!);
-  expect(store.readActivity("p", t.id).length).toBe(4);
+  expect(store.readActivity("p", t.id).length).toBe(5);
 });
 
 test("maxParallel limits concurrent runs", async () => {
@@ -120,7 +120,7 @@ test("rework resumes session with new user comments", async () => {
   const calls = readArgs();
   expect(calls.length).toBe(2);
   expect(calls[1].args).toContain("--resume");
-  const prompt = calls[1].args[calls[1].args.indexOf("-p") + 1];
+  const prompt = calls[1].prompt;
   expect(prompt).toContain("please use blue");
   expect(calls[1].cwd).toBe(calls[0].cwd);
   expect(store.getTicket("p", t.id)!.runCount).toBe(2);
@@ -214,7 +214,7 @@ test("non-git profile runs in profile path without worktree", async () => {
   const got = store.getTicket("p", t.id)!;
   expect(got.worktree).toBeNull();
   expect(readArgs()[0].cwd).toBe(p.path);
-  const prompt = readArgs()[0].args[1];
+  const prompt = readArgs()[0].prompt;
   expect(prompt).toContain("NOT a git repository");
 });
 
@@ -346,7 +346,7 @@ test("interview ticket asking questions lands in review as needs_input", async (
   expect(got.status).toBe("review");
   expect(got.outcome).toBe("needs_input");
   expect(got.interviewed).toBe(true);
-  expect(readArgs()[0].args[1]).toContain("interview first");
+  expect(readArgs()[0].prompt).toContain("interview first");
   const c = store.listComments("p", t.id).at(-1)!;
   expect(c.text).toContain("Work complete.");
   expect(c.text).not.toContain("CKANBAN_RESULT");
@@ -380,7 +380,7 @@ test("chat in Planning refines read-only and keeps the card in place", async () 
   expect(got.sessionStarted).toBe(true);
   const call = readArgs()[0];
   expect(call.args[call.args.indexOf("--permission-mode") + 1]).toBe("plan");
-  const prompt = call.args[1];
+  const prompt = call.prompt;
   expect(prompt.startsWith("Help me shape this idea")).toBe(true);
   expect(prompt).toContain("<ckanban-context");
   expect(prompt).toContain("<ckanban-ticket>");
@@ -403,15 +403,71 @@ test("chat in Review acts right away: In Progress then back to Review", async ()
   const call = readArgs()[1];
   expect(call.args).toContain("--resume");
   expect(call.args[call.args.indexOf("--permission-mode") + 1]).toBe("bypassPermissions");
-  expect(call.args[1].startsWith("Please also add tests")).toBe(true);
+  expect(call.prompt.startsWith("Please also add tests")).toBe(true);
 });
 
-test("chat is rejected while Claude is already working", async () => {
+const replays = (id: string) =>
+  store.readActivity("p", id).map((a: any) => a.event ?? a).filter((e: any) => e.type === "user" && e.isReplay)
+    .map((e: any) => e.message.content[0].text as string);
+
+test("chat while Claude works steers the run instead of restarting it", async () => {
+  await setup();
+  process.env.FAKE_STEP_MS = "200";
+  try {
+    const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+    await Bun.sleep(400);
+    expect(board.isRunning("p", t.id)).toBe(true);
+    await board.chat("p", t.id, "also add a test for X");
+    await board.chat("p", t.id, "and Y");
+    await board.whenIdle();
+    expect(readArgs().length).toBe(1);
+    const steered = replays(t.id).slice(1);
+    expect(steered.map((m) => m.split("\n")[0])).toEqual(["also add a test for X", "and Y"]);
+    expect(steered[0]).toContain("<ckanban-context");
+    const got = store.getTicket("p", t.id)!;
+    expect(got.status).toBe("review");
+    expect(got.outcome).toBe("done");
+  } finally {
+    delete process.env.FAKE_STEP_MS;
+  }
+}, 15000);
+
+test("chat sent while the run is still starting is delivered once claude is up", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  // Worktree setup is still running: there is no claude process yet.
+  await board.chat("p", t.id, "early note");
+  await board.whenIdle();
+  expect(readArgs().length).toBe(1);
+  expect(replays(t.id).slice(1).map((m) => m.split("\n")[0])).toEqual(["early note"]);
+});
+
+test("chat that arrives as the run finishes gets a follow-up reply", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  let sent = false;
+  bus.on((e) => {
+    if (e.type === "activity" && e.id === t.id && (e.event as any)?.type === "result" && !sent) {
+      sent = true;
+      board.chat("p", t.id, "late thought");
+    }
+  });
+  await board.whenIdle();
+  const calls = readArgs();
+  expect(calls.length).toBe(2);
+  expect(calls[1].args).toContain("--resume");
+  expect(calls[1].prompt.startsWith("late thought")).toBe(true);
+  expect(store.getTicket("p", t.id)!.status).toBe("review");
+});
+
+test("chat is rejected while Claude is stopping", async () => {
   await setup();
   process.env.FAKE_MODE = "slow";
   const t = await board.createTicket("p", { title: "x", body: "", status: "backlog" });
   await board.chat("p", t.id, "hi");
-  await expect(board.chat("p", t.id, "again")).rejects.toThrow(/still working/);
+  await Bun.sleep(300);
+  board.stop("p", t.id);
+  await expect(board.chat("p", t.id, "again")).rejects.toThrow(/stopping/);
 }, 15000);
 
 test("refine chat does not take a queue slot", async () => {
@@ -442,8 +498,8 @@ test("creating a ticket in Planning starts the refine interview automatically", 
   await board.whenIdle();
   const call = readArgs()[0];
   expect(call.args[call.args.indexOf("--permission-mode") + 1]).toBe("plan");
-  expect(call.args[1].startsWith("<ckanban-context")).toBe(true);
-  expect(call.args[1]).toContain("gym tracker");
+  expect(call.prompt.startsWith("<ckanban-context")).toBe(true);
+  expect(call.prompt).toContain("gym tracker");
   const got = store.getTicket("p", t.id)!;
   expect(got.refineStarted).toBe(true);
   expect(got.status).toBe("planning");
@@ -514,7 +570,7 @@ test("planning-only message in Review: Claude marks it and the card moves to Pla
   const got = store.getTicket("p", t.id)!;
   expect(got.status).toBe("planning");
   expect(got.outcome).toBeNull();
-  const prompt = readArgs()[1].args[1];
+  const prompt = readArgs()[1].prompt;
   expect(prompt).toContain('<ckanban-move to="planning"/>');
 });
 
@@ -550,7 +606,7 @@ test("prompts get image file paths; deleting the ticket deletes its images", asy
   const other = saveAttachment(store.attachmentsDir, "image/png", png);
   const t = await board.createTicket("p", { title: "x", body: `see ![image](/api/attachments/${inBody})`, status: "ready" });
   await board.whenIdle();
-  const prompt = readArgs()[0].args[1];
+  const prompt = readArgs()[0].prompt;
   expect(prompt).toContain(join(store.attachmentsDir, inBody));
   expect(prompt).toContain("Read tool");
   store.addComment("p", t.id, "user", `![image](/api/attachments/${inComment})`);

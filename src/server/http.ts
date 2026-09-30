@@ -9,6 +9,7 @@ import { resumeCommand } from "./prompts";
 import { attentionFor } from "./attention";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
 import { FileError, listDir, readFileForView } from "./files";
+import { McpError, McpManager } from "./mcp";
 import { SessionCache } from "./session";
 import { ptySupported, ShellManager, type Shell } from "./shell";
 import type { TerminalWatcher } from "./terminals";
@@ -29,6 +30,7 @@ export interface ServerDeps {
   updates?: UpdateChecker;
   terminals?: TerminalWatcher;
   shells?: ShellManager;
+  mcp?: McpManager;
 }
 
 interface ShellSocket {
@@ -83,6 +85,7 @@ export function createServer(deps: ServerDeps) {
   const sessions = deps.sessions ?? new SessionCache();
   const updates = deps.updates ?? new UpdateChecker();
   const shells = deps.shells ?? new ShellManager();
+  const mcp = deps.mcp ?? new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
 
   const profileOr404 = (slug: string): Profile => {
     const p = store.getProfile(slug);
@@ -164,6 +167,37 @@ export function createServer(deps: ServerDeps) {
         }
       }
       return json(out);
+    }
+
+    // Connections panel: Claude Code MCP servers (always from the home dir, user scope for edits).
+    if (parts[0] === "mcp") {
+      const name = parts[1];
+      if (parts.length === 1 && m === "GET") return json(mcp.state());
+      if (parts.length === 1 && m === "POST") {
+        await mcp.add(await body(req));
+        return json(mcp.state(), 201);
+      }
+      if (parts.length === 2 && name === "refresh" && m === "POST") {
+        mcp.refresh();
+        return json(mcp.state(), 202);
+      }
+      if (parts.length === 2 && m === "DELETE") {
+        await mcp.remove(name);
+        return json(mcp.state());
+      }
+      if (parts.length === 3 && m === "POST" && parts[2] === "login") {
+        mcp.login(name);
+        return json(mcp.state(), 202);
+      }
+      if (parts.length === 3 && m === "POST" && parts[2] === "cancel-login") {
+        mcp.cancelLogin(name);
+        return json(mcp.state());
+      }
+      if (parts.length === 3 && m === "POST" && parts[2] === "logout") {
+        await mcp.logout(name);
+        return json(mcp.state());
+      }
+      throw new HttpError(404, "not found");
     }
 
     if (parts[0] === "claude" && parts[1] === "projects" && m === "GET") {
@@ -471,6 +505,7 @@ export function createServer(deps: ServerDeps) {
       } catch (e) {
         if (e instanceof HttpError) return json({ error: e.message }, e.status);
         if (e instanceof ConflictError) return json({ error: e.message }, 409);
+        if (e instanceof McpError) return json({ error: e.message }, e.status);
         if (e instanceof URIError) return json({ error: "malformed URL" }, 400);
         console.error(e);
         return json({ error: (e as Error).message ?? "internal error" }, 500);

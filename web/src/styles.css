@@ -419,6 +419,7 @@ textarea { resize: vertical; font-size: 13.5px; }
 .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .composer textarea { border: 0; background: transparent; padding: 2px; resize: none; box-shadow: none !important; min-height: 44px; }
 .composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.composer-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* interview question form */
 .qform { margin-top: 8px; display: flex; flex-direction: column; gap: 10px; }
@@ -678,3 +679,26 @@ textarea.drop-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--
 .hljs-meta { color: var(--muted); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 650; }
+/* connections (MCP servers) */
+.connections-btn { display: inline-flex; align-items: center; gap: 6px; }
+.form.mcp { gap: 10px; max-height: 76vh; overflow-y: auto; }
+.mcp-toolbar { display: flex; align-items: center; gap: 8px; }
+.mcp-toolbar .spinner { vertical-align: -1px; margin-right: 2px; }
+.mcp-banner { margin: 0; white-space: pre-wrap; }
+.mcp-section { display: flex; flex-direction: column; }
+.mcp-section .inbox-board { padding: 6px 0 4px; }
+.mcp-section > .link-btn { align-self: flex-start; margin: 4px 0; }
+.mcp-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.mcp-row:last-child { border-bottom: 0; }
+.mcp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mcp-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 580; font-size: 13.5px; }
+.mcp-target { font-family: var(--mono); font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcp-msg { font-size: 12.5px; color: var(--err); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-msg.info { color: var(--info); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mcp-actions { display: flex; gap: 4px; flex: none; align-items: center; }
+.mcp-raw { margin: 0; padding: 8px; background: var(--surface-2); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-add { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.mcp-add label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 560; }
+.mcp-add .row.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mcp-add input { background: var(--surface); }
+.mcp-pair { display: grid; grid-template-columns: 1fr 1.4fr 26px; gap: 6px; align-items: center; }

@@ -104,6 +104,13 @@ ${RESULT_RULE}`);
 
 export type ChatMode = "refine" | "act";
 
+/** A chat message sent while Claude is already working: it arrives at Claude's next step. */
+export function steerPrompt(text: string): string {
+  return `${text.trim()}
+
+${context("", `(Sent from the kanban board's ticket chat while you were working. Take it into account and carry on; keep following the instructions you were given for this run, including how to end it.)`)}`;
+}
+
 /** A message the user typed in the ticket's chat. Their text comes first; board instructions are wrapped so the UI can hide them. */
 export function chatPrompt(t: Ticket, text: string, mode: ChatMode, outputDir: string): string {
   const typed = text.trim();
