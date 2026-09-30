@@ -1,3 +1,4 @@
+import type { McpState } from "./mcp";
 import type { SessionSummary } from "./session";
 import type { Profile, Ticket } from "./types";
 
@@ -8,7 +9,9 @@ export type BusEvent =
   | { type: "profile.updated"; slug: string; profile: Profile | null }
   | { type: "session.updated"; profile: string; id: string; session: SessionSummary }
   /** Text Claude is writing right now in this ticket's run ("" = cleared). Not persisted. */
-  | { type: "draft"; profile: string; id: string; text: string };
+  | { type: "draft"; profile: string; id: string; text: string }
+  /** Connections panel: cached `claude mcp list` result, login progress. */
+  | { type: "mcp.updated"; state: McpState };
 
 export class Bus {
   private listeners = new Set<(e: BusEvent) => void>();
