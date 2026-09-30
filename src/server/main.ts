@@ -5,6 +5,7 @@ import { Bus } from "./events";
 import { createServer } from "./http";
 import { startPoller } from "./prpoller";
 import { SessionCache, startSessionWatcher } from "./session";
+import { ShellManager } from "./shell";
 import { TerminalWatcher } from "./terminals";
 import { defaultRoot, Store } from "./store";
 import { VERSION } from "./version";
@@ -21,7 +22,8 @@ export async function startDaemon(): Promise<void> {
   if (!embedded && !existsSync(join(webDir, "index.html"))) console.warn("web UI not built yet: run `bun run build:web`");
   const sessions = new SessionCache();
   const terminals = new TerminalWatcher(store, bus, sessions);
-  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, assets: WEB_ASSETS });
+  const shells = new ShellManager();
+  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, assets: WEB_ASSETS });
   console.log(`ckanban v${VERSION} listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();
   const stopPoller = startPoller(board, store, config.prPollMinutes);
@@ -33,6 +35,7 @@ export async function startDaemon(): Promise<void> {
     stopPoller();
     stopWatcher();
     stopTerminals();
+    shells.killAll();
     await board.shutdown();
     server.stop(true);
     process.exit(0);
