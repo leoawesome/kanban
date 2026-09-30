@@ -7,6 +7,7 @@ import { detectBaseBranch, isGitRepo, which } from "./git";
 import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
 import { attentionFor } from "./attention";
+import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
 import { SessionCache } from "./session";
 import type { TerminalWatcher } from "./terminals";
 import { UpdateChecker } from "./update";
@@ -91,8 +92,37 @@ export function createServer(deps: ServerDeps) {
   async function api(req: Request, url: URL): Promise<Response> {
     const parts = url.pathname.split("/").filter(Boolean).slice(1).map(decodeURIComponent);
     const m = req.method;
+    const type = (req.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+
+    // Image uploads send the raw bytes. image/* types are not CORS-safelisted, so they preflight like JSON does.
+    if (parts[0] === "attachments") {
+      if (m === "POST" && parts.length === 1) {
+        if (!IMAGE_TYPES[type]) throw new HttpError(415, "only PNG, JPEG, GIF and WebP images are supported");
+        try {
+          const name = saveAttachment(store.attachmentsDir, type, new Uint8Array(await req.arrayBuffer()));
+          return json({ url: `/api/attachments/${name}`, path: join(store.attachmentsDir, name) }, 201);
+        } catch (e) {
+          if (e instanceof AttachmentError) throw new HttpError(e.status, e.message);
+          throw e;
+        }
+      }
+      if (m === "GET" && parts.length === 2) {
+        const file = attachmentFile(store.attachmentsDir, parts[1]);
+        if (!file) throw new HttpError(404, "attachment not found");
+        return new Response(Bun.file(file), {
+          headers: {
+            "content-type": attachmentType(parts[1])!,
+            "x-content-type-options": "nosniff",
+            "content-security-policy": "sandbox",
+            "cache-control": "private, max-age=31536000, immutable",
+          },
+        });
+      }
+      throw new HttpError(404, "not found");
+    }
+
     // Only JSON mutations: blocks HTML <form> posts (text/plain, urlencoded) that skip CORS preflight.
-    if ((m === "POST" || m === "PATCH" || m === "PUT") && !(req.headers.get("content-type") ?? "").startsWith("application/json")) {
+    if ((m === "POST" || m === "PATCH" || m === "PUT") && type !== "application/json") {
       throw new HttpError(415, "content-type must be application/json");
     }
 

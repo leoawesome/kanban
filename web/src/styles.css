@@ -610,3 +610,9 @@ textarea { resize: vertical; font-size: 13.5px; }
 .panel-error span { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
 .select-label .need-chip { margin-left: 6px; vertical-align: 1px; }
 @media (max-width: 720px) { .search input { width: 140px; } }
+
+/* pasted images */
+.md img { max-width: 100%; }
+.md img.attachment { max-height: 240px; border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; display: block; margin: 6px 0; }
+textarea.drop-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.composer:has(textarea.drop-target) { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }

@@ -197,6 +197,13 @@ export const api = {
   stop: (slug: string, id: string) => req<{ stopped: boolean }>("POST", `${t(slug, id)}/stop`),
   checkPr: (slug: string, id: string) => req<{ state: string | null }>("POST", `${t(slug, id)}/check-pr`),
   planningCommand: (slug: string, id: string) => req<{ command: string }>("POST", `${t(slug, id)}/planning-command`),
+  /** Raw image bytes; the server saves them and returns the URL to put in markdown. */
+  uploadImage: async (file: Blob) => {
+    const r = await fetch("/api/attachments", { method: "POST", headers: { "content-type": file.type }, body: file });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((data as any).error ?? `${r.status} ${r.statusText}`);
+    return data as { url: string; path: string };
+  },
 };
 
 type Listener = (e: BusEvent) => void;

@@ -496,3 +496,22 @@ test("streams Claude's text as draft events without persisting them", async () =
   expect(drafts.at(-1)).toBe("");
   expect(store.readActivity("p", t.id).some((a) => a.event?.type === "stream_event")).toBe(false);
 });
+
+test("prompts get image file paths; deleting the ticket deletes its images", async () => {
+  await setup({ git: false });
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]);
+  const { saveAttachment } = await import("../src/server/attachments");
+  const inBody = saveAttachment(store.attachmentsDir, "image/png", png);
+  const inComment = saveAttachment(store.attachmentsDir, "image/png", png);
+  const other = saveAttachment(store.attachmentsDir, "image/png", png);
+  const t = await board.createTicket("p", { title: "x", body: `see ![image](/api/attachments/${inBody})`, status: "ready" });
+  await board.whenIdle();
+  const prompt = readArgs()[0].args[1];
+  expect(prompt).toContain(join(store.attachmentsDir, inBody));
+  expect(prompt).toContain("Read tool");
+  store.addComment("p", t.id, "user", `![image](/api/attachments/${inComment})`);
+  await board.deleteTicket("p", t.id);
+  expect(existsSync(join(store.attachmentsDir, inBody))).toBe(false);
+  expect(existsSync(join(store.attachmentsDir, inComment))).toBe(false);
+  expect(existsSync(join(store.attachmentsDir, other))).toBe(true);
+});

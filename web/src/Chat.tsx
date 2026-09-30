@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, subscribe, type SessionEntry, type Ticket } from "./api";
+import { useImagePaste } from "./imagePaste";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
 import { timeAgo } from "./time";
@@ -41,6 +42,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const images = useImagePaste(setDraft);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   // Text Claude is writing right now (from the run's partial-message stream); not yet in the session file.
   const [live, setLive] = useState("");
@@ -90,7 +92,9 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const entries = page?.entries ?? [];
   // Drop the optimistic bubble once the session file contains the message.
   useEffect(() => {
-    if (pending && entries.some((e) => e.role === "user" && e.text.trim() === pending.trim())) setPending(null);
+    // Image links reach the session as local file paths, so compare by file name.
+    const norm = (s: string) => s.trim().replace(/\S*\/attachments\/([0-9a-f]{32}\.\w+)/g, "$1");
+    if (pending && entries.some((e) => e.role === "user" && norm(e.text) === norm(pending))) setPending(null);
   }, [entries, pending]);
 
   useLayoutEffect(() => {
@@ -104,7 +108,8 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
 
   const send = async (text: string) => {
     const t = text.trim();
-    if (!t || running) return;
+    if (!t || running || images.uploading) return;
+    images.clearError();
     stickToBottom.current = true;
     setPending(t);
     setDraft("");
@@ -243,7 +248,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
         </div>
       )}
       <div className="composer">
-        <textarea rows={2} value={draft} disabled={running}
+        <textarea rows={2} value={draft} disabled={running} className={images.dragOver ? "drop-target" : undefined} {...images.handlers}
           placeholder={running ? "Claude is replying…" : refine ? "Describe your idea or answer Claude…" : "Ask Claude to change or continue something…"}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -252,13 +257,14 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
               send(draft);
             }
           }} />
+        {images.error && <div className="form-error">{images.error}</div>}
         <div className="composer-foot">
           <span className="muted small">
             {refine ? "Refine mode: Claude won't change any files." : "Claude will act on your message, like in the terminal."} Enter to send, Shift+Enter for a new line.
           </span>
           {running
             ? <button className="btn danger small" onClick={() => api.stop(slug, ticket.id).catch((e) => onError(e.message))}>Stop</button>
-            : <button className="btn primary small" disabled={!draft.trim()} onClick={() => send(draft)}>Send</button>}
+            : <button className="btn primary small" disabled={!draft.trim() || images.uploading} onClick={() => send(draft)}>{images.uploading ? "Uploading…" : "Send"}</button>}
         </div>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { api, copy, COLUMNS, safeHref, subscribe, type ClaudeSession, type Profi
 import { outcomeBadge } from "./Card";
 import { Chat } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { useImagePaste } from "./imagePaste";
 import { ModeToggle } from "./ModeToggle";
 import { Outputs } from "./Outputs";
 import { Select } from "./Select";
@@ -86,6 +87,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
   const [title, setTitle] = useState(ticket.title);
   const [body, setBody] = useState(ticket.body);
   const [editing, setEditing] = useState(false);
+  const images = useImagePaste(setBody);
   // Body the current edit started from; the server rejects the save if the file changed meanwhile.
   const [baseBody, setBaseBody] = useState(ticket.body);
   const [tab, setTab] = useState<"chat" | "outputs">("chat");
@@ -174,6 +176,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
     setEditing(true);
   };
   const saveBody = () => {
+    if (images.uploading) return;
     if (body === baseBody) return setEditing(false);
     api.updateTicket(slug, ticket.id, { body, expectedBody: baseBody })
       .then((t) => { setBaseBody(t.body); setEditing(false); })
@@ -247,11 +250,13 @@ export function TicketDrawer({ profile, ticket, onClose }: {
               </div>
               {editing ? (
                 <>
-                  <textarea className="body-input" rows={12} value={body} onChange={(e) => setBody(e.target.value)} autoFocus
+                  <textarea className={`body-input${images.dragOver ? " drop-target" : ""}`} rows={12} value={body} onChange={(e) => setBody(e.target.value)} autoFocus
+                    placeholder="Markdown. Paste or drop images." {...images.handlers}
                     onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveBody(); }} />
+                  {images.error && <div className="form-error">{images.error}</div>}
                   <div className="form-actions">
-                    <button className="btn ghost small" onClick={() => { setBody(baseBody); setEditing(false); }}>Cancel</button>
-                    <button className="btn primary small" onClick={saveBody}>Save</button>
+                    <button className="btn ghost small" onClick={() => { setBody(baseBody); setEditing(false); images.clearError(); }}>Cancel</button>
+                    <button className="btn primary small" disabled={images.uploading} onClick={saveBody}>{images.uploading ? "Uploading…" : "Save"}</button>
                   </div>
                 </>
               ) : body.trim() ? (
