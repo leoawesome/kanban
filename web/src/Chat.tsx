@@ -34,6 +34,11 @@ function liveView(text: string): { text: string; preparing: string | null } {
 
 const REFINE = (s: Ticket["status"]) => s === "backlog" || s === "planning";
 
+// Image links reach the session as local file paths, so compare by file name.
+const norm = (s: string) => s.trim().replace(/\S*\/attachments\/([0-9a-f]{32}\.\w+)/g, "$1");
+/** Whether a message the user sent is in the session file yet. */
+const delivered = (entries: SessionEntry[], text: string) => entries.some((e) => e.role === "user" && norm(e.text) === norm(text));
+
 /**
  * The ticket's single conversation with Claude, like the terminal: everything in the session
  * (terminal chat, board runs, messages typed here) in one timeline, plus a box to send more.
@@ -57,7 +62,10 @@ export function useStop(slug: string, ticket: Ticket, working: boolean, onError:
 
 export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; onError: (m: string) => void }) {
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
-  const [pending, setPending] = useState<string | null>(null);
+  // Sent messages not yet in the session file; while Claude works they wait for its next step.
+  const [pending, setPending] = useState<string[]>([]);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
   const [draft, setDraft] = useState("");
   const images = useImagePaste(setDraft);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -71,14 +79,18 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const { stopping, stop } = useStop(slug, ticket, running, onError);
   const refine = REFINE(ticket.status);
 
-  const loadTail = useCallback(async () => {
-    if (!ticket.sessionId) return setPage({ entries: [], start: 0 });
+  const loadTail = useCallback(async (): Promise<SessionEntry[]> => {
+    if (!ticket.sessionId) {
+      setPage({ entries: [], start: 0 });
+      return [];
+    }
     const r = await api.conversation(slug, ticket.id);
     setPage((prev) => {
       if (!prev || r.start <= prev.start) return { entries: r.entries, start: r.start };
       const idx = prev.entries.findIndex((e) => e.uuid === r.entries[0]?.uuid);
       return idx >= 0 ? { entries: [...prev.entries.slice(0, idx), ...r.entries], start: prev.start } : { entries: r.entries, start: r.start };
     });
+    return r.entries;
   }, [slug, ticket.id, ticket.sessionId]);
 
   useEffect(() => {
@@ -103,16 +115,25 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   }), [slug, ticket.id, loadTail]);
 
   // A run just finished: pick up the final message even if no more events arrive.
+  // Stopped with messages Claude never got to: put them back in the box instead of losing them.
+  const stopped = ticket.outcome === "stopped";
   useEffect(() => {
-    if (!running) loadTail().catch(() => {}).finally(() => setLive(""));
+    if (running) return;
+    loadTail()
+      .then((tail) => {
+        if (!stopped) return;
+        const undelivered = pendingRef.current.filter((p) => !delivered(tail, p));
+        setPending([]);
+        if (undelivered.length) setDraft((d) => [...undelivered, d].filter((x) => x.trim()).join("\n\n"));
+      })
+      .catch(() => {})
+      .finally(() => setLive(""));
   }, [running]);
 
   const entries = page?.entries ?? [];
-  // Drop the optimistic bubble once the session file contains the message.
+  // Drop optimistic bubbles once the session file contains the message.
   useEffect(() => {
-    // Image links reach the session as local file paths, so compare by file name.
-    const norm = (s: string) => s.trim().replace(/\S*\/attachments\/([0-9a-f]{32}\.\w+)/g, "$1");
-    if (pending && entries.some((e) => e.role === "user" && norm(e.text) === norm(pending))) setPending(null);
+    if (pending.some((p) => delivered(entries, p))) setPending((ps) => ps.filter((p) => !delivered(entries, p)));
   }, [entries, pending]);
 
   useLayoutEffect(() => {
@@ -126,15 +147,15 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
 
   const send = async (text: string) => {
     const t = text.trim();
-    if (!t || running || images.uploading) return;
+    if (!t || stopping || images.uploading) return;
     images.clearError();
     stickToBottom.current = true;
-    setPending(t);
+    setPending((ps) => [...ps, t]);
     setDraft("");
     try {
       await api.chat(slug, ticket.id, t);
     } catch (e: any) {
-      setPending(null);
+      setPending((ps) => ps.filter((p) => p !== t));
       setDraft(t);
       onError(e.message);
     }
@@ -156,7 +177,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const isApplied = (p: { title: string; description: string }) =>
     (!p.title || p.title === ticket.title) && (!p.description || p.description.trim() === ticket.body.trim());
 
-  const empty = page !== null && entries.length === 0 && !pending && !running;
+  const empty = page !== null && entries.length === 0 && !pending.length && !running;
 
   return (
     <div className="chat">
@@ -238,12 +259,6 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
             </div>
           );
         })}
-        {pending && (
-          <div className="conv-msg user pending">
-            <div className="conv-head"><b>You</b><span className="muted small">sending…</span></div>
-            <Markdown text={pending} />
-          </div>
-        )}
         {live && (
           <div className="conv-msg assistant live" aria-live="polite">
             <div className="conv-head"><b>Claude</b><span className="muted small">writing…</span></div>
@@ -254,6 +269,12 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
         {running && !live && (
           <div className="chat-typing"><span className="spinner" /> {ticket.lastActivity && ticket.lastActivity !== "Starting…" ? ticket.lastActivity : "Claude is working…"}</div>
         )}
+        {pending.map((p, i) => (
+          <div key={i} className="conv-msg user pending">
+            <div className="conv-head"><b>You</b><span className="muted small">{running ? "queued · Claude reads this at its next step" : "sending…"}</span></div>
+            <Markdown text={p} />
+          </div>
+        ))}
         {!running && ticket.error && !ticket.error.startsWith("corrupt") && (
           <div className="banner error inline"><pre>{ticket.error}</pre></div>
         )}
@@ -266,8 +287,8 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
         </div>
       )}
       <div className="composer">
-        <textarea rows={2} value={draft} disabled={running} className={images.dragOver ? "drop-target" : undefined} {...images.handlers}
-          placeholder={running ? "Claude is replying…" : refine ? "Describe your idea or answer Claude…" : "Ask Claude to change or continue something…"}
+        <textarea rows={2} value={draft} disabled={stopping} className={images.dragOver ? "drop-target" : undefined} {...images.handlers}
+          placeholder={running ? "Steer Claude: it reads this at its next step, no restart…" : refine ? "Describe your idea or answer Claude…" : "Ask Claude to change or continue something…"}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -280,9 +301,10 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
           <span className="muted small">
             {refine ? "Refine mode: Claude won't change any files." : "Claude will act on your message, like in the terminal."} Enter to send, Shift+Enter for a new line.
           </span>
-          {running
-            ? <button className="btn danger small" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop"}</button>
-            : <button className="btn primary small" disabled={!draft.trim() || images.uploading} onClick={() => send(draft)}>{images.uploading ? "Uploading…" : "Send"}</button>}
+          <span className="composer-actions">
+            {running && <button className="btn danger small" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop"}</button>}
+            <button className="btn primary small" disabled={!draft.trim() || stopping || images.uploading} onClick={() => send(draft)}>{images.uploading ? "Uploading…" : "Send"}</button>
+          </span>
         </div>
       </div>
     </div>

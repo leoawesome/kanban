@@ -419,6 +419,7 @@ textarea { resize: vertical; font-size: 13.5px; }
 .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .composer textarea { border: 0; background: transparent; padding: 2px; resize: none; box-shadow: none !important; min-height: 44px; }
 .composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.composer-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* interview question form */
 .qform { margin-top: 8px; display: flex; flex-direction: column; gap: 10px; }
