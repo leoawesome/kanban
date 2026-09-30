@@ -60,6 +60,11 @@ export class Store {
     }
   }
 
+  /** Pasted images, shared by all profiles (see attachments.ts). */
+  get attachmentsDir(): string {
+    return join(this.root, "attachments");
+  }
+
   private profileDir(slug: string) {
     return join(this.root, "profiles", slug);
   }

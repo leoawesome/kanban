@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { COLUMNS, type ClaudeSession, type Status, type TicketMode } from "./api";
+import { useImagePaste } from "./imagePaste";
 import { ModeToggle } from "./ModeToggle";
 import { Modal } from "./Modal";
 import { Select } from "./Select";
@@ -22,10 +23,11 @@ export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate
   const [status, setStatus] = useState<Status>(ALLOWED.some((c) => c.id === initialStatus) ? initialStatus : "backlog");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const images = useImagePaste(setBody);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || images.uploading) return;
     setBusy(true);
     try {
       await onCreate({ title: title.trim(), body, status, sessionId: session?.id, mode });
@@ -55,8 +57,10 @@ export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate
         </label>
         <label>
           Description
-          <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Context, acceptance criteria, links… (markdown)"
+          <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Context, acceptance criteria, links… (markdown). Paste or drop images."
+            className={images.dragOver ? "drop-target" : undefined} {...images.handlers}
             onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(e); }} />
+          {images.error && <span className="form-error">{images.error}</span>}
         </label>
         <div className="field">
           <div className="field-label">How should Claude work?</div>
@@ -79,7 +83,7 @@ export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate
         {err && <div className="form-error">{err}</div>}
         <div className="form-actions">
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn primary" disabled={busy || !title.trim()}>Create</button>
+          <button type="submit" className="btn primary" disabled={busy || !title.trim() || images.uploading}>{images.uploading ? "Uploading image…" : "Create"}</button>
         </div>
       </form>
       {picking && (

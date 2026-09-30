@@ -1,7 +1,8 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { extractFinalText, summarizeEvent } from "./activity";
+import { deleteAttachments, localizeImages, referencedAttachments } from "./attachments";
 import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, worktreeDir } from "./git";
@@ -42,14 +43,20 @@ export function chatModeFor(status: Status): ChatMode {
 const ACTIVITY_THROTTLE_MS = 1000;
 const DRAFT_THROTTLE_MS = 120;
 
-export function claudeSessionExists(sessionId: string): boolean {
+/** The session's transcript file under Claude's projects folder, if any. */
+export function claudeSessionFile(sessionId: string): string | null {
   const root = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "projects");
-  if (!existsSync(root)) return false;
+  if (!existsSync(root)) return null;
   try {
-    return readdirSync(root).some((d) => existsSync(join(root, d, `${sessionId}.jsonl`)));
+    const d = readdirSync(root).find((d) => existsSync(join(root, d, `${sessionId}.jsonl`)));
+    return d ? join(root, d, `${sessionId}.jsonl`) : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function claudeSessionExists(sessionId: string): boolean {
+  return claudeSessionFile(sessionId) !== null;
 }
 
 export class ConflictError extends Error {}
@@ -190,11 +197,11 @@ export class Board {
     const runNo = t.runCount + 1;
     const newComments = this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt));
     const outputDir = this.store.outputsDir(slug, id);
-    const prompt = run.chat
+    const prompt = localizeImages(run.chat
       ? chatPrompt(t, run.chat.text, run.chat.mode, outputDir)
       : t.runCount === 0
       ? firstRunPrompt(t, { isGit: session.isGit, linked: !!t.workdir, comments: t.workdir ? newComments : [], outputDir })
-      : resumePrompt(t, newComments, outputDir);
+      : resumePrompt(t, newComments, outputDir), this.store.attachmentsDir);
 
     let lastWrite = 0;
     let pendingActivity: string | null = null;
@@ -328,7 +335,7 @@ export class Board {
   async planningCommand(slug: string, id: string): Promise<string> {
     const s = await this.ensureSession(slug, id);
     const t = this.store.getTicket(slug, id)!;
-    return planningCommand(s.dir, s.sessionId, planningPrompt(t, this.store.ticketPath(slug, id)), s.existed);
+    return planningCommand(s.dir, s.sessionId, localizeImages(planningPrompt(t, this.store.ticketPath(slug, id)), this.store.attachmentsDir), s.existed);
   }
 
   async createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode }): Promise<Ticket> {
@@ -395,8 +402,21 @@ export class Board {
     const t = this.store.getTicket(slug, id);
     const profile = this.store.getProfile(slug);
     if (t?.worktree && profile) await removeWorktree(profile.path, t.worktree).catch(() => {});
+    if (t) deleteAttachments(this.store.attachmentsDir, this.attachmentsOf(slug, t));
     this.store.deleteTicket(slug, id);
     this.bus.emit({ type: "ticket.deleted", profile: slug, id });
+  }
+
+  /** Images pasted into the ticket: its description, comments and chat (the Claude session transcript). */
+  private attachmentsOf(slug: string, t: Ticket): string[] {
+    const texts = [t.body, ...this.store.listComments(slug, t.id).map((c) => c.text)];
+    const file = t.sessionId ? claudeSessionFile(t.sessionId) : null;
+    if (file) {
+      try {
+        texts.push(readFileSync(file, "utf8"));
+      } catch {}
+    }
+    return referencedAttachments(...texts);
   }
 
   /** Attach a Claude session the user already started in the profile folder (null unlinks). */

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { join } from "node:path";
 import { Board } from "../src/server/board";
 import { Bus } from "../src/server/events";
 import { createServer, isAllowedRequest } from "../src/server/http";
@@ -178,4 +179,30 @@ test("health", async () => {
   const r = await fetch(`${base}/api/health`);
   const h = (await r.json()) as any;
   expect(typeof h.git).toBe("boolean");
+});
+
+test("attachments: upload, serve, and reject bad input", async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  let r = await fetch(`${base}/api/attachments`, { method: "POST", headers: { "content-type": "image/png" }, body: png });
+  expect(r.status).toBe(201);
+  const { url, path } = (await r.json()) as any;
+  expect(url).toMatch(/^\/api\/attachments\/[0-9a-f]{32}\.png$/);
+  expect(path).toBe(join(store.attachmentsDir, url.split("/").pop()));
+  r = await fetch(`${base}${url}`);
+  expect(r.status).toBe(200);
+  expect(r.headers.get("content-type")).toBe("image/png");
+  expect(new Uint8Array(await r.arrayBuffer())).toEqual(png);
+
+  r = await fetch(`${base}/api/attachments`, { method: "POST", headers: { "content-type": "text/plain" }, body: "hi" });
+  expect(r.status).toBe(415);
+  r = await fetch(`${base}/api/attachments`, { method: "POST", headers: { "content-type": "image/png" }, body: "not a png" });
+  expect(r.status).toBe(400);
+  r = await fetch(`${base}/api/attachments`, { method: "POST", headers: { "content-type": "image/png" }, body: new Uint8Array(10 * 1024 * 1024 + 1) });
+  expect(r.status).toBe(413);
+  r = await fetch(`${base}/api/attachments/..%2Fconfig.json`);
+  expect(r.status).toBe(404);
+  r = await fetch(`${base}/api/attachments`, {
+    method: "POST", headers: { "content-type": "image/png", origin: "http://evil.com" }, body: png,
+  });
+  expect(r.status).toBe(403);
 });

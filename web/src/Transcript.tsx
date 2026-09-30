@@ -22,9 +22,29 @@ const PURIFY = {
   FORBID_ATTR: ["style", "action", "formaction"],
 };
 
+// Pasted images: the UI URL, or the absolute file path Claude was given in its prompt (seen in the chat history).
+const ATTACHMENT_SRC = /(?:^|\/)attachments\/([0-9a-f]{32}\.(?:png|jpg|gif|webp))$/;
+
+function thumbnails(html: string): string {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll("img").forEach((img) => {
+    const m = (img.getAttribute("src") ?? "").match(ATTACHMENT_SRC);
+    if (!m) return;
+    img.setAttribute("src", `/api/attachments/${m[1]}`);
+    img.classList.add("attachment");
+  });
+  return doc.body.innerHTML;
+}
+
 export function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(text, { async: false, breaks: true }) as string, PURIFY), [text]);
-  return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
+  const html = useMemo(() => thumbnails(DOMPurify.sanitize(marked.parse(text, { async: false, breaks: true }) as string, PURIFY)), [text]);
+  return (
+    <div className="md" dangerouslySetInnerHTML={{ __html: html }}
+      onClick={(e) => {
+        const img = e.target as HTMLElement;
+        if (img.tagName === "IMG" && img.classList.contains("attachment")) window.open(img.getAttribute("src")!, "_blank", "noopener");
+      }} />
+  );
 }
 
 function Event({ ev }: { ev: any }) {
