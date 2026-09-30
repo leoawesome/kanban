@@ -136,13 +136,48 @@ export interface ClaudeSession {
   ticket: { id: string; title: string } | null;
 }
 
+export type McpStatus = "connected" | "needs_auth" | "failed" | "pending" | "unknown";
+export type McpScope = "user" | "local" | "project" | "claude.ai" | "other";
+export type McpTransport = "stdio" | "http" | "sse";
+
+export interface McpServer {
+  name: string;
+  target: string;
+  transport: McpTransport | null;
+  scope: McpScope;
+  status: McpStatus;
+  message: string | null;
+  /** Counts toward the header badge: failed, or needs auth after having worked before. */
+  attention: boolean;
+  login: { state: "waiting" | "failed"; url: string | null; error: string | null; startedAt: string } | null;
+}
+
+export interface McpState {
+  servers: McpServer[];
+  unparsed: string[];
+  checkedAt: string | null;
+  checking: boolean;
+  error: string | null;
+}
+
+export interface McpAddInput {
+  name: string;
+  transport: McpTransport;
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: { key: string; value: string }[];
+  headers?: { name: string; value: string }[];
+}
+
 export type BusEvent =
   | { type: "ticket.updated"; profile: string; ticket: Ticket }
   | { type: "ticket.deleted"; profile: string; id: string }
   | { type: "activity"; profile: string; id: string; run: number; event: any }
   | { type: "profile.updated"; slug: string; profile: Profile | null }
   | { type: "session.updated"; profile: string; id: string; session: SessionSummary }
-  | { type: "draft"; profile: string; id: string; text: string };
+  | { type: "draft"; profile: string; id: string; text: string }
+  | { type: "mcp.updated"; state: McpState };
 
 export interface InboxItem {
   profile: string;
@@ -203,6 +238,13 @@ export const api = {
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),
   activity: (slug: string, id: string) => req<ActivityEntry[]>("GET", `${t(slug, id)}/activity`),
   inbox: () => req<InboxItem[]>("GET", "/api/inbox"),
+  mcp: () => req<McpState>("GET", "/api/mcp"),
+  mcpRefresh: () => req<McpState>("POST", "/api/mcp/refresh"),
+  mcpAdd: (input: McpAddInput) => req<McpState>("POST", "/api/mcp", input),
+  mcpRemove: (name: string) => req<McpState>("DELETE", `/api/mcp/${encodeURIComponent(name)}`),
+  mcpLogin: (name: string) => req<McpState>("POST", `/api/mcp/${encodeURIComponent(name)}/login`),
+  mcpCancelLogin: (name: string) => req<McpState>("POST", `/api/mcp/${encodeURIComponent(name)}/cancel-login`),
+  mcpLogout: (name: string) => req<McpState>("POST", `/api/mcp/${encodeURIComponent(name)}/logout`),
   stop: (slug: string, id: string) => req<{ stopped: boolean }>("POST", `${t(slug, id)}/stop`).then((r) => {
     if (!r.stopped) throw new Error("Claude is not running on this ticket.");
     return r;

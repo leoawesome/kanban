@@ -1,0 +1,11 @@
+Checking MCP server health…
+
+claude.ai Claude Docs: https://api.anthropic.com/v1/pages/mcp - ✔ Connected
+claude.ai Rippling: https://mcpgateway.rippling.com/api/v1/proxy/abc - ! Needs authentication
+claude.ai Custom MCP (Notion, Google Sheets etc.): https://example.execute-api.ap-southeast-1.amazonaws.com/mcp - ! Needs authentication
+zai-mcp-server: npx -y @z_ai/mcp-server - ✔ Connected
+cloudwatch: /opt/homebrew/bin/uvx awslabs.cloudwatch-mcp-server@latest - ✔ Connected
+posthog: https://mcp.posthog.com/mcp?features=llm_analytics&api_key=phx_123 (HTTP) - ✔ Connected
+events: https://example.com/sse (SSE) - ⏸ Pending approval
+google-sheets: uvx mcp-google-sheets@latest --token abc - ✘ Failed to connect — CONNECTION_CLOSED: Connection closed
+something the parser has never seen
