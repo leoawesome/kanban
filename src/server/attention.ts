@@ -11,6 +11,8 @@ export interface Attention {
 
 export function attentionFor(t: Ticket, s: SessionSummary | null, running: boolean): Attention | null {
   if (running || t.status === "in_progress") return null;
+  // Done means accepted as-is; Backlog means parked. Neither waits on the user, whatever the session holds.
+  if (t.status === "done" || t.status === "backlog") return null;
   if (t.outcome === "failed") return { kind: "failed", label: "Run failed" };
   if (t.outcome === "blocked") return { kind: "blocked", label: "Blocked" };
   const q = s?.openQuestions ?? 0;
