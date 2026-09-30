@@ -39,12 +39,15 @@ const SPARK = (
 );
 
 const DONE_LIMIT = 10;
+const CLAUDE_TAG = "Claude starts automatically when a card is here";
 
 function Column({ id, label, hint, claude, tickets, onOpen, onAdd }: {
   id: Status; label: string; hint: string; claude: boolean; tickets: Ticket[]; onOpen: (id: string) => void; onAdd: (s: Status) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${id}`, data: { status: id } });
   const needYou = tickets.filter((t) => t.attention && !t.running && t.status !== "in_progress").length;
+  const total = `${tickets.length} ${tickets.length === 1 ? "ticket" : "tickets"}`;
+  const countLabel = needYou > 0 ? `${total}, ${needYou} ${needYou === 1 ? "needs" : "need"} you` : total;
   const canAdd = id !== "in_progress" && id !== "done";
   // Done keeps growing: show the most recently finished cards unless expanded.
   const [showAll, setShowAll] = useState(false);
@@ -54,9 +57,9 @@ function Column({ id, label, hint, claude, tickets, onOpen, onAdd }: {
     <section className={`column col-${id} ${claude ? "claude-zone" : ""} ${isOver ? "over" : ""}`}>
       <header className="column-head">
         <span className="column-title">{label}</span>
-        <span className="count">{tickets.length}</span>
-        {claude && <span className="claude-tag" title="Claude starts automatically when a card is here">{SPARK} Claude</span>}
-        {needYou > 0 && <span className="need-chip" title="Tickets waiting on you">{needYou} need you</span>}
+        {/* One badge: total count, turning amber with a dot while tickets wait on you. */}
+        <span className={`count ${needYou > 0 ? "needs-you" : ""}`} title={countLabel} aria-label={countLabel}>{tickets.length}</span>
+        {claude && <span className="claude-tag" title={CLAUDE_TAG} aria-label={CLAUDE_TAG}>{SPARK}</span>}
         <span className="spacer" />
         {canAdd ? (
           <button className="icon-btn" title={`Add to ${label}`} onClick={() => onAdd(id)}>+</button>

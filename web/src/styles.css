@@ -116,8 +116,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .column.over { border-color: var(--accent); background: var(--accent-soft); }
 .column-head { display: flex; align-items: center; gap: 6px; padding: 10px 10px 2px 12px; }
-.column-title { font-weight: 620; font-size: 13px; }
+.column-title { font-weight: 620; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.column-head > :not(.column-title) { flex-shrink: 0; white-space: nowrap; }
 .count { font-size: 11px; color: var(--muted); background: var(--surface); border-radius: 99px; padding: 0 7px; }
+.count.needs-you { display: inline-flex; align-items: center; gap: 4px; color: var(--warn); background: var(--warn-soft); font-weight: 700; }
+.count.needs-you::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .column-head .icon-btn { margin-left: auto; }
 .column-hint { font-size: 11px; color: var(--muted); padding: 0 12px 6px; }
 .column-body { flex: 1; overflow-y: auto; padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 8px; min-height: 60px; }
@@ -564,8 +567,8 @@ textarea { resize: vertical; font-size: 13.5px; }
 .icon-btn-placeholder { width: 26px; height: 26px; }
 .column-hint { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 22px; font-size: 11.5px; }
 .claude-tag {
-  display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--accent); background: var(--accent-soft); padding: 1px 7px; border-radius: 99px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+  color: var(--accent); background: var(--accent-soft); border-radius: 99px; flex: none;
 }
 .column.claude-zone { background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface-2)); box-shadow: inset 0 3px 0 var(--accent); }
 .col-ready .column-title::before, .col-in_progress .column-title::before, .col-review .column-title::before { display: none; }
