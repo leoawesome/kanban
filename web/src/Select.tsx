@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+
+const GAP = 4;
+const MARGIN = 8;
 
 export interface SelectOption<T extends string> {
   value: T;
@@ -21,6 +25,8 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const root = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<CSSProperties>({ visibility: "hidden" });
   const items = [
     ...options.map((o) => ({ kind: "option" as const, o })),
     ...(footer ?? []).map((f) => ({ kind: "footer" as const, f })),
@@ -30,10 +36,47 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (!root.current?.contains(t) && !menu.current?.contains(t)) setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  // The menu is portaled to <body> with position: fixed so scroll containers (e.g. the ticket
+  // details column) can't clip it. Place it under the trigger, flipping up / shifting left to stay on screen.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos({ visibility: "hidden" });
+      return;
+    }
+    const place = () => {
+      const trigger = root.current?.getBoundingClientRect();
+      const m = menu.current;
+      if (!trigger || !m) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      if (trigger.bottom < 0 || trigger.top > vh) {
+        setOpen(false);
+        return;
+      }
+      const w = m.offsetWidth;
+      const h = m.offsetHeight;
+      const left = Math.max(MARGIN, Math.min(trigger.left, vw - MARGIN - w));
+      const below = vh - trigger.bottom - GAP - MARGIN;
+      const above = trigger.top - GAP - MARGIN;
+      const up = h > below && above > below;
+      setPos(up
+        ? { left, bottom: vh - trigger.top + GAP, minWidth: trigger.width, maxHeight: Math.min(320, above) }
+        : { left, top: trigger.bottom + GAP, minWidth: trigger.width, maxHeight: Math.min(320, below) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
   }, [open]);
 
   const openMenu = () => {
@@ -87,8 +130,8 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
           <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {open && (
-        <div className="select-menu" role="listbox">
+      {open && createPortal(
+        <div className="select-menu" role="listbox" ref={menu} style={pos}>
           {items.map((it, i) =>
             it.kind === "option" ? (
               <div key={it.o.value} role="option" aria-selected={it.o.value === value} aria-disabled={it.o.disabled}
@@ -105,7 +148,8 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
               </div>
             ),
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
