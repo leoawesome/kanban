@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { api, copy, COLUMNS, safeHref, subscribe, type ClaudeSession, type Profile, type Status, type Ticket } from "./api";
+import { api, copy, COLUMNS, safeHref, startWorkTarget, subscribe, type ClaudeSession, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
-import { Chat } from "./Chat";
+import { Chat, useStop } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { useImagePaste } from "./imagePaste";
 import { ModeToggle } from "./ModeToggle";
@@ -94,6 +94,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
   const [outputCount, setOutputCount] = useState(0);
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmStart, setConfirmStart] = useState(false);
   const [picking, setPicking] = useState(false);
   const [linked, setLinked] = useState<ClaudeSession | null>(null);
   const [detailsOpen, setDetailsOpenState] = useState(() => {
@@ -124,6 +125,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
   const titleRef = useRef<HTMLInputElement>(null);
   const working = ticket.status === "in_progress" || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
+  const { stopping, stop } = useStop(slug, ticket, working, (m) => setPanelError(m));
   const { width, dragging, handle } = usePanelWidth();
 
   const loadOutputs = () => api.outputs(slug, ticket.id).then((o) => setOutputCount(o.length)).catch(() => {});
@@ -184,6 +186,8 @@ export function TicketDrawer({ profile, ticket, onClose }: {
   };
   const setStatus = (status: Status) => act(() => api.updateTicket(slug, ticket.id, { status }));
   const col = COLUMNS.find((c) => c.id === ticket.status);
+  const startTarget = startWorkTarget(ticket);
+  const startWork = () => (startTarget === "planning" ? setStatus("planning") : setConfirmStart(true));
 
   return (
     <div className="drawer-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -223,10 +227,10 @@ export function TicketDrawer({ profile, ticket, onClose }: {
             {col && <p className="field-help">{col.claude ? "✦ " : ""}{col.hint}</p>}
 
             <div className="action-stack">
-              {working && <button className="btn danger" onClick={() => act(() => api.stop(slug, ticket.id))}>Stop Claude</button>}
+              {working && <button className="btn danger" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop Claude"}</button>}
               {!working && (ticket.status === "backlog" || ticket.status === "planning") && (
                 <button className={`btn ${att?.kind === "questions" || att?.kind === "proposal" ? "" : "primary"}`}
-                  onClick={() => setStatus("ready")} title="Claude works on the ticket on its own">Start work</button>
+                  onClick={startWork} title={startTarget === "planning" ? "Claude interviews you first" : "Claude works on its own"}>Start work</button>
               )}
               {!working && ticket.status === "backlog" && (
                 <button className="btn" onClick={() => setStatus("planning")}>Refine with Claude</button>
@@ -334,6 +338,13 @@ export function TicketDrawer({ profile, ticket, onClose }: {
             onPick={(s) => act(async () => { await api.linkSession(slug, ticket.id, s.id); setPicking(false); })} />
         )}
         {ticket.error?.startsWith("corrupt") && <div className="banner error inline"><pre>{ticket.error}</pre></div>}
+        {confirmStart && (
+          <ConfirmDialog title="Start work?" confirmLabel="Start work" busyLabel="Starting…" tone="primary"
+            onCancel={() => setConfirmStart(false)}
+            onConfirm={async () => { await api.updateTicket(slug, ticket.id, { status: "ready" }); setConfirmStart(false); }}>
+            <p>Claude will work on this on its own. When working: <b>{ticket.mode === "interview" ? "Interview me first" : "Just do it"}</b>.</p>
+          </ConfirmDialog>
+        )}
         {confirmDelete && (
           <ConfirmDialog title={`Delete "${ticket.title}"?`} confirmLabel="Delete ticket" onCancel={() => setConfirmDelete(false)}
             onConfirm={async () => { await api.deleteTicket(slug, ticket.id); onClose(); }}>

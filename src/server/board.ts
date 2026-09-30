@@ -229,7 +229,8 @@ export class Board {
         this.store.appendActivity(slug, id, runNo, ev);
         this.bus.emit({ type: "activity", profile: slug, id, run: runNo, event: ev });
         const s = summarizeEvent(ev);
-        if (!s) return;
+        // Keep "Stopping…" on the card until the process is gone.
+        if (!s || run.stopRequested) return;
         pendingActivity = s;
         const now = Date.now();
         if (now - lastWrite >= ACTIVITY_THROTTLE_MS) {
@@ -256,7 +257,7 @@ export class Board {
 
     if (run.handle.stopped) {
       this.store.addComment(slug, id, "ai", "Run stopped by user.");
-      this.patch(slug, id, { ...base, outcome: "stopped", error: null });
+      this.patch(slug, id, { ...base, outcome: "stopped", error: null, lastActivity: null });
       return;
     }
     if (out.code !== 0) {
@@ -441,14 +442,23 @@ export class Board {
   }
 
   private stopRun(run: ActiveRun) {
+    // Show the stop at once: setup (worktree, session checks) or SIGTERM can take a while to finish.
+    if (!run.stopRequested && this.store.getTicket(run.slug, run.id)) this.patch(run.slug, run.id, { lastActivity: "Stopping…" });
     run.stopRequested = true;
     run.handle?.stop();
   }
 
   stop(slug: string, id: string): boolean {
     const r = this.runs.get(this.key(slug, id));
-    if (!r) return false;
-    this.stopRun(r);
+    if (r) {
+      this.stopRun(r);
+      return true;
+    }
+    // In Progress with no run behind it (e.g. the daemon lost it): clear the card instead of leaving it stuck.
+    const t = this.store.getTicket(slug, id);
+    if (t?.status !== "in_progress") return false;
+    this.store.addComment(slug, id, "ai", "Run stopped by user.");
+    this.patch(slug, id, { status: "review", outcome: "stopped", error: null, lastActivity: null });
     return true;
   }
 

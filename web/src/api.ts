@@ -12,6 +12,12 @@ export const COLUMNS: { id: Status; label: string; hint: string; claude: boolean
   { id: "done", label: "Done", hint: "Finished", claude: false },
 ];
 
+/** Start work on a Backlog ticket nobody shaped yet goes through the Planning interview first. */
+export function startWorkTarget(t: Ticket): "planning" | "ready" {
+  const untouched = !t.refineStarted && !t.interviewed && t.runCount === 0 && !t.workdir && !t.sessionStarted;
+  return t.status === "backlog" && untouched ? "planning" : "ready";
+}
+
 export type AttentionKind = "failed" | "blocked" | "questions" | "proposal" | "review" | "reply";
 
 export interface Profile {
@@ -31,6 +37,9 @@ export interface Ticket {
   title: string;
   status: Status;
   mode?: TicketMode;
+  interviewed?: boolean;
+  sessionStarted?: boolean;
+  refineStarted?: boolean;
   order: number;
   sessionId: string | null;
   worktree: string | null;
@@ -194,7 +203,10 @@ export const api = {
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),
   activity: (slug: string, id: string) => req<ActivityEntry[]>("GET", `${t(slug, id)}/activity`),
   inbox: () => req<InboxItem[]>("GET", "/api/inbox"),
-  stop: (slug: string, id: string) => req<{ stopped: boolean }>("POST", `${t(slug, id)}/stop`),
+  stop: (slug: string, id: string) => req<{ stopped: boolean }>("POST", `${t(slug, id)}/stop`).then((r) => {
+    if (!r.stopped) throw new Error("Claude is not running on this ticket.");
+    return r;
+  }),
   checkPr: (slug: string, id: string) => req<{ state: string | null }>("POST", `${t(slug, id)}/check-pr`),
   planningCommand: (slug: string, id: string) => req<{ command: string }>("POST", `${t(slug, id)}/planning-command`),
   /** Raw image bytes; the server saves them and returns the URL to put in markdown. */
