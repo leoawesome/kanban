@@ -24,8 +24,11 @@ export type ArtifactOutcome =
 
 /** How a board run calls this helper (the daemon may run from source, so `ckanban` isn't on PATH). */
 export function helperCommand(): string {
-  const argv = IS_BINARY ? [process.execPath] : [process.execPath, join(import.meta.dir, "..", "cli.ts")];
-  return argv.map(shellQuote).join(" ");
+  return helperArgv().map(shellQuote).join(" ");
+}
+
+export function helperArgv(): string[] {
+  return IS_BINARY ? [process.execPath] : [process.execPath, join(import.meta.dir, "..", "cli.ts")];
 }
 
 /** Env for the helper: drop the markers a board run passes down, or the child counts as SDK and loses Artifact. */

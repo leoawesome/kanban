@@ -19,6 +19,7 @@ Local kanban board for [Claude Code](https://claude.com/claude-code). Drop a tic
 - **Links and shortcuts**: an open ticket is in the URL (`#/<board>/<ticket>`), so refresh keeps it and Back closes it. `N` new ticket, `/` search this board, ``Ctrl+` `` terminal & files, `Esc` close.
 - **Connections**: the top bar's *Connections* opens your Claude Code MCP servers, like `/mcp` (as `claude mcp list` sees them from your home folder, re-checked every 10 minutes). Log in again when an OAuth server expires (the browser opens; the status updates by itself), log out, add or remove user-scope servers. The badge counts servers that failed or used to work and now need you to log in.
 - **Schedules**: the top bar's *Schedules* holds recurring tickets for the board: a name, ticket title (`{date}` / `{time}` filled in), prompt and cron expression (presets, or any 5-field cron in local time). Each time one fires, a new ticket is created and starts right away; cards from schedules carry a clock badge, failed runs land in the inbox. Pause/resume, *Run now*, and a history of every fire (ticket + status, or "skipped" while the previous run is still going). The daemon itself keeps time (no system crontab, no Claude Code `/loop`), so schedules only fire while it runs; a run missed while it was off fires once on start.
+- **Use the board from other agents**: Claude Code, Codex (or any MCP client) can create, list, update, move, start, steer and stop tickets through `ckanban mcp`, so you can say "find what's left to do in this repo and put it on my board". See [Use the board from Claude Code / Codex](#use-the-board-from-claude-code--codex).
 - **PR tracking**: Review cards with a PR are checked every 5 minutes via `gh`; merged → Done (worktree removed).
 
 Columns: Backlog → Planning → Ready → In Progress → Review → Done.
@@ -65,6 +66,46 @@ ckanban uninstall   # stop and remove the service (your boards in ~/.claude-kanb
 ```
 
 Logs: `~/.claude-kanban/daemon.log`. If `ckanban` isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc`.
+
+### Use the board from Claude Code / Codex
+
+`ckanban mcp` is an MCP server (stdio) that gives other agents tools for your board, so you can manage it from any Claude Code or Codex session:
+
+```bash
+ckanban mcp install            # register it with Claude Code (user scope) and Codex (~/.codex/config.toml)
+ckanban mcp install --codex    # just one of them (--claude / --codex)
+ckanban mcp status             # where it's registered
+ckanban mcp uninstall
+```
+
+Or open *Connections* on the board and click **Add** next to Claude Code / Codex. Other MCP clients can run `ckanban mcp` themselves.
+
+Then ask, for example:
+
+- "Scan this repo for TODOs and unfinished work and create a ticket on my board for each."
+- "What's on my board? Start the dark-mode ticket."
+- "Tell the ticket about the login bug to also cover password reset."
+
+Tools: `list_profiles`, `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket`, `move_ticket`, `chat_ticket`, `stop_ticket`, `comment_ticket`, `delete_ticket`. New tickets land in **Backlog** in interview mode unless you ask otherwise. Every tool acts on the board whose folder contains the agent's working directory (a git worktree counts as its main checkout); pass `profile` to pick another. Answering a question form and applying a proposed ticket still happen on the board.
+
+Board runs see the same server but can only read: inside a run (`CKANBAN_TICKET` is set) every tool that changes the board refuses, so a run can't create or start other runs.
+
+The same operations work from a terminal:
+
+```bash
+ckanban profiles
+ckanban ticket list [--status ready]
+ckanban ticket show <id>
+ckanban ticket create --title "Add dark mode" --body-file notes.md   # or --body "...", or --body - (stdin)
+ckanban ticket update <id> [--title ...] [--body ...] [--status ...] [--mode interview|auto]
+ckanban ticket move <id> ready     # starts a run, like dragging the card
+ckanban ticket chat <id> "also handle the empty state"
+ckanban ticket comment <id> "note for the next run"
+ckanban ticket stop <id>
+ckanban ticket delete <id>
+```
+
+Add `--profile <slug>` to pick a board explicitly and `--json` for machine-readable output. The daemon must be running.
 
 ### claude.ai artifacts from board runs
 

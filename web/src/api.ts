@@ -209,6 +209,18 @@ export interface McpAddInput {
   headers?: { name: string; value: string }[];
 }
 
+/** An outside agent that can use the board through `ckanban mcp`. */
+export interface AgentStatus {
+  id: "claude" | "codex";
+  label: string;
+  available: boolean;
+  installed: boolean;
+  /** Registered with this ckanban's command (false: an old path). */
+  current: boolean;
+  command: string | null;
+  configPath: string;
+}
+
 export interface McpConfig extends McpAddInput {
   scope: McpScope;
   /** Shell line that starts a stdio server like Claude does (env included). Null for http/sse. */
@@ -346,6 +358,9 @@ export const api = {
   mcpRecheck: (name: string) => req<McpState>("POST", `/api/mcp/${encodeURIComponent(name)}/recheck`),
   mcpConfig: (name: string) => req<McpConfig>("GET", `/api/mcp/${encodeURIComponent(name)}/config`),
   mcpUpdate: (name: string, input: McpAddInput) => req<McpState>("PUT", `/api/mcp/${encodeURIComponent(name)}`, input),
+  agents: () => req<AgentStatus[]>("GET", "/api/agents"),
+  agentInstall: (id: AgentStatus["id"]) => req<AgentStatus[]>("POST", `/api/agents/${id}/install`),
+  agentUninstall: (id: AgentStatus["id"]) => req<AgentStatus[]>("POST", `/api/agents/${id}/uninstall`),
   openFile: (slug: string, path: string) => req<{ ok: true }>("POST", `/api/profiles/${encodeURIComponent(slug)}/open-file`, { path }),
   stop: (slug: string, id: string) => req<{ stopped: boolean }>("POST", `${t(slug, id)}/stop`).then((r) => {
     if (!r.stopped) throw new Error("Claude is not running on this ticket.");

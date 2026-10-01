@@ -311,7 +311,8 @@ export class Board {
       cwd: session.dir,
       args: buildArgs(session.sessionId, session.existed, profile.model, refine ? "plan" : "bypassPermissions"),
       input: prompt,
-      env: { CKANBAN_OUTPUT_DIR: outputDir },
+      // CKANBAN_TICKET marks board runs: the ckanban MCP/CLI refuses board changes there (no runs starting runs).
+      env: { CKANBAN_OUTPUT_DIR: outputDir, CKANBAN_TICKET: `${slug}/${id}` },
       onEvent: (ev) => {
         const changed = draft.feed(ev);
         if (changed !== null) {

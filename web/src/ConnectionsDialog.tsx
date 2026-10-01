@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { api, copy, safeHref, type McpAddInput, type McpConfig, type McpServer, type McpState, type McpTransport } from "./api";
+import { useEffect, useState } from "react";
+import { api, copy, safeHref, type AgentStatus, type McpAddInput, type McpConfig, type McpServer, type McpState, type McpTransport } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CloseIcon, CopyIcon, TerminalIcon } from "./icons";
 import { Modal } from "./Modal";
@@ -261,6 +261,7 @@ export function ConnectionsDialog({ state, onClose, onRunInTerminal }: {
         {state && !servers.length && state.checking && !state.checkedAt && (
           <div className="muted">Checking every server takes a little while (they're all health-checked)…</div>
         )}
+        <AgentsSection />
         {section("Needs attention", attention)}
         {section("Servers", mine)}
         {section("claude.ai connectors", connectors)}
@@ -297,6 +298,67 @@ export function ConnectionsDialog({ state, onClose, onRunInTerminal }: {
         </ConfirmDialog>
       )}
     </Modal>
+  );
+}
+
+/** Registers `ckanban mcp` with Claude Code and Codex so they can create and manage tickets here. */
+function AgentsSection() {
+  const [agents, setAgents] = useState<AgentStatus[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    api.agents().then(setAgents, (e) => setErr(e.message));
+  }, []);
+
+  const act = async (a: AgentStatus, install: boolean) => {
+    setBusy(a.id);
+    setErr(null);
+    try {
+      setAgents(await (install ? api.agentInstall(a.id) : api.agentUninstall(a.id)));
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="mcp-section">
+      <div className="inbox-board">Use this board from Claude Code / Codex</div>
+      <span className="muted small">
+        Adds the <code>ckanban</code> MCP server, so you can ask those agents things like "find what's left to do in this repo and put it on my board".
+      </span>
+      {err && <div className="form-error" role="alert">{err}</div>}
+      {!agents && !err && <div className="muted small"><span className="spinner" /> Checking…</div>}
+      {agents?.map((a) => {
+        const [label, tone] = !a.installed ? ["Not added", "stopped"] : a.current ? ["Added", "ok"] : ["Old command", "blocked"];
+        return (
+          <div key={a.id} className="mcp-item">
+            <div className="mcp-row">
+              <div className="mcp-main">
+                <div className="mcp-name">
+                  <span>{a.label}</span>
+                  <span className={`badge ${tone}`}>{label}</span>
+                  {!a.available && <span className="badge stopped" title={`${a.id} isn't on PATH`}>not installed</span>}
+                </div>
+                {a.command && <span className="mcp-target" title={a.command}>{a.command}</span>}
+                {a.installed && !a.current && <div className="mcp-msg">Points at another ckanban install. Click Update to use this one.</div>}
+              </div>
+              <div className="mcp-actions">
+                {(!a.installed || !a.current) && (
+                  <button className="btn small primary" disabled={busy === a.id} onClick={() => act(a, true)}>
+                    {busy === a.id ? "Adding…" : a.installed ? "Update" : "Add"}
+                  </button>
+                )}
+                {a.installed && (
+                  <button className="btn small ghost danger" disabled={busy === a.id} onClick={() => act(a, false)}>Remove</button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

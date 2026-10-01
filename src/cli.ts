@@ -2,12 +2,16 @@
 import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { boardPort, ClientError } from "./client";
+import { serveStdio } from "./mcp-server";
 import { runArtifactJob } from "./server/artifact";
 import { LABEL, PLIST_PATH, plistXml } from "./server/launchd";
 import { startDaemon } from "./server/main";
-import { defaultRoot, Store } from "./server/store";
+import { AgentError } from "./server/agents";
+import { defaultRoot } from "./server/store";
 import { latestRelease } from "./server/update";
 import { IS_BINARY, VERSION } from "./server/version";
+import { mcpCommand, profilesCommand, ticketCommand, TICKET_USAGE } from "./ticket-cli";
 
 const USAGE = `ckanban — kanban board for Claude Code
 
@@ -23,6 +27,7 @@ Usage:
                        Publish a page to claude.ai (works from headless board runs)
   ckanban artifact read <url> [--out <file>]
                        Save an artifact's page source to a local file
+${TICKET_USAGE}
   ckanban --version    Print the version
 `;
 
@@ -32,8 +37,18 @@ async function sh(cmd: string[]): Promise<number> {
 }
 
 function boardUrl(): string {
-  const port = Number(process.env.CKANBAN_PORT) || new Store(defaultRoot()).config().port;
-  return `http://localhost:${port}`;
+  return `http://localhost:${boardPort()}`;
+}
+
+/** Board commands print the error alone (no stack) and exit 1. */
+async function board(fn: () => Promise<void>) {
+  try {
+    await fn();
+  } catch (e) {
+    if (!(e instanceof ClientError || e instanceof AgentError)) throw e;
+    console.error(e.message);
+    process.exit(1);
+  }
 }
 
 async function install() {
@@ -181,6 +196,17 @@ switch (cmd) {
     break;
   case "artifact":
     await artifact(process.argv.slice(3));
+    break;
+  case "profiles":
+    await board(() => profilesCommand(process.argv.slice(3)));
+    break;
+  case "ticket":
+  case "tickets":
+    await board(() => ticketCommand(process.argv.slice(3)));
+    break;
+  case "mcp":
+    if (process.argv.length === 3) await serveStdio();
+    else await board(() => mcpCommand(process.argv.slice(3)));
     break;
   case "--version":
   case "-v":

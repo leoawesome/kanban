@@ -12,6 +12,7 @@ import { attentionFor } from "./attention";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
 import { FileError, listDir, openWithSystem, readFileForView } from "./files";
 import { McpError, McpManager } from "./mcp";
+import { AGENT_IDS, AgentError, AgentRegistry, type AgentId } from "./agents";
 import { SessionCache } from "./session";
 import { ptySupported, ShellManager, type Shell } from "./shell";
 import type { TerminalWatcher } from "./terminals";
@@ -34,6 +35,7 @@ export interface ServerDeps {
   shells?: ShellManager;
   mcp?: McpManager;
   scheduler?: Scheduler;
+  agents?: AgentRegistry;
 }
 
 interface ShellSocket {
@@ -90,6 +92,7 @@ export function createServer(deps: ServerDeps) {
   const shells = deps.shells ?? new ShellManager();
   const mcp = deps.mcp ?? new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
   const scheduler = deps.scheduler ?? new Scheduler(board, store, bus);
+  const agents = deps.agents ?? new AgentRegistry();
 
   const profileOr404 = (slug: string): Profile => {
     const p = store.getProfile(slug);
@@ -210,6 +213,18 @@ export function createServer(deps: ServerDeps) {
       if (parts.length === 2 && m === "PUT") {
         await mcp.update(name, await body(req));
         return json(mcp.state());
+      }
+      throw new HttpError(404, "not found");
+    }
+
+    // Connections panel: is `ckanban mcp` registered with Claude Code / Codex, and (un)register it.
+    if (parts[0] === "agents") {
+      if (parts.length === 1 && m === "GET") return json(await agents.status());
+      const id = parts[1] as AgentId;
+      if (parts.length === 3 && m === "POST" && AGENT_IDS.includes(id) && (parts[2] === "install" || parts[2] === "uninstall")) {
+        await (parts[2] === "install" ? agents.install(id) : agents.uninstall(id));
+        if (id === "claude") mcp.refresh();
+        return json(await agents.status());
       }
       throw new HttpError(404, "not found");
     }
@@ -569,6 +584,7 @@ export function createServer(deps: ServerDeps) {
         if (e instanceof HttpError) return json({ error: e.message }, e.status);
         if (e instanceof ConflictError) return json({ error: e.message }, 409);
         if (e instanceof McpError) return json({ error: e.message }, e.status);
+        if (e instanceof AgentError) return json({ error: e.message }, e.status);
         if (e instanceof ScheduleError) return json({ error: e.message }, e.status);
         if (e instanceof URIError) return json({ error: "malformed URL" }, 400);
         console.error(e);
