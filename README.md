@@ -18,6 +18,7 @@ Local kanban board for [Claude Code](https://claude.com/claude-code). Drop a tic
 - **"Need you" inbox**: the top bar counts tickets on every board where Claude is waiting on you (questions, proposal, reply, blocked, failed); the browser tab shows the count too. Click to jump to one.
 - **Links and shortcuts**: an open ticket is in the URL (`#/<board>/<ticket>`), so refresh keeps it and Back closes it. `N` new ticket, `/` search this board, ``Ctrl+` `` terminal & files, `Esc` close.
 - **Connections**: the top bar's *Connections* opens your Claude Code MCP servers, like `/mcp` (as `claude mcp list` sees them from your home folder, re-checked every 10 minutes). Log in again when an OAuth server expires (the browser opens; the status updates by itself), log out, add or remove user-scope servers. The badge counts servers that failed or used to work and now need you to log in.
+- **Schedules**: the top bar's *Schedules* holds recurring tickets for the board: a name, ticket title (`{date}` / `{time}` filled in), prompt and cron expression (presets, or any 5-field cron in local time). Each time one fires, a new ticket is created and starts right away; cards from schedules carry a clock badge, failed runs land in the inbox. Pause/resume, *Run now*, and a history of every fire (ticket + status, or "skipped" while the previous run is still going). The daemon itself keeps time (no system crontab, no Claude Code `/loop`), so schedules only fire while it runs; a run missed while it was off fires once on start.
 - **PR tracking**: Review cards with a PR are checked every 5 minutes via `gh`; merged → Done (worktree removed).
 
 Columns: Backlog → Planning → Ready → In Progress → Review → Done.
@@ -85,6 +86,8 @@ The server binds to `127.0.0.1` only and rejects requests with a non-localhost `
   profiles/<slug>/tickets/<id>/ticket.md        YAML frontmatter + description
   profiles/<slug>/tickets/<id>/comments.jsonl
   profiles/<slug>/tickets/<id>/activity.jsonl   raw stream-json events
+  profiles/<slug>/schedules/<id>.json           recurring ticket template
+  profiles/<slug>/schedules/<id>.history.jsonl  fires, skips and errors
 ```
 
 Env overrides: `CKANBAN_HOME`, `CKANBAN_PORT`, `CKANBAN_CLAUDE_BIN`.

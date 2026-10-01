@@ -378,7 +378,7 @@ export class Board {
     return planningCommand(s.dir, s.sessionId, localizeImages(planningPrompt(t, this.store.ticketPath(slug, id)), this.store.attachmentsDir), s.existed);
   }
 
-  async createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode }): Promise<Ticket> {
+  async createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string }): Promise<Ticket> {
     const status = input.status === "in_progress" ? "ready" : input.status;
     const t = this.store.createTicket(slug, { ...input, status });
     this.emitTicket(slug, t);

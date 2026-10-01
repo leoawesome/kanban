@@ -1,6 +1,6 @@
 import type { McpState } from "./mcp";
 import type { SessionSummary } from "./session";
-import type { Profile, Ticket } from "./types";
+import type { Profile, Schedule, Ticket } from "./types";
 
 export type BusEvent =
   | { type: "ticket.updated"; profile: string; ticket: Ticket }
@@ -11,7 +11,9 @@ export type BusEvent =
   /** Text Claude is writing right now in this ticket's run ("" = cleared). Not persisted. */
   | { type: "draft"; profile: string; id: string; text: string }
   /** Connections panel: cached `claude mcp list` result, login progress. */
-  | { type: "mcp.updated"; state: McpState };
+  | { type: "mcp.updated"; state: McpState }
+  /** A schedule was created, changed (fired, paused, edited) or deleted (schedule: null). */
+  | { type: "schedule.updated"; profile: string; id: string; schedule: Schedule | null };
 
 export class Bus {
   private listeners = new Set<(e: BusEvent) => void>();

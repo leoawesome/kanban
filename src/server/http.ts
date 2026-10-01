@@ -6,6 +6,8 @@ import type { Bus, BusEvent } from "./events";
 import { detectBaseBranch, isGitRepo, which } from "./git";
 import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
+import { cronError, describeCron, nextRuns, parseCron } from "./cron";
+import { ScheduleError, Scheduler } from "./scheduler";
 import { attentionFor } from "./attention";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
 import { FileError, listDir, readFileForView } from "./files";
@@ -31,6 +33,7 @@ export interface ServerDeps {
   terminals?: TerminalWatcher;
   shells?: ShellManager;
   mcp?: McpManager;
+  scheduler?: Scheduler;
 }
 
 interface ShellSocket {
@@ -86,6 +89,7 @@ export function createServer(deps: ServerDeps) {
   const updates = deps.updates ?? new UpdateChecker();
   const shells = deps.shells ?? new ShellManager();
   const mcp = deps.mcp ?? new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
+  const scheduler = deps.scheduler ?? new Scheduler(board, store, bus);
 
   const profileOr404 = (slug: string): Profile => {
     const p = store.getProfile(slug);
@@ -200,6 +204,14 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
 
+    // Schedule form preview: is the expression valid, what it means, when it fires next.
+    if (parts[0] === "cron" && parts[1] === "preview" && parts.length === 2 && m === "GET") {
+      const expr = (url.searchParams.get("expr") ?? "").trim();
+      const error = expr ? cronError(expr) : "cron expression is required";
+      if (error) return json({ valid: false, error, summary: null, next: [] });
+      return json({ valid: true, error: null, summary: describeCron(expr), next: nextRuns(parseCron(expr), new Date(), 3).map((d) => d.toISOString()) });
+    }
+
     if (parts[0] === "claude" && parts[1] === "projects" && m === "GET") {
       const taken = new Set(store.listProfiles().map((p) => p.path));
       return json(listClaudeProjects().map((p) => ({ ...p, hasProfile: taken.has(p.path) })));
@@ -295,6 +307,24 @@ export function createServer(deps: ServerDeps) {
       const data: ShellSocket = { slug, cwd: profile.path, cols: dim("cols", 80), rows: dim("rows", 24) };
       if (server.upgrade(req, { data })) return undefined;
       throw new HttpError(400, "expected a WebSocket upgrade");
+    }
+
+    // /profiles/:p/schedules — recurring ticket templates
+    if (parts[2] === "schedules") {
+      if (parts.length === 3 && m === "GET") return json(store.listSchedules(slug).map((s) => scheduler.view(slug, s)));
+      if (parts.length === 3 && m === "POST") return json(scheduler.view(slug, scheduler.create(slug, (await body(req)) ?? {})), 201);
+      const sid = parts[3];
+      if (parts.length === 4 && m === "PATCH") return json(scheduler.view(slug, scheduler.update(slug, sid, (await body(req)) ?? {})));
+      if (parts.length === 4 && m === "DELETE") {
+        scheduler.remove(slug, sid);
+        return new Response(null, { status: 204 });
+      }
+      if (parts.length === 5 && parts[4] === "history" && m === "GET") return json(scheduler.history(slug, sid));
+      if (parts.length === 5 && parts[4] === "run" && m === "POST") {
+        const entry = await scheduler.runNow(slug, sid);
+        return json({ entry, schedule: scheduler.view(slug, scheduler.get(slug, sid)) });
+      }
+      throw new HttpError(404, "not found");
     }
 
     // /profiles/:p/tickets
@@ -506,6 +536,7 @@ export function createServer(deps: ServerDeps) {
         if (e instanceof HttpError) return json({ error: e.message }, e.status);
         if (e instanceof ConflictError) return json({ error: e.message }, 409);
         if (e instanceof McpError) return json({ error: e.message }, e.status);
+        if (e instanceof ScheduleError) return json({ error: e.message }, e.status);
         if (e instanceof URIError) return json({ error: "malformed URL" }, 400);
         console.error(e);
         return json({ error: (e as Error).message ?? "internal error" }, 500);

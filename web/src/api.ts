@@ -77,6 +77,8 @@ export interface Ticket {
   lastRunAt: string | null;
   runCount: number;
   error: string | null;
+  /** Created by this schedule. */
+  scheduleId?: string | null;
   createdAt: string;
   updatedAt: string;
   body: string;
@@ -196,6 +198,42 @@ export interface McpAddInput {
   headers?: { name: string; value: string }[];
 }
 
+export interface Schedule {
+  id: string;
+  name: string;
+  title: string;
+  body: string;
+  mode: TicketMode;
+  cron: string;
+  enabled: boolean;
+  skipIfRunning: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastFiredAt: string | null;
+  nextRunAt: string | null;
+  lastError: string | null;
+  /** Plain-English cron, e.g. "Weekdays at 09:00". */
+  summary: string;
+  /** Its previous ticket is still queued or running. */
+  active: boolean;
+}
+
+export type ScheduleInput = Pick<Schedule, "name" | "title" | "body" | "mode" | "cron" | "skipIfRunning">;
+
+export type ScheduleTrigger = "schedule" | "missed" | "manual";
+
+export type ScheduleHistoryItem = { at: string; trigger: ScheduleTrigger } & (
+  | { kind: "fired" | "skipped"; ticketId: string | null }
+  | { kind: "error"; message: string }
+) & { ticket: { id: string; title: string; status: Status; outcome: Outcome; running: boolean } | null };
+
+export interface CronPreview {
+  valid: boolean;
+  error: string | null;
+  summary: string | null;
+  next: string[];
+}
+
 export type BusEvent =
   | { type: "ticket.updated"; profile: string; ticket: Ticket }
   | { type: "ticket.deleted"; profile: string; id: string }
@@ -203,7 +241,8 @@ export type BusEvent =
   | { type: "profile.updated"; slug: string; profile: Profile | null }
   | { type: "session.updated"; profile: string; id: string; session: SessionSummary }
   | { type: "draft"; profile: string; id: string; text: string }
-  | { type: "mcp.updated"; state: McpState };
+  | { type: "mcp.updated"; state: McpState }
+  | { type: "schedule.updated"; profile: string; id: string; schedule: Omit<Schedule, "summary" | "active"> | null };
 
 export interface InboxItem {
   profile: string;
@@ -225,6 +264,9 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   if (!r.ok) throw new Error((data as any).error ?? `${r.status} ${r.statusText}`);
   return data as T;
 }
+
+const sch = (slug: string, id?: string) =>
+  `/api/profiles/${encodeURIComponent(slug)}/schedules${id ? `/${encodeURIComponent(id)}` : ""}`;
 
 const t = (slug: string, id?: string) =>
   `/api/profiles/${encodeURIComponent(slug)}/tickets${id ? `/${encodeURIComponent(id)}` : ""}`;
@@ -268,6 +310,13 @@ export const api = {
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),
   activity: (slug: string, id: string) => req<ActivityEntry[]>("GET", `${t(slug, id)}/activity`),
   inbox: () => req<InboxItem[]>("GET", "/api/inbox"),
+  schedules: (slug: string) => req<Schedule[]>("GET", sch(slug)),
+  createSchedule: (slug: string, input: ScheduleInput) => req<Schedule>("POST", sch(slug), input),
+  updateSchedule: (slug: string, id: string, patch: Partial<ScheduleInput & { enabled: boolean }>) => req<Schedule>("PATCH", sch(slug, id), patch),
+  deleteSchedule: (slug: string, id: string) => req<void>("DELETE", sch(slug, id)),
+  runSchedule: (slug: string, id: string) => req<{ entry: ScheduleHistoryItem; schedule: Schedule }>("POST", `${sch(slug, id)}/run`),
+  scheduleHistory: (slug: string, id: string) => req<ScheduleHistoryItem[]>("GET", `${sch(slug, id)}/history`),
+  cronPreview: (expr: string) => req<CronPreview>("GET", `/api/cron/preview?expr=${encodeURIComponent(expr)}`),
   mcp: () => req<McpState>("GET", "/api/mcp"),
   mcpRefresh: () => req<McpState>("POST", "/api/mcp/refresh"),
   mcpAdd: (input: McpAddInput) => req<McpState>("POST", "/api/mcp", input),

@@ -272,3 +272,50 @@ test.skipIf(!ptySupported())("shell socket runs commands on a PTY and replays ou
   b.ws.send(JSON.stringify({ type: "input", data: "exit\n" }));
   b.ws.close();
 }, 15_000);
+
+test("cron preview", async () => {
+  let r = await fetch(`${base}/api/cron/preview?expr=${encodeURIComponent("0 9 * * 1-5")}`);
+  const ok = (await r.json()) as any;
+  expect(ok).toMatchObject({ valid: true, error: null, summary: "Weekdays at 09:00" });
+  expect(ok.next).toHaveLength(3);
+  r = await fetch(`${base}/api/cron/preview?expr=${encodeURIComponent("* *")}`);
+  expect(((await r.json()) as any)).toMatchObject({ valid: false, next: [] });
+});
+
+test("schedule CRUD, run now and history", async () => {
+  let r = await fetch(`${base}/api/profiles`, json("POST", { name: "Sched", path: tempDir("ck-sched-") }));
+  const slug = ((await r.json()) as any).slug;
+  const url = `${base}/api/profiles/${slug}/schedules`;
+
+  r = await fetch(url, json("POST", { name: "Nightly", title: "Audit {date}", body: "go", cron: "nope" }));
+  expect(r.status).toBe(400);
+  expect(((await r.json()) as any).error).toContain("invalid cron expression");
+
+  r = await fetch(url, json("POST", { name: "Nightly", title: "Audit {date}", body: "go", cron: "0 3 * * *" }));
+  expect(r.status).toBe(201);
+  const s = (await r.json()) as any;
+  expect(s).toMatchObject({ name: "Nightly", enabled: true, summary: "Every day at 03:00", active: false });
+  expect(s.nextRunAt).toBeTruthy();
+
+  r = await fetch(`${url}/${s.id}`, json("PATCH", { enabled: false }));
+  expect(((await r.json()) as any)).toMatchObject({ enabled: false, nextRunAt: null });
+
+  r = await fetch(`${url}/${s.id}/run`, json("POST"));
+  const run = (await r.json()) as any;
+  expect(run.entry.kind).toBe("fired");
+  const tickets = (await (await fetch(`${base}/api/profiles/${slug}/tickets`)).json()) as any[];
+  expect(tickets.find((t) => t.id === run.entry.ticketId)?.scheduleId).toBe(s.id);
+
+  r = await fetch(`${url}/${s.id}/history`);
+  const h = (await r.json()) as any[];
+  expect(h[0]).toMatchObject({ kind: "fired", trigger: "manual" });
+  expect(h[0].ticket.id).toBe(run.entry.ticketId);
+
+  r = await fetch(url);
+  expect(((await r.json()) as any[]).map((x) => x.id)).toEqual([s.id]);
+
+  r = await fetch(`${url}/${s.id}`, { method: "DELETE" });
+  expect(r.status).toBe(204);
+  r = await fetch(`${url}/${s.id}/history`);
+  expect(r.status).toBe(404);
+});
