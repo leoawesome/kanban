@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { api, copy, COLUMNS, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Schedule, type Status, type Ticket } from "./api";
 import { ConnectionsDialog } from "./ConnectionsDialog";
 import { HeaderMenu } from "./HeaderMenu";
-import { ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
+import { ChatIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
 import { Inbox } from "./Inbox";
 import { anyLayerOpen } from "./layers";
 import { Board } from "./Board";
@@ -112,6 +112,13 @@ export function App() {
   const [dockCommand, setDockCommand] = useState<{ text: string; n: number } | null>(null);
   // Tab the dock should switch to (C opens the quick Claude chat).
   const [dockTab, setDockTab] = useState<{ tab: DockTab; n: number } | null>(null);
+  // Tab the open dock shows (reported by the dock), for the header buttons' on state.
+  const [dockShown, setDockShown] = useState<DockTab | null>(null);
+  const chatOpen = dockOpen && dockShown === "claude";
+  const openDockOn = (tab: DockTab) => {
+    setDockOpen(true);
+    setDockTab({ tab, n: Date.now() });
+  };
   const [mcp, setMcp] = useState<McpState | null>(null);
   const [connections, setConnections] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
@@ -242,10 +249,7 @@ export function App() {
         setShortcuts(true);
       } else if (e.key === "c" || e.key === "C") {
         e.preventDefault();
-        if (slug) {
-          setDockOpen(true);
-          setDockTab({ tab: "claude", n: Date.now() });
-        }
+        if (slug) openDockOn("claude");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -401,9 +405,17 @@ export function App() {
           openTicket(i.id, i.profile);
         }} />
         {profile && (
-          <button className={`btn ghost icon-label${dockOpen ? " on" : ""}`} onClick={() => setDockOpen((o) => !o)}
-            aria-pressed={dockOpen} title="Terminal and files for this folder (Ctrl+`)" aria-label="Terminal and files">
+          <button className={`btn ghost icon-label${dockOpen && !chatOpen ? " on" : ""}`}
+            onClick={() => (chatOpen ? openDockOn("terminal") : setDockOpen((o) => !o))}
+            aria-pressed={dockOpen && !chatOpen} title="Terminal and files for this folder (Ctrl+`)" aria-label="Terminal and files">
             <TerminalIcon /><span className="label">Terminal & files</span>
+          </button>
+        )}
+        {profile && (
+          <button className={`btn ghost icon-label${chatOpen ? " on" : ""}`}
+            onClick={() => (chatOpen ? setDockOpen(false) : openDockOn("claude"))}
+            aria-pressed={chatOpen} title="Quick chat with Claude in this folder, no ticket needed (C)" aria-label="Quick Claude chat">
+            <ChatIcon /><span className="label">Claude</span>
           </button>
         )}
         {profile && (
@@ -507,7 +519,7 @@ export function App() {
       {dockOpen && profile && (
         <Suspense fallback={null}>
           <Dock profile={profile} pty={health?.pty ?? true} onClose={() => setDockOpen(false)} command={dockCommand}
-            onCommandSent={() => setDockCommand(null)} tabRequest={dockTab} onOpenTicket={(id) => openTicket(id)} />
+            onCommandSent={() => setDockCommand(null)} tabRequest={dockTab} onTabChange={setDockShown} onOpenTicket={(id) => openTicket(id)} />
         </Suspense>
       )}
 

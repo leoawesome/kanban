@@ -34,7 +34,7 @@ const clampHeight = (h: number) => Math.round(Math.max(MIN_HEIGHT, Math.min(wind
  * quick Claude chat (interactive `claude`, no ticket). Closing it only hides it; the shell and the chat
  * keep running on the server and reattach next time.
  */
-export default function Dock({ profile, pty, onClose, command, onCommandSent, tabRequest, onOpenTicket }: {
+export default function Dock({ profile, pty, onClose, command, onCommandSent, tabRequest, onTabChange, onOpenTicket }: {
   profile: Profile;
   pty: boolean;
   onClose: () => void;
@@ -43,6 +43,8 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
   onCommandSent?: () => void;
   /** Switch to this tab (e.g. from a shortcut); `n` changes for each new request. */
   tabRequest?: { tab: DockTab; n: number } | null;
+  /** The visible tab, so the header buttons can show which one is open. */
+  onTabChange?: (tab: DockTab) => void;
   onOpenTicket?: (id: string) => void;
 }) {
   const [tab, setTab] = useState<DockTab>(() => {
@@ -59,7 +61,10 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
   const [makingTicket, setMakingTicket] = useState(false);
   const drag = useRef<{ y: number; h: number } | null>(null);
 
-  useEffect(() => store(TAB_KEY, tab), [tab]);
+  useEffect(() => {
+    store(TAB_KEY, tab);
+    onTabChange?.(tab);
+  }, [tab]);
   useEffect(() => store(HEIGHT_KEY, String(height)), [height]);
   useEffect(() => {
     if (command) setTab("terminal");
