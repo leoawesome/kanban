@@ -453,6 +453,24 @@ test("chat in Planning refines read-only and keeps the card in place", async () 
   expect(readArgs()[1].args).toContain("--resume");
 });
 
+test("runStartedAt is set while Claude works and cleared after, for runs and chat replies", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "Timed", body: "d", status: "backlog" });
+  const started: (string | null | undefined)[] = [];
+  bus.on((e) => { if (e.type === "ticket.updated" && e.ticket.id === t.id) started.push(e.ticket.runStartedAt); });
+  await board.chat("p", t.id, "Shape it");
+  expect(store.getTicket("p", t.id)!.runStartedAt).toBeString();
+  await board.whenIdle();
+  expect(store.getTicket("p", t.id)!.runStartedAt).toBeNull();
+  expect(started.at(-1)).toBeNull();
+  const r = await board.createTicket("p", { title: "Queued", body: "d", status: "ready" });
+  expect(store.getTicket("p", r.id)!.runStartedAt).toBeString();
+  await board.whenIdle();
+  const got = store.getTicket("p", r.id)!;
+  expect(got.status).toBe("review");
+  expect(got.runStartedAt).toBeNull();
+});
+
 test("chat in Review acts right away: In Progress then back to Review", async () => {
   await setup();
   const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });

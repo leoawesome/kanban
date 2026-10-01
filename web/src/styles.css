@@ -202,10 +202,11 @@ kbd {
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .card-activity {
-  margin-top: 4px; font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+  margin-top: 4px; font-size: 12px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .card-meta { display: flex; align-items: center; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
+.card-time { margin-left: auto; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 
 .badge {
   display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 560; padding: 1px 7px;
@@ -217,6 +218,8 @@ kbd {
 .badge.failed { background: var(--err-soft); color: var(--err); }
 .badge.stopped { background: var(--surface-2); color: var(--muted); }
 .badge.pr { background: var(--info-soft); color: var(--info); }
+.badge .spinner { width: 9px; height: 9px; border-width: 1.5px; flex: none; }
+.badge-time { font-weight: 450; opacity: 0.85; font-variant-numeric: tabular-nums; }
 
 .spinner {
   display: inline-block; width: 10px; height: 10px; border-radius: 50%;
@@ -406,7 +409,7 @@ textarea { resize: vertical; font-size: 13.5px; }
 .session-box { margin: 0 20px 12px; display: flex; flex-direction: column; gap: 6px; }
 
 /* card: last session message */
-.card-last { margin-top: 5px; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.card-last { margin-top: 4px; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .card-last .who { font-weight: 600; }
 .card-last .who.assistant { color: var(--accent); }
 .card-last .who.user { color: var(--text); }
@@ -643,8 +646,6 @@ textarea { resize: vertical; font-size: 13.5px; }
 .card.needs-you { border-left: 3px solid var(--warn); }
 .card.needs-you.att-failed, .card.needs-you.att-blocked { border-left-color: var(--err); }
 .card.needs-you.att-review { border-left-color: var(--ok); }
-.card-activity { display: flex; align-items: center; gap: 6px; }
-.card-activity .spinner { width: 9px; height: 9px; flex: none; color: var(--accent); }
 
 /* ============ columns: where Claude runs ============ */
 .column-head { min-height: 38px; }

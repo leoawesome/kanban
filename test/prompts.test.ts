@@ -23,11 +23,44 @@ test("parseResult missing or invalid", () => {
 
 test("summarizeEvent tool uses and text", () => {
   const tool = (name: string, input: any) => ({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
-  expect(summarizeEvent(tool("Edit", { file_path: "/repo/src/app.ts" }))).toBe("Edit: src/app.ts");
-  expect(summarizeEvent(tool("Bash", { command: "npm test" }))).toBe("Bash: npm test");
+  expect(summarizeEvent(tool("Edit", { file_path: "/repo/src/app.ts" }))).toBe("Editing app.ts");
+  expect(summarizeEvent(tool("Bash", { command: "npm test" }))).toBe("Running tests");
   expect(summarizeEvent({ type: "assistant", message: { content: [{ type: "text", text: "x".repeat(200) }] } })).toBe("x".repeat(80));
   expect(summarizeEvent({ type: "result", result: "done" })).toBe("Finished");
   expect(summarizeEvent({ type: "system" })).toBeNull();
+});
+
+test("summarizeEvent describes tool calls in plain English", () => {
+  const tool = (name: string, input: any) => summarizeEvent({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
+  expect(tool("Read", { file_path: "/repo/src/mcp-server.ts" })).toBe("Reading mcp-server.ts");
+  expect(tool("MultiEdit", { file_path: "/repo/web/src/Card.tsx" })).toBe("Editing Card.tsx");
+  expect(tool("Write", { file_path: "/repo/web/src/Card.tsx" })).toBe("Writing Card.tsx");
+  expect(tool("Grep", { pattern: "lastActivity" })).toBe('Searching for "lastActivity"');
+  expect(tool("Glob", { pattern: "**/*.tsx" })).toBe("Finding **/*.tsx");
+  expect(tool("WebFetch", { url: "https://docs.github.com/en/rest" })).toBe("Reading docs.github.com");
+  expect(tool("WebSearch", { query: "bun test" })).toBe("Searching the web");
+  expect(tool("Task", { description: "Find card CSS" })).toBe("Delegating: Find card CSS");
+  expect(tool("Agent", { description: "Review diff" })).toBe("Delegating: Review diff");
+  expect(tool("mcp__ckanban__list_tickets", {})).toBe("ckanban: list tickets");
+  expect(tool("SomethingNew", { path: "/a/b/c.ts" })).toBe("SomethingNew: b/c.ts");
+  expect(tool("SomethingNew", {})).toBe("SomethingNew");
+  const ev = { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "sed -n 1,60p src/x.ts" } }] } };
+  expect(summarizeEvent(ev, { raw: true })).toBe("Bash: sed -n 1,60p src/x.ts");
+});
+
+test("summarizeEvent reads Bash commands", () => {
+  const bash = (command: string) => summarizeEvent({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command } }] } });
+  expect(bash("sed -n 1,60p src/mcp-server.ts")).toBe("Reading mcp-server.ts");
+  expect(bash("cd /repo && cat package.json")).toBe("Reading package.json");
+  expect(bash("head -n 20 web/src/styles.css | grep card")).toBe("Reading styles.css");
+  expect(bash("sed -i '' 's/a/b/' src/x.ts")).toBe("Editing x.ts");
+  expect(bash("cd /repo && bun test test")).toBe("Running tests");
+  expect(bash("FOO=1 bun run test")).toBe("Running tests");
+  expect(bash("git -C /repo status --short")).toBe("Git: status");
+  expect(bash("git commit -m 'x'")).toBe("Git: commit");
+  expect(bash("rg -n 'summarizeEvent' src")).toBe('Searching for "summarizeEvent"');
+  expect(bash("bunx tsc --noEmit")).toBe("Running tsc");
+  expect(bash("cat <<'EOF' > out.txt")).toBe("Running cat");
 });
 
 test("extractFinalText prefers result event", () => {

@@ -35,6 +35,7 @@ export interface TicketInfo {
   prUrl: string | null;
   branch: string | null;
   lastActivity: string | null;
+  runStartedAt?: string | null;
   error: string | null;
   scheduleId?: string | null;
   createdAt: string;

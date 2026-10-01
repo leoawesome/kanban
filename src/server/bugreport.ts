@@ -128,7 +128,7 @@ export function ticketBlock(profile: Profile, t: Ticket, activity: ActivityEntry
 export function logBlock(activity: ActivityEntry[]): BugBlock | null {
   const lines = lastRun(activity)
     .map((e) => {
-      const s = summarizeEvent(e.event);
+      const s = summarizeEvent(e.event, { raw: true });
       return s ? `${e.at.slice(11, 19)} ${s}` : null;
     })
     .filter((s): s is string => !!s);

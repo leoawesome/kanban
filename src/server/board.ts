@@ -214,7 +214,10 @@ export class Board {
         this.runs.delete(this.key(slug, id));
         // Tell the UI the run is over (earlier updates were sent while it was still registered).
         const now = this.store.getTicket(slug, id);
-        if (now && !this.shuttingDown) this.emitTicket(slug, now);
+        if (now && !this.shuttingDown) {
+          if (now.runStartedAt) this.patch(slug, id, { runStartedAt: null });
+          else this.emitTicket(slug, now);
+        }
         // When the user moved the card, updateTicket() writes the new status and dispatches itself.
         if (!this.shuttingDown && !run.targetStatus) this.dispatch(slug);
       });
@@ -222,8 +225,8 @@ export class Board {
 
   private begin(run: ActiveRun) {
     this.patch(run.slug, run.id, run.chat?.mode === "refine"
-      ? { error: null, lastActivity: "Claude is replying…", refineStarted: true }
-      : { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…" });
+      ? { error: null, lastActivity: "Claude is replying…", refineStarted: true, runStartedAt: nowIso() }
+      : { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…", runStartedAt: nowIso() });
   }
 
   /** One claude run, then a chat reply for each message that came in too late for it. */

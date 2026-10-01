@@ -37,6 +37,8 @@ export interface Ticket {
   outcome: Outcome;
   lastActivity: string | null;
   lastRunAt: string | null;
+  /** When the current run or chat reply started; null when Claude is not working. Missing on old tickets. */
+  runStartedAt?: string | null;
   runCount: number;
   error: string | null;
   /** Non-fatal heads-up about how the ticket runs (e.g. no worktree yet); the user can dismiss it. */

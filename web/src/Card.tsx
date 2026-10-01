@@ -1,10 +1,29 @@
+import { useEffect, useState } from "react";
 import { safeHref, type Ticket } from "./api";
 import { ClockIcon } from "./icons";
-import { fullTime, plainPreview, timeAgo, useNow } from "./time";
+import { elapsed, fullTime, plainPreview, timeAgo, useNow } from "./time";
+
+/** Live running time: ticks every second for the first minute, then every 30s. */
+function Elapsed({ since }: { since: string }) {
+  const [now, setNow] = useState(Date.now);
+  const fresh = now - new Date(since).getTime() < 60_000;
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), fresh ? 1000 : 30_000);
+    return () => clearInterval(timer);
+  }, [fresh]);
+  return <span className="badge-time" title={`Started ${fullTime(since)}`}> · {elapsed(since, now)}</span>;
+}
+
+function workingBadge(label: string, since?: string | null) {
+  return <span className="badge running"><span className="spinner" /> {label}{since && <Elapsed since={since} />}</span>;
+}
+
+// Shown by the badge already, so the activity line would only repeat it.
+const QUIET_ACTIVITY = new Set(["Starting…", "Claude is replying…"]);
 
 export function outcomeBadge(t: Ticket) {
-  if (t.status === "in_progress") return <span className="badge running"><span className="spinner" /> Running</span>;
-  if (t.running) return <span className="badge running"><span className="spinner" /> Replying</span>;
+  if (t.status === "in_progress") return workingBadge("Running", t.runStartedAt);
+  if (t.running) return workingBadge("Replying", t.runStartedAt);
   if (t.error?.startsWith("corrupt")) return <span className="badge failed">Corrupt file</span>;
   switch (t.outcome) {
     case "blocked": return <span className="badge blocked">Blocked</span>;
@@ -20,7 +39,7 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
   const working = ticket.status === "in_progress" || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
   const badge = att ? null : outcomeBadge(ticket);
-  const showActivity = working && ticket.lastActivity;
+  const showActivity = working && ticket.lastActivity && !QUIET_ACTIVITY.has(ticket.lastActivity);
   const last = ticket.session?.lastMessage;
   useNow();
   const lastAt = ticket.session ? ticket.session.lastMessage?.at || ticket.session.updatedAt : null;
@@ -37,9 +56,7 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
       )}
       <div className="card-title" title={ticket.title}>{ticket.title}</div>
       {showActivity ? (
-        <div className="card-activity" title={ticket.lastActivity!}>
-          <span className="spinner" /> {ticket.lastActivity}
-        </div>
+        <div className="card-activity" title={ticket.lastActivity!}>{ticket.lastActivity}</div>
       ) : last && (
         <div className="card-last" title={last.text}>
           <span className={`who ${last.role}`}>{last.role === "user" ? "You" : "Claude"}:</span>{" "}
@@ -63,7 +80,7 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
             ? <span className="badge running" title="This ticket's Claude session is open in a terminal"><span className="live-dot" /> In terminal</span>
             : <span className="badge stopped" title="Linked to an existing Claude session">session</span>)}
           {lastAt && !working && (
-            <time className="muted small" dateTime={lastAt} title={fullTime(lastAt)}>{timeAgo(lastAt)}</time>
+            <time className="card-time" dateTime={lastAt} title={fullTime(lastAt)}>{timeAgo(lastAt)}</time>
           )}
         </div>
       )}

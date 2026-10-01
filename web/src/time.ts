@@ -38,6 +38,15 @@ export function timeAgo(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
+/** Short running time since `iso`: "45s", "3m", "1h 5m". */
+export function elapsed(iso: string, at = Date.now()): string {
+  const s = Math.max(0, Math.floor((at - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  const m = Math.floor((s % 3600) / 60);
+  return m ? `${Math.floor(s / 3600)}h ${m}m` : `${Math.floor(s / 3600)}h`;
+}
+
 export function timeUntil(iso: string): string {
   const s = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
   if (s < 60) return "any moment";
