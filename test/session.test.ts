@@ -42,6 +42,19 @@ test("parseSession: timeline, artifacts deduped, last message", () => {
   expect(s.lastMessage).toEqual({ role: "user", text: "looks good, ship it", at: "2026-09-29T01:00:08Z" });
 });
 
+test("parseSession lists pages published by the artifact helper, not other Bash output", () => {
+  const out = "Published /o/claude-surfaces.html at https://claude.ai/artifact/NJd6w5oY7";
+  const raw = [
+    asst([{ type: "tool_use", id: "b1", name: "Bash", input: { command: "'/bun' '/src/cli.ts' artifact publish /o/claude-surfaces.html --url x" } }], "2026-09-29T01:00:01Z"),
+    user([{ type: "tool_result", tool_use_id: "b1", content: out }], "2026-09-29T01:00:02Z"),
+    asst([{ type: "tool_use", id: "b2", name: "Bash", input: { command: "grep -r Published ~/.claude/projects" } }], "2026-09-29T01:00:03Z"),
+    user([{ type: "tool_result", tool_use_id: "b2", content: "Published /y/other.html at https://claude.ai/artifact/Other1" }], "2026-09-29T01:00:04Z"),
+  ].join("\n");
+  expect(parseSession(raw).artifacts).toEqual([
+    { url: "https://claude.ai/artifact/NJd6w5oY7", label: "claude-surfaces", at: "2026-09-29T01:00:02Z" },
+  ]);
+});
+
 test("parseSession falls back to ai-title and handles empty", () => {
   expect(parseSession(L({ type: "ai-title", aiTitle: "Auto name" })).title).toBe("Auto name");
   const empty = parseSession("");

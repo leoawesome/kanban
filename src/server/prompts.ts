@@ -1,3 +1,4 @@
+import { helperCommand } from "./artifact";
 import type { Comment, Ticket } from "./types";
 import { shellQuote } from "./util";
 
@@ -50,6 +51,17 @@ function deliverableRule(outputDir: string): string {
 - Code changes still belong in the repository, not in the outputs folder.`;
 }
 
+/** Board runs are headless, where Claude Code turns the Artifact tool off; the helper stands in. */
+function artifactRule(): string {
+  const cmd = helperCommand();
+  return `# claude.ai artifacts
+The Artifact tool is not available in board runs. To publish or read a claude.ai artifact, run this helper with Bash instead (each call can take a minute or two):
+- New page: \`${cmd} artifact publish <file.html> [--title "Title"]\`
+- Update an existing artifact (keeps the same link): first \`${cmd} artifact read <url> --out <file.html>\`, edit that file, then \`${cmd} artifact publish <file.html> --url <url>\`
+- Read one: \`${cmd} artifact read <url> --out <file.html>\`
+Include the printed URL in your summary.`;
+}
+
 export interface PromptContext {
   isGit: boolean;
   linked?: boolean;
@@ -85,6 +97,8 @@ ${interview ? `${INTERVIEW}\n\n` : ""}# Rules
 
 ${deliverableRule(ctx.outputDir)}
 
+${artifactRule()}
+
 ${RESULT_RULE}`);
 }
 
@@ -98,6 +112,8 @@ export function resumePrompt(t: Ticket, newComments: Comment[], outputDir: strin
 ${feedback}
 
 ${t.mode === "interview" ? `${t.interviewed ? AFTER_ANSWERS : INTERVIEW.replace("In this first run:", "Before continuing, in this run:")}\n\n` : ""}Continue working on the ticket, addressing the feedback. If a pull request already exists, push new commits to the same branch to update it. Update deliverables in ${outputDir} rather than creating duplicates.
+
+${artifactRule()}
 
 ${RESULT_RULE}`);
 }
@@ -145,6 +161,8 @@ If the message only asks you to plan, audit, review, list ideas, propose or disc
 If you need decisions from the user, ask with the questions block.
 
 ${QUESTIONS_FORMAT}
+
+${artifactRule()}
 
 ${RESULT_RULE}`)}`;
 }

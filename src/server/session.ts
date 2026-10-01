@@ -160,6 +160,13 @@ export function findSessionFile(sessionId: string, d: Dirs = {}): string | null 
 const TOOL_ARG_KEYS = ["file_path", "command", "url", "pattern", "query", "description", "prompt"];
 const PUBLISHED = /Published (\S+) at (https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9-]+)/g;
 
+const HELPER_PUBLISH = /\bartifact publish\b/;
+
+function isPublisher(block: any): boolean {
+  if (block.name === "Artifact") return true;
+  return block.name === "Bash" && typeof block.input?.command === "string" && HELPER_PUBLISH.test(block.input.command);
+}
+
 function userText(content: unknown): { kind: "text" | "board"; text: string } | null {
   if (Array.isArray(content)) {
     if (content.some((c: any) => c?.type === "tool_result")) return null;
@@ -198,7 +205,7 @@ export function parseSession(raw: string): ParsedSession {
   let aiTitle: string | null = null;
   const entries: SessionEntry[] = [];
   const artifacts = new Map<string, SessionArtifact>();
-  const toolNames = new Map<string, string>();
+  const publishers = new Set<string>();
 
   for (const line of raw.split("\n")) {
     if (!line) continue;
@@ -218,9 +225,10 @@ export function parseSession(raw: string): ParsedSession {
     if (ev.type === "user") {
       if (Array.isArray(content)) {
         for (const b of content) {
-          // Only real publishes: output of the Artifact tool. Other tools (e.g. Bash grepping a
-          // different session's file) can print the same text.
-          if (b?.type !== "tool_result" || toolNames.get(b.tool_use_id) !== "Artifact") continue;
+          // Only real publishes: output of the Artifact tool, or of the `ckanban artifact publish`
+          // helper headless runs use. Other tools (e.g. Bash grepping a different session's file)
+          // can print the same text.
+          if (b?.type !== "tool_result" || !publishers.has(b.tool_use_id)) continue;
           for (const m of resultText(b.content).matchAll(PUBLISHED)) {
             const label = basename(m[1]).replace(/\.[a-z0-9]+$/i, "");
             artifacts.delete(m[2]); // re-insert so the newest publish sorts last
@@ -235,7 +243,7 @@ export function parseSession(raw: string): ParsedSession {
 
     if (!Array.isArray(content)) continue;
     content.forEach((b: any, i: number) => {
-      if (b?.type === "tool_use" && typeof b.id === "string") toolNames.set(b.id, String(b.name));
+      if (b?.type === "tool_use" && typeof b.id === "string" && isPublisher(b)) publishers.add(b.id);
       const id = i ? `${uuid}:${i}` : uuid;
       if (b?.type === "text" && b.text?.trim()) entries.push({ uuid: id, at, role: "assistant", kind: "text", ...assistantBlock(b.text.trim()) });
       else if (b?.type === "tool_use") entries.push({ uuid: id, at, role: "assistant", kind: "tool", text: toolLabel(b) });
