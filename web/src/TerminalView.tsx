@@ -2,7 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
-import { shellSocketUrl } from "./api";
+import { shellSocketUrl, type PtyKind } from "./api";
 
 function themeFromCss(): ITheme {
   const css = getComputedStyle(document.documentElement);
@@ -19,9 +19,13 @@ function themeFromCss(): ITheme {
 
 type State = "connecting" | "open" | "exited" | "closed";
 
-/** xterm.js wired to the profile's shell over a WebSocket. Binary frames are output; JSON text frames are control. */
-export function TerminalView({ slug, active, restartSignal, command, onCommandSent }: {
+/**
+ * xterm.js wired to the profile's shell (or quick Claude chat) over a WebSocket.
+ * Binary frames are output; JSON text frames are control.
+ */
+export function TerminalView({ slug, kind = "shell", active, restartSignal, command, onCommandSent }: {
   slug: string;
+  kind?: PtyKind;
   active: boolean;
   restartSignal: number;
   command: { text: string; n: number } | null;
@@ -67,8 +71,10 @@ export function TerminalView({ slug, active, restartSignal, command, onCommandSe
     } catch {}
 
     const onData = t.onData((data) => {
-      if (stateRef.current === "exited") send({ type: "restart" });
-      else send({ type: "input", data });
+      // An ended quick chat waits for the "Start again" button instead of any key.
+      if (stateRef.current === "exited") {
+        if (kind === "shell") send({ type: "restart" });
+      } else send({ type: "input", data });
     });
     const onResize = t.onResize(({ cols, rows }) => send({ type: "resize", cols, rows }));
     const ro = new ResizeObserver(() => {
@@ -96,7 +102,7 @@ export function TerminalView({ slug, active, restartSignal, command, onCommandSe
     const t = term.current!;
     t.reset();
     setState("connecting");
-    const sock = new WebSocket(shellSocketUrl(slug, t.cols, t.rows));
+    const sock = new WebSocket(shellSocketUrl(slug, t.cols, t.rows, kind));
     sock.binaryType = "arraybuffer";
     ws.current = sock;
     sock.onopen = () => {
@@ -119,7 +125,7 @@ export function TerminalView({ slug, active, restartSignal, command, onCommandSe
         t.reset();
         setState("open");
       } else if (msg.type === "exit") {
-        t.write(`\r\n\x1b[2m[shell exited${msg.code != null ? ` with code ${msg.code}` : ""}, press any key to restart]\x1b[0m\r\n`);
+        if (kind === "shell") t.write(`\r\n\x1b[2m[shell exited${msg.code != null ? ` with code ${msg.code}` : ""}, press any key to restart]\x1b[0m\r\n`);
         setState("exited");
       } else if (msg.type === "error") {
         t.write(`\r\n\x1b[31m${msg.message}\x1b[0m\r\n`);
@@ -132,7 +138,7 @@ export function TerminalView({ slug, active, restartSignal, command, onCommandSe
       ws.current = null;
       sock.close();
     };
-  }, [slug, attempt]);
+  }, [slug, kind, attempt]);
 
   useEffect(() => {
     if (state !== "closed") return;
@@ -179,12 +185,23 @@ export function TerminalView({ slug, active, restartSignal, command, onCommandSe
     });
   }, [active]);
 
+  const startAgain = () => {
+    send({ type: "restart", resume: true });
+    term.current?.focus();
+  };
+
   return (
     <div className="terminal-view">
       <div ref={host} className="terminal-host" />
+      {state === "exited" && kind === "claude" && (
+        <div className="terminal-banner" role="status">
+          Claude session ended.{" "}
+          <button className="link-btn" onClick={startAgain}>Start again</button>
+        </div>
+      )}
       {state === "closed" && (
         <div className="terminal-banner" role="status">
-          Disconnected from the shell.{retryIn !== null && ` Reconnecting in ${retryIn}s…`}{" "}
+          Disconnected from the {kind === "claude" ? "Claude chat" : "shell"}.{retryIn !== null && ` Reconnecting in ${retryIn}s…`}{" "}
           <button className="link-btn" onClick={() => { retries.current = 0; setAttempt((n) => n + 1); }}>Reconnect now</button>
         </div>
       )}

@@ -14,7 +14,7 @@ import { FileError, listDir, openWithSystem, readFileForView } from "./files";
 import { McpError, McpManager } from "./mcp";
 import { AGENT_IDS, AgentError, AgentRegistry, type AgentId } from "./agents";
 import { SessionCache } from "./session";
-import { ptySupported, ShellManager, type Shell } from "./shell";
+import { ptySupported, ShellManager, type PtyKind, type Shell } from "./shell";
 import type { TerminalWatcher } from "./terminals";
 import { UpdateChecker } from "./update";
 import type { Store } from "./store";
@@ -39,6 +39,7 @@ export interface ServerDeps {
 }
 
 interface ShellSocket {
+  kind: PtyKind;
   slug: string;
   cwd: string;
   cols: number;
@@ -341,9 +342,27 @@ export function createServer(deps: ServerDeps) {
       if (!ptySupported()) throw new HttpError(501, `terminal needs Bun 1.3.5 or newer (running ${Bun.version})`);
       if (!isAllowedSocket(req, server.port ?? deps.port)) throw new HttpError(403, "forbidden");
       const dim = (k: string, d: number) => Math.min(1000, Math.max(1, Number(url.searchParams.get(k)) || d));
-      const data: ShellSocket = { slug, cwd: profile.path, cols: dim("cols", 80), rows: dim("rows", 24) };
+      const data: ShellSocket = { kind: "shell", slug, cwd: profile.path, cols: dim("cols", 80), rows: dim("rows", 24) };
       if (server.upgrade(req, { data })) return undefined;
       throw new HttpError(400, "expected a WebSocket upgrade");
+    }
+
+    // /profiles/:p/claude — WebSocket to the dock's quick Claude chat (interactive `claude` in the profile folder)
+    if (parts[2] === "claude" && parts.length === 3 && m === "GET") {
+      if (!ptySupported()) throw new HttpError(501, `terminal needs Bun 1.3.5 or newer (running ${Bun.version})`);
+      if (!isAllowedSocket(req, server.port ?? deps.port)) throw new HttpError(403, "forbidden");
+      const dim = (k: string, d: number) => Math.min(1000, Math.max(1, Number(url.searchParams.get(k)) || d));
+      const data: ShellSocket = { kind: "claude", slug, cwd: profile.path, cols: dim("cols", 80), rows: dim("rows", 24) };
+      if (server.upgrade(req, { data })) return undefined;
+      throw new HttpError(400, "expected a WebSocket upgrade");
+    }
+
+    // /profiles/:p/claude/session — which Claude session the quick chat runs, and whether it has messages yet
+    if (parts[2] === "claude" && parts[3] === "session" && parts.length === 4 && m === "GET") {
+      const pty = shells.current(slug, "claude");
+      const id = pty?.sessionId ?? null;
+      const summary = id ? sessions.summary(id) : null;
+      return json({ sessionId: id, running: !!pty && !pty.exited, started: !!summary, title: summary?.title ?? null });
     }
 
     // /profiles/:p/schedules — recurring ticket templates
@@ -549,12 +568,15 @@ export function createServer(deps: ServerDeps) {
     return new Response("UI not built. Run: bun run build:web", { status: 404 });
   }
 
-  function attachShell(ws: import("bun").ServerWebSocket<ShellSocket>, restart = false) {
+  function attachShell(ws: import("bun").ServerWebSocket<ShellSocket>, restart = false, resumeChat = false) {
     const d = ws.data;
     d.unsubscribe?.();
     let shell: Shell;
     try {
-      shell = shells.get(d.slug, d.cwd, d.cols, d.rows, restart);
+      // An exited quick chat that has messages comes back on the same session ("Start again").
+      const prev = shells.current(d.slug, d.kind);
+      const resume = resumeChat && !!prev?.sessionId && sessions.version(prev.sessionId) !== null;
+      shell = shells.get(d.slug, d.cwd, d.cols, d.rows, restart, d.kind, resume);
     } catch (e) {
       ws.send(JSON.stringify({ type: "error", message: (e as Error).message }));
       return;
@@ -609,7 +631,7 @@ export function createServer(deps: ServerDeps) {
         } else if (msg.type === "restart") {
           // Another tab may already have restarted it: then just join the new shell.
           ws.send(JSON.stringify({ type: "reset" }));
-          attachShell(ws, shells.current(ws.data.slug) === shell);
+          attachShell(ws, shells.current(ws.data.slug, ws.data.kind) === shell, msg.resume === true);
         }
       },
       close: (ws) => ws.data.unsubscribe?.(),

@@ -14,6 +14,8 @@ import { QuickSwitcher, ShortcutsDialog } from "./Shortcuts";
 import { TicketDrawer } from "./TicketDrawer";
 import { toast, Toaster } from "./toast";
 
+import type { DockTab } from "./Dock";
+
 // xterm.js and highlight.js only load once the panel is opened. After an upgrade the old chunk is gone:
 // reload once to get the new build instead of blanking the whole page.
 const Dock = lazy(() => import("./Dock").then((m) => {
@@ -108,6 +110,8 @@ export function App() {
   const [switcher, setSwitcher] = useState(false);
   // Command to type into the dock's terminal (e.g. "claude mcp login x"); n makes repeats count.
   const [dockCommand, setDockCommand] = useState<{ text: string; n: number } | null>(null);
+  // Tab the dock should switch to (C opens the quick Claude chat).
+  const [dockTab, setDockTab] = useState<{ tab: DockTab; n: number } | null>(null);
   const [mcp, setMcp] = useState<McpState | null>(null);
   const [connections, setConnections] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
@@ -205,8 +209,12 @@ export function App() {
       localStorage.setItem(DOCK_OPEN, dockOpen ? "1" : "0");
     } catch {}
   }, [dockOpen]);
+  // A tab request is one-shot: reopening the dock later keeps the user's last tab.
+  useEffect(() => {
+    if (!dockOpen) setDockTab(null);
+  }, [dockOpen]);
 
-  // Shortcuts: N new ticket, / search, ? cheatsheet, ⌘K jump to a ticket, Ctrl+` terminal & files.
+  // Shortcuts: N new ticket, / search, ? cheatsheet, C quick Claude chat, ⌘K jump to a ticket, Ctrl+` terminal & files.
   // Esc is handled by the panel and dialogs (one layer at a time, see layers.ts).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -232,6 +240,12 @@ export function App() {
       } else if (e.key === "?") {
         e.preventDefault();
         setShortcuts(true);
+      } else if (e.key === "c" || e.key === "C") {
+        e.preventDefault();
+        if (slug) {
+          setDockOpen(true);
+          setDockTab({ tab: "claude", n: Date.now() });
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -493,7 +507,7 @@ export function App() {
       {dockOpen && profile && (
         <Suspense fallback={null}>
           <Dock profile={profile} pty={health?.pty ?? true} onClose={() => setDockOpen(false)} command={dockCommand}
-            onCommandSent={() => setDockCommand(null)} />
+            onCommandSent={() => setDockCommand(null)} tabRequest={dockTab} onOpenTicket={(id) => openTicket(id)} />
         </Suspense>
       )}
 

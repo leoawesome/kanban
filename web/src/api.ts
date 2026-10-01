@@ -40,9 +40,20 @@ export interface FileContent {
   tooLarge: boolean;
 }
 
-/** WebSocket URL of the profile's interactive shell. */
-export const shellSocketUrl = (slug: string, cols: number, rows: number) =>
-  `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/profiles/${encodeURIComponent(slug)}/shell?cols=${cols}&rows=${rows}`;
+/** What a dock terminal is attached to: the profile's shell, or the quick Claude chat. */
+export type PtyKind = "shell" | "claude";
+
+/** WebSocket URL of the profile's interactive shell (or quick Claude chat). */
+export const shellSocketUrl = (slug: string, cols: number, rows: number, kind: PtyKind = "shell") =>
+  `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/profiles/${encodeURIComponent(slug)}/${kind}?cols=${cols}&rows=${rows}`;
+
+export interface QuickChat {
+  sessionId: string | null;
+  running: boolean;
+  /** The session file exists (at least one message was sent). */
+  started: boolean;
+  title: string | null;
+}
 
 export type AttentionKind = "failed" | "blocked" | "questions" | "proposal" | "review" | "reply";
 
@@ -317,6 +328,7 @@ export const api = {
   file: (slug: string, path: string) =>
     req<FileContent>("GET", `/api/profiles/${encodeURIComponent(slug)}/file?path=${encodeURIComponent(path)}`),
   ticket: (slug: string, id: string) => req<Ticket>("GET", t(slug, id)),
+  quickChat: (slug: string) => req<QuickChat>("GET", `/api/profiles/${encodeURIComponent(slug)}/claude/session`),
   sessions: (slug: string) => req<ClaudeSession[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/sessions`),
   linkSession: (slug: string, id: string, sessionId: string | null) =>
     req<Ticket>("POST", `${t(slug, id)}/link-session`, { sessionId }),
