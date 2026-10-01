@@ -46,8 +46,11 @@ interface ActiveRun {
   /** Status to land on when the run ends because the user moved the card. */
   targetStatus: Status | null;
   stopRequested: boolean;
-  /** Set for runs started from the ticket chat (not the Ready queue). raw: text is the full prompt (planner wake-ups). */
-  chat?: { text: string; mode: ChatMode; raw?: boolean };
+  /**
+   * Set for runs started from the ticket chat (not the Ready queue). raw: text is the full prompt (planner wake-ups);
+   * returnTo: the column such a run goes back to, since a wake-up is housekeeping, not new work to review.
+   */
+  chat?: { text: string; mode: ChatMode; raw?: boolean; returnTo?: Status };
   /** Queued messages (ticket.queued) written to this claude process, keyed by id, with the text it was given. */
   inFlight: Map<string, string>;
   /** Queued message this chat run was started with; it leaves the queue once Claude reads the prompt. */
@@ -273,7 +276,7 @@ export class Board {
   /** Where the card lands after a run: refine chats never move it. */
   private endStatus(run: ActiveRun): Partial<Ticket> {
     if (run.chat?.mode === "refine") return run.targetStatus ? { status: run.targetStatus } : {};
-    return { status: run.targetStatus ?? "review" };
+    return { status: run.targetStatus ?? run.chat?.returnTo ?? "review" };
   }
 
   private async executeOnce(run: ActiveRun): Promise<void> {
@@ -419,7 +422,8 @@ export class Board {
       ...base,
       outcome: result?.status === "questions" ? "needs_input" : result?.status ?? "done",
       ...(result?.status === "questions" ? { interviewed: true } : {}),
-      prUrl: result?.prUrl ?? current.prUrl,
+      // A planner wake-up reports its children's PRs; the planner keeps its own.
+      prUrl: run.chat?.raw ? current.prUrl : result?.prUrl ?? current.prUrl,
       error: null,
     });
   }
@@ -713,7 +717,9 @@ export class Board {
   private wake(slug: string, planner: Ticket, plan: Plan, kind: PlanWake, events: string[], kids: Ticket[]) {
     const text = orchestratorPrompt(planner, { kind, events, table: planTable(kids), board: slug, outputDir: this.store.outputsDir(slug, planner.id) });
     this.patch(slug, planner.id, { plan: { ...plan, inbox: [], awaiting: kind, wakeups: plan.wakeups + 1 } });
-    this.start(slug, planner.id, { text, mode: "act", raw: true });
+    // Back to where it was (In progress only if a restart cut a wake-up off).
+    const returnTo = planner.status === "in_progress" ? "review" : planner.status;
+    this.start(slug, planner.id, { text, mode: "act", raw: true, returnTo });
   }
 
   private stuck(slug: string, planner: Ticket, plan: Plan, reason: string) {

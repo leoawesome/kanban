@@ -76,6 +76,9 @@ test("a plan runs its children in dependency order, at most maxConcurrent at onc
   for (const k of [a, b, c, d, e]) expect(store.getTicket("p", k.id)!.outcome).toBe("done");
   const p = store.getTicket("p", planner.id)!;
   expect(p.plan?.state).toBe("done");
+  // Wake-ups put the planner back in its column and leave its own PR link alone.
+  expect(p.status).toBe("backlog");
+  expect(p.prUrl).toBeNull();
   // Only the final check woke the planner.
   expect(p.plan?.wakeups).toBe(1);
   expect(notes).toEqual(["Plan done: Plan"]);
