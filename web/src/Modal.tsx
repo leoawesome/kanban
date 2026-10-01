@@ -1,20 +1,39 @@
-import { useEffect, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { CloseIcon } from "./icons";
+import { useFocusTrap, useLayer } from "./layers";
 
-export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+/**
+ * Dialog with focus trap and Esc (topmost layer only). `guard` = there is typed work to lose:
+ * Esc, the × and clicking outside ask before closing.
+ */
+export function Modal({ title, onClose, children, wide, guard }: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  wide?: boolean;
+  guard?: boolean;
+}) {
+  const id = useId();
+  const box = useRef<HTMLDivElement>(null);
+  const [asking, setAsking] = useState(false);
+  const tryClose = () => (guard ? setAsking(true) : onClose());
+  useLayer(tryClose);
+  useFocusTrap(box);
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-label={title}>
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && tryClose()}>
+      <div ref={box} className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={id} tabIndex={-1}>
         <header className="modal-head">
-          <h3>{title}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">×</button>
+          <h3 id={id}>{title}</h3>
+          <button className="icon-btn" onClick={tryClose} aria-label="Close"><CloseIcon /></button>
         </header>
         {children}
       </div>
+      {asking && (
+        <ConfirmDialog title="Discard draft?" confirmLabel="Discard" onCancel={() => setAsking(false)} onConfirm={onClose}>
+          <p>What you typed here will be lost.</p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

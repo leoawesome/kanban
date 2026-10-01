@@ -221,6 +221,11 @@ test("files API lists and reads inside the profile, rejects escapes", async () =
   expect(r.status).toBe(400);
   r = await fetch(`${base}/api/profiles/${slug}/files?path=${encodeURIComponent("/etc")}`);
   expect(r.status).toBe(404);
+  // Open in default app: same path checks before anything runs.
+  r = await fetch(`${base}/api/profiles/${slug}/open-file`, json("POST", { path: "../etc/passwd" }));
+  expect(r.status).toBe(400);
+  r = await fetch(`${base}/api/profiles/${slug}/open-file`, json("POST", { path: "missing.ts" }));
+  expect(r.status).toBe(404);
 });
 
 const openSocket = (url: string, origin: string) =>

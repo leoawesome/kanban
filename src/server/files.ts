@@ -35,6 +35,20 @@ export function resolveInside(root: string, rel: string): string {
   return real;
 }
 
+/**
+ * Opens a file inside the profile folder with the system's default app (`open` on macOS, `xdg-open` elsewhere).
+ * argv only, never a shell; the path is checked with resolveInside first.
+ */
+export function openWithSystem(root: string, rel: string, bin = process.platform === "darwin" ? "open" : "xdg-open"): string {
+  const file = resolveInside(root, rel);
+  try {
+    Bun.spawn([bin, file], { stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+  } catch (e) {
+    throw new FileError(500, `couldn't run ${bin}: ${(e as Error).message}`);
+  }
+  return file;
+}
+
 /** Entries of the given names (relative to root) that git ignores. Empty when root isn't a git repo. */
 async function gitIgnored(root: string, rels: string[]): Promise<Set<string>> {
   if (!rels.length) return new Set();

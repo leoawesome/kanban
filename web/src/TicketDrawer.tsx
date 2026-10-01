@@ -3,7 +3,9 @@ import { api, copy, COLUMNS, safeHref, startWorkTarget, subscribe, type ClaudeSe
 import { outcomeBadge } from "./Card";
 import { Chat, useStop } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, FileTextIcon, SparkIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
+import { useFocusTrap, useLayer } from "./layers";
 import { ModeToggle } from "./ModeToggle";
 import { Outputs } from "./Outputs";
 import { Select } from "./Select";
@@ -92,7 +94,11 @@ export function TicketDrawer({ profile, ticket, onClose }: {
   const [baseBody, setBaseBody] = useState(ticket.body);
   const [tab, setTab] = useState<"chat" | "outputs">("chat");
   const [outputCount, setOutputCount] = useState(0);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [titleSave, setTitleSave] = useState<"saving" | "saved" | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  useLayer(onClose, { skipInInputs: true });
+  useFocusTrap(panelRef, true);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmStart, setConfirmStart] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -133,11 +139,6 @@ export function TicketDrawer({ profile, ticket, onClose }: {
   useEffect(() => {
     loadOutputs();
     api.ticket(slug, ticket.id).then((t) => { setBody(t.body); setBaseBody(t.body); setTitle(t.title); }).catch(() => {});
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !(e.target as HTMLElement)?.closest?.("input, textarea")) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, [slug, ticket.id]);
 
   useEffect(() => {
@@ -166,8 +167,23 @@ export function TicketDrawer({ profile, ticket, onClose }: {
       onError(e.message);
     }
   };
-  const saveTitle = () => {
-    if (title.trim() && title !== ticket.title) act(() => api.updateTicket(slug, ticket.id, { title: title.trim() }));
+  const saveTitle = async () => {
+    if (!title.trim()) return setTitle(ticket.title);
+    if (title === ticket.title) return;
+    setTitleSave("saving");
+    try {
+      await api.updateTicket(slug, ticket.id, { title: title.trim() });
+      setTitleSave("saved");
+      setTimeout(() => setTitleSave((s) => (s === "saved" ? null : s)), 1600);
+    } catch (e: any) {
+      setTitleSave(null);
+      onError(`Title not saved: ${e.message}`);
+    }
+  };
+  const copyText = async (key: string, text: string) => {
+    await copy(text);
+    setCopied(key);
+    setTimeout(() => setCopied((c) => (c === key ? null : c)), 1600);
   };
   const startEdit = async () => {
     try {
@@ -191,7 +207,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
 
   return (
     <div className="drawer-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className={`panel ${dragging ? "resizing" : ""}`} role="dialog" aria-label={ticket.title} style={{ width }}>
+      <aside ref={panelRef} className={`panel ${dragging ? "resizing" : ""}`} role="dialog" aria-modal="true" aria-label={ticket.title} style={{ width }} tabIndex={-1}>
         <div className="drawer-resize" role="separator" aria-orientation="vertical" aria-label="Resize panel" tabIndex={0}
           title="Drag to resize · double-click to reset" {...handle} />
 
@@ -206,14 +222,21 @@ export function TicketDrawer({ profile, ticket, onClose }: {
             </svg>
           </button>
           <input ref={titleRef} className="title-input" value={title} onChange={(e) => setTitle(e.target.value)} onBlur={saveTitle}
-            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} aria-label="Title" />
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              else if (e.key === "Escape") { setTitle(ticket.title); (e.target as HTMLInputElement).blur(); }
+            }} aria-label="Title" />
+          <span className="save-state" aria-live="polite">
+            {titleSave === "saving" && <span className="muted small">Saving…</span>}
+            {titleSave === "saved" && <span className="saved small"><CheckIcon size={12} /> Saved</span>}
+          </span>
           {att && (
             <span className={`your-turn inline att-${att.kind}`}>
               <span className="yt-dot" aria-hidden /><span className="yt-label">Your turn</span><span className="yt-why">{att.label}</span>
             </span>
           )}
           {!att && outcomeBadge(ticket)}
-          <button className="icon-btn" onClick={onClose} aria-label="Close">×</button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close" title="Close (Esc)"><CloseIcon /></button>
         </header>
 
         <div className={`panel-body ${detailsOpen ? "" : "details-closed"}`}>
@@ -224,7 +247,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
               <Select className="status-select" ariaLabel="Status" value={ticket.status} onChange={(s) => setStatus(s as Status)}
                 options={COLUMNS.map((c) => ({ value: c.id, label: c.label, hint: c.hint, disabled: c.id === "in_progress" && !working }))} />
             </div>
-            {col && <p className="field-help">{col.claude ? "✦ " : ""}{col.hint}</p>}
+            {col && <p className="field-help">{col.claude && <SparkIcon className="icon spark" />}{col.hint}</p>}
 
             <div className="action-stack">
               {working && <button className="btn danger" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop Claude"}</button>}
@@ -237,7 +260,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
               )}
               {ticket.status === "review" && <button className="btn primary" onClick={() => setStatus("done")}>Mark done</button>}
               {ticket.prUrl && (
-                <a className="btn" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer">Open PR #{ticket.prUrl.split("/").pop()} ↗</a>
+                <a className="btn icon-label" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer">Open PR #{ticket.prUrl.split("/").pop()} <ExternalIcon size={12} /></a>
               )}
             </div>
 
@@ -274,10 +297,10 @@ export function TicketDrawer({ profile, ticket, onClose }: {
               <section className="detail-section">
                 <h4>Results</h4>
                 {outputCount > 0 && (
-                  <button className="result-link" onClick={() => setTab("outputs")}>📄 {outputCount} output file{outputCount > 1 ? "s" : ""}</button>
+                  <button className="result-link" onClick={() => setTab("outputs")}><FileTextIcon size={13} /> {outputCount} output file{outputCount > 1 ? "s" : ""}</button>
                 )}
                 {ticket.session?.artifacts.slice().reverse().map((a) => (
-                  <a key={a.url} className="result-link" href={safeHref(a.url)} target="_blank" rel="noreferrer" title={a.url}>↗ {a.label}</a>
+                  <a key={a.url} className="result-link" href={safeHref(a.url)} target="_blank" rel="noreferrer" title={a.url}><ExternalIcon size={13} /> {a.label}</a>
                 ))}
               </section>
             )}
@@ -296,36 +319,50 @@ export function TicketDrawer({ profile, ticket, onClose }: {
               )}
               {ticket.resumeCommand && (
                 <button className="btn small" disabled={working} title={working ? "Wait until Claude is done" : ticket.resumeCommand}
-                  onClick={async () => { await copy(ticket.resumeCommand!); setCopied(true); setTimeout(() => setCopied(false), 1600); }}>
-                  {copied ? "Copied!" : "Copy terminal command"}
+                  onClick={() => copyText("resume", ticket.resumeCommand!)}>
+                  {copied === "resume" ? "Copied!" : "Copy terminal command"}
                 </button>
               )}
               <div className="meta-lines">
-                {ticket.branch && <code title={ticket.worktree ?? ""}>{ticket.branch}</code>}
-                <span>{ticket.id}</span>
+                {ticket.branch && (
+                  <span className="meta-line">
+                    <code title={ticket.worktree ?? ""}>{ticket.branch}</code>
+                    <button className="icon-btn tiny" aria-label="Copy branch name" title="Copy branch name" onClick={() => copyText("branch", ticket.branch!)}>
+                      {copied === "branch" ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                    </button>
+                  </span>
+                )}
+                <span className="meta-line">
+                  <span>{ticket.id}</span>
+                  <button className="icon-btn tiny" aria-label="Copy ticket ID" title="Copy ticket ID" onClick={() => copyText("id", ticket.id)}>
+                    {copied === "id" ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                  </button>
+                </span>
               </div>
               {ticket.prUrl && ticket.status === "review" && (
                 <button className="link-btn" onClick={() => act(() => api.checkPr(slug, ticket.id))}>Check PR status now</button>
               )}
             </section>
 
-            <button className="btn ghost danger-text small delete-btn" onClick={() => setConfirmDelete(true)}>Delete ticket</button>
+            <button className="btn ghost danger small delete-btn" onClick={() => setConfirmDelete(true)}>Delete ticket</button>
           </div>
 
           <div className="panel-main">
             {panelError && (
               <div className="banner error inline panel-error" role="alert">
                 <span>{panelError}</span>
-                <button className="icon-btn" aria-label="Dismiss" onClick={() => setPanelError(null)}>×</button>
+                <button className="icon-btn" aria-label="Dismiss" onClick={() => setPanelError(null)}><CloseIcon /></button>
               </div>
             )}
-            {outputCount > 0 && (
-              <nav className="tabs">
-                <button className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>Chat {working && <span className="dot" />}</button>
-                <button className={tab === "outputs" ? "active" : ""} onClick={() => setTab("outputs")}>Outputs ({outputCount})</button>
-              </nav>
-            )}
-            {tab === "outputs" && outputCount > 0 ? (
+            <nav className="tabs" role="tablist" aria-label="Ticket">
+              <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>
+                Chat {working && <span className="dot" />}
+              </button>
+              <button role="tab" aria-selected={tab === "outputs"} className={tab === "outputs" ? "active" : ""} onClick={() => setTab("outputs")}>
+                Outputs{outputCount > 0 && <span className="tab-count">{outputCount}</span>}
+              </button>
+            </nav>
+            {tab === "outputs" ? (
               <div className="panel-scroll"><Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} /></div>
             ) : (
               <Chat slug={slug} ticket={ticket} onError={onError} />
@@ -346,7 +383,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
           </ConfirmDialog>
         )}
         {confirmDelete && (
-          <ConfirmDialog title={`Delete "${ticket.title}"?`} confirmLabel="Delete ticket" onCancel={() => setConfirmDelete(false)}
+          <ConfirmDialog title={`Delete "${ticket.title}"?`} confirmLabel="Delete ticket" busyLabel="Deleting…" onCancel={() => setConfirmDelete(false)}
             onConfirm={async () => { await api.deleteTicket(slug, ticket.id); onClose(); }}>
             <p>Removes the ticket and its board history.{working ? " Claude will be stopped." : ""}</p>
             {ticket.worktree && <p className="muted">Its worktree is removed if it has no uncommitted changes. The branch and any PR stay.</p>}

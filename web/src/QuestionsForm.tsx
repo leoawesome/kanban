@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Question } from "./api";
 import { browserStore, forget } from "./drafts";
+import { CheckIcon } from "./icons";
 import { usePersistentState } from "./usePersistentState";
 
 interface Answer {
@@ -92,7 +93,7 @@ export function QuestionsForm({ questions, answered, disabled, onSubmit, storage
   if (answered) {
     return (
       <div className="qcard answered">
-        <div className="qcard-head"><span className="qcard-title">✓ Answered {total} question{total > 1 ? "s" : ""}</span></div>
+        <div className="qcard-head"><span className="qcard-title"><CheckIcon size={12} strokeWidth={2.2} /> Answered {total} question{total > 1 ? "s" : ""}</span></div>
       </div>
     );
   }
@@ -135,7 +136,7 @@ export function QuestionsForm({ questions, answered, disabled, onSubmit, storage
                 <button key={o.label} type="button" disabled={disabled}
                   className={`qopt ${on ? "on" : ""} ${q.multiSelect ? "multi" : ""}`}
                   role={q.multiSelect ? "checkbox" : "radio"} aria-checked={on} onClick={() => pick(o.label)}>
-                  <span className="qmark" aria-hidden>{q.multiSelect ? (on ? "✓" : "") : ""}</span>
+                  <span className="qmark" aria-hidden>{q.multiSelect && on && <CheckIcon size={11} strokeWidth={2.2} />}</span>
                   <span className="qtext">
                     <span className="qlabel">
                       {o.label}
@@ -149,7 +150,7 @@ export function QuestionsForm({ questions, answered, disabled, onSubmit, storage
             })}
             <button type="button" disabled={disabled} className={`qopt ${a.otherOn ? "on" : ""} ${q.multiSelect ? "multi" : ""}`}
               role={q.multiSelect ? "checkbox" : "radio"} aria-checked={a.otherOn} onClick={toggleOther}>
-              <span className="qmark" aria-hidden>{q.multiSelect ? (a.otherOn ? "✓" : "") : ""}</span>
+              <span className="qmark" aria-hidden>{q.multiSelect && a.otherOn && <CheckIcon size={11} strokeWidth={2.2} />}</span>
               <span className="qtext"><span className="qlabel">Other…</span><span className="qdesc">Type your own answer</span></span>
               <kbd className="qkey">{q.options.length + 1}</kbd>
             </button>

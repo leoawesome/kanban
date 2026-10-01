@@ -207,6 +207,12 @@ export interface McpAddInput {
   headers?: { name: string; value: string }[];
 }
 
+export interface McpConfig extends McpAddInput {
+  scope: McpScope;
+  /** Shell line that starts a stdio server like Claude does (env included). Null for http/sse. */
+  commandLine: string | null;
+}
+
 export interface Schedule {
   id: string;
   name: string;
@@ -262,7 +268,7 @@ export interface InboxItem {
 }
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const hasBody = method === "POST" || method === "PATCH";
+  const hasBody = method === "POST" || method === "PATCH" || method === "PUT";
   const r = await fetch(url, {
     method,
     headers: hasBody ? { "content-type": "application/json" } : undefined,
@@ -335,6 +341,10 @@ export const api = {
   mcpLogin: (name: string) => req<McpState>("POST", `/api/mcp/${encodeURIComponent(name)}/login`),
   mcpCancelLogin: (name: string) => req<McpState>("POST", `/api/mcp/${encodeURIComponent(name)}/cancel-login`),
   mcpLogout: (name: string) => req<McpState>("POST", `/api/mcp/${encodeURIComponent(name)}/logout`),
+  mcpRecheck: (name: string) => req<McpState>("POST", `/api/mcp/${encodeURIComponent(name)}/recheck`),
+  mcpConfig: (name: string) => req<McpConfig>("GET", `/api/mcp/${encodeURIComponent(name)}/config`),
+  mcpUpdate: (name: string, input: McpAddInput) => req<McpState>("PUT", `/api/mcp/${encodeURIComponent(name)}`, input),
+  openFile: (slug: string, path: string) => req<{ ok: true }>("POST", `/api/profiles/${encodeURIComponent(slug)}/open-file`, { path }),
   stop: (slug: string, id: string) => req<{ stopped: boolean }>("POST", `${t(slug, id)}/stop`).then((r) => {
     if (!r.stopped) throw new Error("Claude is not running on this ticket.");
     return r;

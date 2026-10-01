@@ -20,7 +20,14 @@ function themeFromCss(): ITheme {
 type State = "connecting" | "open" | "exited" | "closed";
 
 /** xterm.js wired to the profile's shell over a WebSocket. Binary frames are output; JSON text frames are control. */
-export function TerminalView({ slug, active, restartSignal }: { slug: string; active: boolean; restartSignal: number }) {
+export function TerminalView({ slug, active, restartSignal, command, onCommandSent }: {
+  slug: string;
+  active: boolean;
+  restartSignal: number;
+  command: { text: string; n: number } | null;
+  /** Called once the command was typed into the shell, so it isn't replayed on remount. */
+  onCommandSent?: () => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -29,6 +36,12 @@ export function TerminalView({ slug, active, restartSignal }: { slug: string; ac
   const [attempt, setAttempt] = useState(0);
   const stateRef = useRef(state);
   stateRef.current = state;
+  // Auto-reconnect with backoff (1s, 2s, 4s… up to 30s) after the socket drops.
+  const retries = useRef(0);
+  const [retryIn, setRetryIn] = useState<number | null>(null);
+  // Command waiting for the shell to be connected (sent once, then cleared).
+  const pendingCommand = useRef<{ text: string; n: number } | null>(null);
+  const sentCommand = useRef<number | null>(null);
 
   const send = (msg: unknown) => {
     if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify(msg));
@@ -86,7 +99,11 @@ export function TerminalView({ slug, active, restartSignal }: { slug: string; ac
     const sock = new WebSocket(shellSocketUrl(slug, t.cols, t.rows));
     sock.binaryType = "arraybuffer";
     ws.current = sock;
-    sock.onopen = () => setState("open");
+    sock.onopen = () => {
+      retries.current = 0;
+      setRetryIn(null);
+      setState("open");
+    };
     sock.onmessage = (e) => {
       if (typeof e.data !== "string") {
         t.write(new Uint8Array(e.data as ArrayBuffer));
@@ -118,6 +135,33 @@ export function TerminalView({ slug, active, restartSignal }: { slug: string; ac
   }, [slug, attempt]);
 
   useEffect(() => {
+    if (state !== "closed") return;
+    const delay = Math.min(30_000, 1000 * 2 ** retries.current);
+    setRetryIn(Math.round(delay / 1000));
+    const t = setTimeout(() => {
+      retries.current += 1;
+      setAttempt((n) => n + 1);
+    }, delay);
+    return () => clearTimeout(t);
+  }, [state]);
+
+  // Run a requested command once the shell is live. Ctrl+U clears anything half-typed first.
+  useEffect(() => {
+    if (command && command.n !== sentCommand.current) pendingCommand.current = command;
+    const c = pendingCommand.current;
+    if (!c || state !== "open") return;
+    // Give the replay of recent output a moment so the command shows after the prompt.
+    const t = setTimeout(() => {
+      send({ type: "input", data: `\x15${c.text}\r` });
+      sentCommand.current = c.n;
+      pendingCommand.current = null;
+      onCommandSent?.();
+      term.current?.focus();
+    }, 250);
+    return () => clearTimeout(t);
+  }, [command?.n, state]);
+
+  useEffect(() => {
     if (!restartSignal) return;
     if (ws.current?.readyState === WebSocket.OPEN) send({ type: "restart" });
     else setAttempt((n) => n + 1);
@@ -139,8 +183,9 @@ export function TerminalView({ slug, active, restartSignal }: { slug: string; ac
     <div className="terminal-view">
       <div ref={host} className="terminal-host" />
       {state === "closed" && (
-        <div className="terminal-banner">
-          Disconnected from the shell. <button className="link-btn" onClick={() => setAttempt((n) => n + 1)}>Reconnect</button>
+        <div className="terminal-banner" role="status">
+          Disconnected from the shell.{retryIn !== null && ` Reconnecting in ${retryIn}s…`}{" "}
+          <button className="link-btn" onClick={() => { retries.current = 0; setAttempt((n) => n + 1); }}>Reconnect now</button>
         </div>
       )}
     </div>

@@ -1,5 +1,6 @@
 import { safeHref, type Ticket } from "./api";
-import { plainPreview, timeAgo } from "./time";
+import { ClockIcon } from "./icons";
+import { fullTime, plainPreview, timeAgo, useNow } from "./time";
 
 export function outcomeBadge(t: Ticket) {
   if (t.status === "in_progress") return <span className="badge running"><span className="spinner" /> Running</span>;
@@ -21,6 +22,8 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
   const badge = att ? null : outcomeBadge(ticket);
   const showActivity = working && ticket.lastActivity;
   const last = ticket.session?.lastMessage;
+  useNow();
+  const lastAt = ticket.session ? ticket.session.lastMessage?.at || ticket.session.updatedAt : null;
   return (
     <article
       className={`card ${dragging ? "dragging" : ""} ${working ? "is-running" : ""} ${att ? `needs-you att-${att.kind}` : ""}`}
@@ -32,7 +35,7 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
           <span className="yt-why">{att.label}</span>
         </div>
       )}
-      <div className="card-title">{ticket.title}</div>
+      <div className="card-title" title={ticket.title}>{ticket.title}</div>
       {showActivity ? (
         <div className="card-activity" title={ticket.lastActivity!}>
           <span className="spinner" /> {ticket.lastActivity}
@@ -47,10 +50,7 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
         <div className="card-meta">
           {ticket.scheduleId && (
             <span className="badge sched" title="Created by a schedule" aria-label="Scheduled">
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-                <circle cx="8" cy="8" r="6.2" />
-                <path d="M8 4.6V8l2.4 1.6" strokeLinecap="round" />
-              </svg>
+              <ClockIcon size={11} strokeWidth={1.8} />
             </span>
           )}
           {badge}
@@ -62,8 +62,8 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
           {ticket.workdir && (ticket.terminalOpen
             ? <span className="badge running" title="This ticket's Claude session is open in a terminal"><span className="live-dot" /> In terminal</span>
             : <span className="badge stopped" title="Linked to an existing Claude session">session</span>)}
-          {ticket.session && !working && (
-            <span className="muted small">{timeAgo(ticket.session.lastMessage?.at || ticket.session.updatedAt)}</span>
+          {lastAt && !working && (
+            <time className="muted small" dateTime={lastAt} title={fullTime(lastAt)}>{timeAgo(lastAt)}</time>
           )}
         </div>
       )}

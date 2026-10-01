@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { FileError, listDir, MAX_VIEW_BYTES, readFileForView, resolveInside } from "../src/server/files";
+import { FileError, listDir, MAX_VIEW_BYTES, openWithSystem, readFileForView, resolveInside } from "../src/server/files";
 import { makeRepo, tempDir } from "./helpers";
 
 const status = (fn: () => unknown) => {
@@ -61,4 +61,17 @@ test("readFileForView returns text, flags binary and large files", () => {
   expect(readFileForView(root, "img.bin")).toMatchObject({ content: null, binary: true });
   expect(readFileForView(root, "big.txt")).toMatchObject({ content: null, tooLarge: true });
   expect(status(() => readFileForView(root, ""))).toBe(400);
+});
+
+test("openWithSystem passes the real path as one argument and refuses paths outside the folder", async () => {
+  const root = tempDir();
+  const log = join(tempDir(), "argv.txt");
+  const opener = join(tempDir(), "opener.sh");
+  writeFileSync(opener, `#!/bin/sh\nprintf '%s\\n' "$@" > '${log}'\n`, { mode: 0o755 });
+  writeFileSync(join(root, "a b.md"), "x");
+  const file = openWithSystem(root, "a b.md", opener);
+  for (let i = 0; i < 100 && !readFileSync(log, { flag: "a+" }).toString(); i++) await Bun.sleep(20);
+  expect(readFileSync(log, "utf8")).toBe(`${file}\n`);
+  expect(status(() => openWithSystem(root, "../x", opener))).toBe(400);
+  expect(status(() => openWithSystem(root, "missing", opener))).toBe(404);
 });

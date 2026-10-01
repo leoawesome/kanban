@@ -22,7 +22,10 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
   const [name, setName] = useState(profile?.name ?? "");
   const [nameTouched, setNameTouched] = useState(!isNew);
   const [path, setPath] = useState(profile?.path ?? "");
-  const [maxParallel, setMaxParallel] = useState(profile?.maxParallel ?? DEFAULT_MAX_PARALLEL);
+  const [maxParallelText, setMaxParallelText] = useState(String(profile?.maxParallel ?? DEFAULT_MAX_PARALLEL));
+  const maxParallel = Number(maxParallelText);
+  const maxParallelError = /^\d+$/.test(maxParallelText.trim()) && maxParallel >= 1 && maxParallel <= 20 ? null : "A whole number from 1 to 20";
+  const [saving, setSaving] = useState(false);
   const [model, setModel] = useState(profile?.model ?? "");
   const [claudeModel, setClaudeModel] = useState<string | null>(null);
   const [recent, setRecent] = useState<ClaudeProject[] | null>(null);
@@ -64,6 +67,8 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving || maxParallelError) return;
+    setSaving(true);
     try {
       const p = profile
         ? await api.updateProfile(profile.slug, { name, path, maxParallel, model: model || null })
@@ -71,6 +76,7 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
       onSaved(p);
     } catch (e: any) {
       setErr(e.message);
+      setSaving(false);
     }
   };
 
@@ -108,13 +114,12 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
                     aria-selected={path === p.path}
                     className={`picker-row ${path === p.path ? "selected" : ""}`}
                     onClick={() => choose(p.path)}
-                    onDoubleClick={() => choose(p.path)}
                   >
                     <span className="picker-name">{p.name}</span>
                     <span className="picker-path">{p.path}</span>
                     <span className="picker-meta">
                       {p.hasProfile && <span className="badge stopped">has board</span>}
-                      {p.lastUsed && <span className="muted small">{timeAgo(p.lastUsed)}</span>}
+                      {p.lastUsed && <span className="muted small" title={new Date(p.lastUsed).toLocaleString()}>{timeAgo(p.lastUsed)}</span>}
                     </span>
                   </button>
                 ))}
@@ -137,7 +142,9 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
         <div className="row two">
           <label>
             Max parallel runs
-            <input type="number" min={1} max={20} value={maxParallel} onChange={(e) => setMaxParallel(Number(e.target.value) || 1)} />
+            <input type="number" min={1} max={20} step={1} value={maxParallelText} onChange={(e) => setMaxParallelText(e.target.value)}
+              aria-invalid={!!maxParallelError} aria-describedby={maxParallelError ? "max-parallel-error" : undefined} />
+            {maxParallelError && <span id="max-parallel-error" className="field-error">{maxParallelError}</span>}
           </label>
           <label>
             Model
@@ -157,17 +164,20 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
         {err && <div className="form-error">{err}</div>}
         <div className="form-actions">
           {profile && (
-            <button type="button" className="btn ghost danger-text" onClick={() => setConfirmDelete(true)}>Delete profile</button>
+            <button type="button" className="btn ghost danger" onClick={() => setConfirmDelete(true)}>Delete profile</button>
           )}
           <div className="spacer" />
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn primary" disabled={!name.trim() || !path.trim()}>{profile ? "Save" : "Create board"}</button>
+          <button type="submit" className="btn primary" disabled={saving || !name.trim() || !path.trim() || !!maxParallelError}>
+            {saving ? (profile ? "Saving…" : "Creating…") : profile ? "Save" : "Create board"}
+          </button>
         </div>
       </form>
       {confirmDelete && profile && (
         <ConfirmDialog
           title={`Delete board "${profile.name}"?`}
           confirmLabel="Delete board"
+          busyLabel="Deleting…"
           onCancel={() => setConfirmDelete(false)}
           onConfirm={remove}
         >

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
+import { useFocusTrap, useLayer } from "./layers";
 
-export function ConfirmDialog({ title, children, confirmLabel, busyLabel = "Deleting…", tone = "danger", onConfirm, onCancel }: {
+export function ConfirmDialog({ title, children, confirmLabel, busyLabel = "Working…", tone = "danger", onConfirm, onCancel }: {
   title: string;
   children: ReactNode;
   confirmLabel: string;
@@ -11,19 +12,11 @@ export function ConfirmDialog({ title, children, confirmLabel, busyLabel = "Dele
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const id = useId();
+  const box = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    cancelRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onCancel();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onCancel]);
+  useLayer(onCancel);
+  useFocusTrap(box);
 
   const confirm = async () => {
     setBusy(true);
@@ -37,14 +30,14 @@ export function ConfirmDialog({ title, children, confirmLabel, busyLabel = "Dele
 
   return (
     <div className="overlay confirm-overlay" onMouseDown={(e) => e.target === e.currentTarget && onCancel()}>
-      <div className="modal confirm" role="alertdialog" aria-label={title}>
+      <div ref={box} className="modal confirm" role="alertdialog" aria-modal="true" aria-labelledby={id}>
         <div className="confirm-body">
-          <h3>{title}</h3>
+          <h3 id={id}>{title}</h3>
           <div className="confirm-text">{children}</div>
           {err && <div className="form-error">{err}</div>}
         </div>
         <div className="form-actions confirm-actions">
-          <button ref={cancelRef} className="btn ghost" onClick={onCancel}>Cancel</button>
+          <button ref={cancelRef} className="btn ghost" onClick={onCancel} autoFocus>Cancel</button>
           <button className={`btn ${tone}`} onClick={confirm} disabled={busy}>{busy ? busyLabel : confirmLabel}</button>
         </div>
       </div>

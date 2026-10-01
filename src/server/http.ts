@@ -10,7 +10,7 @@ import { cronError, describeCron, nextRuns, parseCron } from "./cron";
 import { ScheduleError, Scheduler } from "./scheduler";
 import { attentionFor } from "./attention";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
-import { FileError, listDir, readFileForView } from "./files";
+import { FileError, listDir, openWithSystem, readFileForView } from "./files";
 import { McpError, McpManager } from "./mcp";
 import { SessionCache } from "./session";
 import { ptySupported, ShellManager, type Shell } from "./shell";
@@ -201,6 +201,16 @@ export function createServer(deps: ServerDeps) {
         await mcp.logout(name);
         return json(mcp.state());
       }
+      if (parts.length === 3 && m === "POST" && parts[2] === "recheck") {
+        const s = await mcp.recheck(name);
+        if (!s) throw new HttpError(502, `couldn't check ${name}; try Refresh`);
+        return json(mcp.state());
+      }
+      if (parts.length === 3 && m === "GET" && parts[2] === "config") return json(mcp.config(name));
+      if (parts.length === 2 && m === "PUT") {
+        await mcp.update(name, await body(req));
+        return json(mcp.state());
+      }
       throw new HttpError(404, "not found");
     }
 
@@ -297,6 +307,17 @@ export function createServer(deps: ServerDeps) {
         if (e instanceof FileError) throw new HttpError(e.status, e.message);
         throw e;
       }
+    }
+    // /profiles/:p/open-file { path } — open a file from the explorer in its default app
+    if (parts[2] === "open-file" && parts.length === 3 && m === "POST") {
+      const rel = String((await body(req)).path ?? "");
+      try {
+        openWithSystem(profile.path, rel, process.env.CKANBAN_OPEN_BIN);
+      } catch (e) {
+        if (e instanceof FileError) throw new HttpError(e.status, e.message);
+        throw e;
+      }
+      return json({ ok: true });
     }
 
     // /profiles/:p/shell — WebSocket to the profile's interactive shell

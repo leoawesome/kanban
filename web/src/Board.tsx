@@ -1,20 +1,34 @@
 import {
-  closestCenter, DndContext, pointerWithin, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors,
-  type CollisionDetection, type DragEndEvent, type DragStartEvent,
+  closestCenter, DndContext, pointerWithin, DragOverlay, KeyboardSensor, PointerSensor, rectIntersection, useDroppable, useSensor, useSensors,
+  type CollisionDetection, type DragEndEvent, type DragStartEvent, type KeyboardCoordinateGetter,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { COLUMNS, type Status, type Ticket } from "./api";
 import { Card } from "./Card";
+import { CollapseIcon, PlusIcon, SparkIcon } from "./icons";
+
+const COLLAPSED_KEY = "ckanban.collapsedColumns";
+
+function readCollapsed(): Set<Status> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+}
 
 interface Props {
   tickets: Ticket[];
   onOpen: (id: string) => void;
   onMove: (id: string, status: Status, order: number) => void;
   onAdd: (status: Status) => void;
+  /** A search or filter is active (empty columns say "no match" instead of the usual hint). */
+  filtered?: boolean;
 }
 
+/** Drag with the mouse, or focus a card: Enter opens it, Space picks it up (arrows move, Space drops, Esc cancels). */
 function SortableCard({ ticket, onOpen }: { ticket: Ticket; onOpen: (id: string) => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
@@ -23,26 +37,40 @@ function SortableCard({ ticket, onOpen }: { ticket: Ticket; onOpen: (id: string)
   return (
     <div
       ref={setNodeRef}
+      className="sortable-card"
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.35 : 1 }}
       {...attributes}
       {...listeners}
+      aria-label={ticket.title}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && e.target === e.currentTarget) {
+          e.preventDefault();
+          onOpen(ticket.id);
+          return;
+        }
+        listeners?.onKeyDown?.(e);
+      }}
     >
       <Card ticket={ticket} onClick={() => onOpen(ticket.id)} />
     </div>
   );
 }
 
-const SPARK = (
-  <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden>
-    <path d="M8 0c.5 3.9 2.1 5.5 6 6-3.9.5-5.5 2.1-6 6-.5-3.9-2.1-5.5-6-6 3.9-.5 5.5-2.1 6-6Z" fill="currentColor" />
-  </svg>
-);
+const EMPTY_HINT: Record<Status, string> = {
+  backlog: "No parked ideas. Press N or + to add one.",
+  planning: "Drop a card here and Claude starts interviewing you",
+  ready: "Drop a card here and Claude starts working on it",
+  in_progress: "Cards show up here while Claude works",
+  review: "Finished work lands here for you to check",
+  done: "Nothing finished yet",
+};
 
 const DONE_LIMIT = 10;
 const CLAUDE_TAG = "Claude starts automatically when a card is here";
 
-function Column({ id, label, hint, claude, tickets, onOpen, onAdd }: {
+function Column({ id, label, hint, claude, tickets, onOpen, onAdd, collapsed, onCollapse, filtered }: {
   id: Status; label: string; hint: string; claude: boolean; tickets: Ticket[]; onOpen: (id: string) => void; onAdd: (s: Status) => void;
+  collapsed: boolean; onCollapse: (v: boolean) => void; filtered: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${id}`, data: { status: id } });
   const needYou = tickets.filter((t) => t.attention && !t.running && t.status !== "in_progress").length;
@@ -53,16 +81,31 @@ function Column({ id, label, hint, claude, tickets, onOpen, onAdd }: {
   const [showAll, setShowAll] = useState(false);
   const limited = id === "done" && !showAll && tickets.length > DONE_LIMIT;
   const shown = limited ? tickets.slice(0, DONE_LIMIT) : tickets;
+  const countBadge = <span className={`count ${needYou > 0 ? "needs-you" : ""}`} title={countLabel} aria-label={countLabel}>{tickets.length}</span>;
+  if (collapsed) {
+    // Narrow strip: still a drop target; click to expand.
+    return (
+      <section ref={setNodeRef} className={`column collapsed col-${id} ${claude ? "claude-zone" : ""} ${isOver ? "over" : ""}`}>
+        <button className="column-strip" onClick={() => onCollapse(false)} title={`Expand ${label}`} aria-label={`Expand ${label}, ${countLabel}`}>
+          {countBadge}
+          <span className="column-strip-title">{label}</span>
+        </button>
+      </section>
+    );
+  }
   return (
-    <section className={`column col-${id} ${claude ? "claude-zone" : ""} ${isOver ? "over" : ""}`}>
+    <section className={`column col-${id} ${claude ? "claude-zone" : ""} ${isOver ? "over" : ""}`} aria-label={label}>
       <header className="column-head">
         <span className="column-title">{label}</span>
         {/* One badge: total count, turning amber with a dot while tickets wait on you. */}
-        <span className={`count ${needYou > 0 ? "needs-you" : ""}`} title={countLabel} aria-label={countLabel}>{tickets.length}</span>
-        {claude && <span className="claude-tag" title={CLAUDE_TAG} aria-label={CLAUDE_TAG}>{SPARK}</span>}
+        {countBadge}
+        {claude && <span className="claude-tag" title={CLAUDE_TAG} aria-label={CLAUDE_TAG}><SparkIcon /></span>}
         <span className="spacer" />
+        <button className="icon-btn tiny column-collapse" title={`Collapse ${label}`} aria-label={`Collapse ${label}`} onClick={() => onCollapse(true)}>
+          <CollapseIcon />
+        </button>
         {canAdd ? (
-          <button className="icon-btn" title={`Add to ${label}`} onClick={() => onAdd(id)}>+</button>
+          <button className="icon-btn" title={`Add to ${label}`} aria-label={`Add ticket to ${label}`} onClick={() => onAdd(id)}><PlusIcon /></button>
         ) : <span className="icon-btn-placeholder" aria-hidden />}
       </header>
       <div className="column-hint">{hint}</div>
@@ -76,10 +119,8 @@ function Column({ id, label, hint, claude, tickets, onOpen, onAdd }: {
               {showAll ? "Show fewer" : `Show all ${tickets.length}`}
             </button>
           )}
-          {tickets.length === 0 && claude && (
-            <div className="column-drop-hint">
-              {id === "in_progress" ? "Cards show up here while Claude works" : `Drop a card here and Claude ${id === "planning" ? "starts interviewing you" : "starts working on it"}`}
-            </div>
+          {tickets.length === 0 && (
+            <div className={claude ? "column-drop-hint" : "column-empty"}>{filtered ? "No matching tickets" : EMPTY_HINT[id]}</div>
           )}
         </div>
       </SortableContext>
@@ -87,8 +128,28 @@ function Column({ id, label, hint, claude, tickets, onOpen, onAdd }: {
   );
 }
 
+// Keyboard: ←/→ jump to the next column (top of its list), ↑/↓ move within the column.
+const keyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
+  if (event.code !== "ArrowLeft" && event.code !== "ArrowRight") return sortableKeyboardCoordinates(event, args);
+  const rect = args.context.collisionRect;
+  if (!rect) return undefined;
+  const cols = [...document.querySelectorAll<HTMLElement>(".board > .column")].map((c) => c.getBoundingClientRect());
+  const mid = rect.left + rect.width / 2;
+  const at = cols.findIndex((c) => mid >= c.left && mid <= c.right);
+  const next = cols[at + (event.code === "ArrowRight" ? 1 : -1)];
+  if (at < 0 || !next) return undefined;
+  event.preventDefault();
+  return { x: next.left + (next.width - rect.width) / 2, y: next.top + 70 };
+};
+
 // Prefer whatever is under the pointer (a card beats its column); fall back to nearest card.
 const collision: CollisionDetection = (args) => {
+  // Keyboard drags have no pointer: take what the moved card overlaps most (a card, else the column).
+  if (!args.pointerCoordinates) {
+    const overlap = rectIntersection(args);
+    if (overlap.length) return [overlap[0]];
+    return closestCenter(args);
+  }
   const hits = pointerWithin(args);
   if (hits.length) {
     const card = hits.find((h) => !String(h.id).startsWith("col:"));
@@ -97,9 +158,28 @@ const collision: CollisionDetection = (args) => {
   return closestCenter(args);
 };
 
-export function Board({ tickets, onOpen, onMove, onAdd }: Props) {
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+export function Board({ tickets, onOpen, onMove, onAdd, filtered = false }: Props) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    // Enter is kept for opening the card, so only Space picks up / drops.
+    useSensor(KeyboardSensor, {
+      coordinateGetter: keyboardCoordinates,
+      keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
+    }),
+  );
   const [dragId, setDragId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed]));
+    } catch {}
+  }, [collapsed]);
+  const setColumnCollapsed = (id: Status, v: boolean) => setCollapsed((s) => {
+    const next = new Set(s);
+    if (v) next.add(id);
+    else next.delete(id);
+    return next;
+  });
 
   const byColumn = useMemo(() => {
     const m = new Map<Status, Ticket[]>(COLUMNS.map((c) => [c.id, []]));
@@ -144,7 +224,8 @@ export function Board({ tickets, onOpen, onMove, onAdd }: Props) {
     <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
       <main className="board">
         {COLUMNS.map((c) => (
-          <Column key={c.id} {...c} tickets={byColumn.get(c.id) ?? []} onOpen={onOpen} onAdd={onAdd} />
+          <Column key={c.id} {...c} tickets={byColumn.get(c.id) ?? []} onOpen={onOpen} onAdd={onAdd} filtered={filtered}
+            collapsed={collapsed.has(c.id)} onCollapse={(v) => setColumnCollapsed(c.id, v)} />
         ))}
       </main>
       <DragOverlay>{dragging ? <Card ticket={dragging} dragging /> : null}</DragOverlay>

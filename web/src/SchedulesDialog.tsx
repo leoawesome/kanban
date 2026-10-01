@@ -6,7 +6,7 @@ import {
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Modal } from "./Modal";
 import { ModeToggle } from "./ModeToggle";
-import { timeAgo, timeUntil } from "./time";
+import { timeAgo, timeUntil, useNow } from "./time";
 
 export const CRON_PRESETS: { label: string; cron: string }[] = [
   { label: "Hourly", cron: "0 * * * *" },
@@ -51,6 +51,7 @@ export function SchedulesDialog({ profile, schedules, tickets, onOpenTicket, onC
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  useNow();
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key);
@@ -102,7 +103,7 @@ export function SchedulesDialog({ profile, schedules, tickets, onOpenTicket, onC
           <button className={`btn small ghost${historyOf === s.id ? " on" : ""}`} aria-pressed={historyOf === s.id}
             onClick={() => setHistoryOf((h) => (h === s.id ? null : s.id))}>History</button>
           <button className="btn small ghost" onClick={() => setEditing(s)}>Edit</button>
-          <button className="btn small ghost danger-text" onClick={() => setConfirm(s)}>Delete</button>
+          <button className="btn small ghost danger" onClick={() => setConfirm(s)}>Delete</button>
         </div>
       </div>
       {editing !== "new" && editing?.id === s.id && (
@@ -138,6 +139,7 @@ export function SchedulesDialog({ profile, schedules, tickets, onOpenTicket, onC
         <ConfirmDialog
           title={`Delete ${confirm.name}?`}
           confirmLabel="Delete"
+          busyLabel="Deleting…"
           onCancel={() => setConfirm(null)}
           onConfirm={async () => {
             await api.deleteSchedule(profile.slug, confirm.id);

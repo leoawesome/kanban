@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, subscribe, type SessionEntry, type Ticket } from "./api";
+import { ArrowDownIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
 import { draftKey, formKey } from "./drafts";
-import { timeAgo } from "./time";
+import { fullTime, timeAgo, useNow } from "./time";
+import { toast } from "./toast";
 import { Markdown } from "./Transcript";
 import { usePersistentState } from "./usePersistentState";
 
@@ -36,6 +38,15 @@ function liveView(text: string): { text: string; preparing: string | null } {
 
 const REFINE = (s: Ticket["status"]) => s === "backlog" || s === "planning";
 
+/** Grows the textarea with its text (about 8 lines), then it scrolls. */
+function autoGrow(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = "auto";
+  const max = Math.min(window.innerHeight * 0.3, 8 * 22 + 8);
+  el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+  el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+}
+
 // Image links reach the session as local file paths, so compare by file name.
 const norm = (s: string) => s.trim().replace(/\S*\/attachments\/([0-9a-f]{32}\.\w+)/g, "$1");
 /** Whether a message the user sent is in the session file yet. */
@@ -64,6 +75,12 @@ export function useStop(slug: string, ticket: Ticket, working: boolean, onError:
 
 export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; onError: (m: string) => void }) {
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Scrolled up: offer a jump back down; "fresh" = something new arrived meanwhile.
+  const [jump, setJump] = useState<{ fresh: boolean } | null>(null);
+  const [showWarnDetails, setShowWarnDetails] = useState(false);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  useNow();
   // Sent messages not yet in the session file (the server's queue covers ones Claude hasn't read).
   const [pending, setPending] = useState<string[]>([]);
   const queued = ticket.queued ?? [];
@@ -91,10 +108,18 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
     });
   }, [slug, ticket.id, ticket.sessionId]);
 
+  const reload = useCallback(() => {
+    setLoadError(null);
+    loadTail().catch((e) => {
+      setLoadError(e.message);
+      setPage((p) => p ?? { entries: [], start: 0 });
+    });
+  }, [loadTail]);
   useEffect(() => {
     setPage(null);
-    loadTail().catch(() => setPage({ entries: [], start: 0 }));
-  }, [loadTail]);
+    reload();
+  }, [reload]);
+  useLayoutEffect(() => autoGrow(composer.current), [draft]);
 
   // Live updates: session file changes (terminal) and run activity (board) both refresh the tail.
   useEffect(() => subscribe((e) => {
@@ -138,7 +163,16 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
       el.scrollTop = el.scrollHeight - keepOffset.current;
       keepOffset.current = null;
     } else if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+    else setJump((j) => (j ? { fresh: true } : j));
   }, [page, pending, running, live]);
+
+  const toBottom = () => {
+    const el = scroller.current;
+    if (!el) return;
+    stickToBottom.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    setJump(null);
+  };
 
   const send = async (text: string) => {
     const t = text.trim();
@@ -174,16 +208,44 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const isApplied = (p: { title: string; description: string }) =>
     (!p.title || p.title === ticket.title) && (!p.description || p.description.trim() === ticket.body.trim());
 
-  const empty = page !== null && entries.length === 0 && !pending.length && !queued.length && !running;
+  const empty = page !== null && !loadError && entries.length === 0 && !pending.length && !queued.length && !running;
+
+  const applyProposal = async (p: { title: string; description: string }) => {
+    const before = { title: ticket.title, body: ticket.body };
+    try {
+      await api.updateTicket(slug, ticket.id, {
+        ...(p.title ? { title: p.title } : {}),
+        ...(p.description ? { body: p.description } : {}),
+      });
+      toast("Applied to the ticket", {
+        tone: "ok",
+        action: {
+          label: "Undo",
+          run: () => api.updateTicket(slug, ticket.id, before).catch((err) => toast(`Undo failed: ${err.message}`, { tone: "error" })),
+        },
+      });
+    } catch (err: any) {
+      onError(err.message);
+    }
+  };
 
   return (
     <div className="chat">
       <div className="chat-log" ref={scroller}
         onScroll={(e) => {
           const el = e.currentTarget;
-          stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+          const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+          stickToBottom.current = gap < 60;
+          if (gap < 60) setJump(null);
+          else if (gap > 240) setJump((j) => j ?? { fresh: false });
         }}>
-        {page === null && <div className="muted">Loading…</div>}
+        {page === null && <div className="muted"><span className="spinner" /> Loading the conversation…</div>}
+        {loadError && (
+          <div className="banner error inline load-error" role="alert">
+            Couldn't load the conversation: {loadError}{" "}
+            <button className="link-btn" onClick={reload}>Retry</button>
+          </div>
+        )}
         {page && page.start > 0 && (
           <button className="btn ghost small load-earlier" onClick={loadEarlier} disabled={loadingEarlier}>
             {loadingEarlier ? "Loading…" : `Load earlier (${page.start} more)`}
@@ -222,13 +284,13 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
           }
           const e = b.e;
           if (e.kind === "board") {
-            return <div key={e.uuid} className="chat-note">{e.text}{e.at && <span> · {timeAgo(e.at)}</span>}</div>;
+            return <div key={e.uuid} className="chat-note">{e.text}{e.at && <span title={fullTime(e.at)}> · {timeAgo(e.at)}</span>}</div>;
           }
           return (
             <div key={e.uuid} className={`conv-msg ${e.role}`}>
               <div className="conv-head">
                 <b>{e.role === "user" ? "You" : "Claude"}</b>
-                {e.at && <span className="muted small" title={new Date(e.at).toLocaleString()}>{timeAgo(e.at)}</span>}
+                {e.at && <time className="muted small" dateTime={e.at} title={fullTime(e.at)}>{timeAgo(e.at)}</time>}
               </div>
               {e.text && <Markdown text={e.text.replace(/^.*CKANBAN_RESULT:.*$/m, "").trim()} />}
               {e.questions && (
@@ -236,21 +298,11 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
                   storageKey={formKey(slug, ticket.id, e.uuid)} />
               )}
               {e.proposal && (
-                <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)}
-                  onApply={async () => {
-                    try {
-                      await api.updateTicket(slug, ticket.id, {
-                        ...(e.proposal!.title ? { title: e.proposal!.title } : {}),
-                        ...(e.proposal!.description ? { body: e.proposal!.description } : {}),
-                      });
-                    } catch (err: any) {
-                      onError(err.message);
-                    }
-                  }} />
+                <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)} onApply={() => applyProposal(e.proposal!)} />
               )}
               {e.moved === "planning" && (
                 <div className="chat-moved">
-                  ↩ Moved to <b>Planning</b>: this was a planning request, so nothing was changed. Answer or refine here, then
+                  Moved to <b>Planning</b>: this was a planning request, so nothing was changed. Answer or refine here, then
                   drag the card to Ready when you want Claude to do it.
                 </div>
               )}
@@ -293,16 +345,29 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
         {!running && ticket.error && !ticket.error.startsWith("corrupt") && (
           <div className="banner error inline"><pre>{ticket.error}</pre></div>
         )}
+        {/* Sticky inside the log, so it floats just above the composer. */}
+        {jump && (
+          <button className={`jump-latest${jump.fresh ? " fresh" : ""}`} onClick={toBottom}>
+            <ArrowDownIcon size={12} /> {jump.fresh ? "New messages" : "Jump to latest"}
+          </button>
+        )}
       </div>
 
       {ticket.terminalOpen && !running && (
         <div className="composer-warn">
-          This session is also open in your terminal. Sending here works, but if you type in both places at once the two
-          conversations can get mixed up. Easiest: continue in one place.
+          Also open in your terminal: type in one place at a time.{" "}
+          <button className="link-btn small" aria-expanded={showWarnDetails} onClick={() => setShowWarnDetails((v) => !v)}>
+            {showWarnDetails ? "Less" : "Why?"}
+          </button>
+          {showWarnDetails && (
+            <div className="composer-warn-more">
+              Sending here works, but if you type in both places at once the two conversations can get mixed up.
+            </div>
+          )}
         </div>
       )}
       <div className="composer">
-        <textarea rows={2} value={draft} disabled={stopping} className={images.dragOver ? "drop-target" : undefined} {...images.handlers}
+        <textarea ref={composer} rows={2} value={draft} disabled={stopping} className={images.dragOver ? "drop-target" : undefined} {...images.handlers}
           placeholder={running ? "Steer Claude: it reads this at its next step, no restart…" : refine ? "Describe your idea or answer Claude…" : "Ask Claude to change or continue something…"}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -313,8 +378,9 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
           }} />
         {images.error && <div className="form-error">{images.error}</div>}
         <div className="composer-foot">
-          <span className="muted small">
-            {refine ? "Refine mode: Claude won't change any files." : "Claude will act on your message, like in the terminal."} Enter to send, Shift+Enter for a new line.
+          <span className="muted small composer-hint">
+            {refine ? "Refine mode: Claude won't change files." : "Claude acts on your message."}
+            <span className="composer-keys"> Enter to send · Shift+Enter for a new line</span>
           </span>
           <span className="composer-actions">
             {running && <button className="btn danger small" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop"}</button>}

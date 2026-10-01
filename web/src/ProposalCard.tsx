@@ -26,7 +26,7 @@ export function ProposalCard({ proposal, applied, onApply }: {
             {busy ? "Applying…" : "Apply to ticket"}
           </button>
         )}
-        <span className="muted small">Replaces the title and description. You can still edit them afterwards.</span>
+        <span className="muted small">{applied ? "You can still edit them in the details." : "Replaces the title and description. You can undo right after."}</span>
       </div>
     </div>
   );

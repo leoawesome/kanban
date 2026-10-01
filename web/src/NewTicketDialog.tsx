@@ -38,7 +38,7 @@ export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate
   };
 
   return (
-    <Modal title="New ticket" onClose={onClose}>
+    <Modal title="New ticket" onClose={onClose} guard={!busy && (!!title.trim() || !!body.trim())}>
       <form className="form" onSubmit={submit}>
         <div className="field">
           {session ? (
@@ -67,7 +67,7 @@ export function NewTicketDialog({ slug, folder, initialStatus, onClose, onCreate
           <ModeToggle value={mode} onChange={setMode} />
           <span className="muted small">
             {mode === "interview"
-              ? "Claude first asks clarifying questions in the comments, then does the work once you answer."
+              ? "Claude first asks clarifying questions in the chat, then does the work once you answer."
               : "Claude works on its own and reports back when done."}
           </span>
         </div>

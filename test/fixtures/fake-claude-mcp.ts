@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Fake `claude mcp …` for tests. State lives in FAKE_MCP_STATE (JSON: name → status line), argv log in FAKE_ARGS_FILE.
-// FAKE_LOGIN=fail makes `login` exit 1.
+// FAKE_LOGIN=fail makes `login` exit 1, FAKE_ADD=fail makes `add` exit 1.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
@@ -31,6 +31,10 @@ if (cmd === "list") {
   state[name].status = "! Needs authentication";
   save();
 } else if (cmd === "add") {
+  if (process.env.FAKE_ADD === "fail") {
+    console.error("add failed");
+    process.exit(1);
+  }
   const i = args.indexOf("--transport");
   const rest = args.slice(i + 2);
   const n = rest[0];

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, subscribe, type OutputFile } from "./api";
-import { timeAgo } from "./time";
+import { fullTime, timeAgo, useNow } from "./time";
 import { Markdown } from "./Transcript";
 
 function kb(n: number): string {
@@ -12,12 +12,18 @@ export function Outputs({ slug, ticketId, onCount }: { slug: string; ticketId: s
   const [files, setFiles] = useState<OutputFile[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useNow();
 
   const load = () => api.outputs(slug, ticketId).then((fs) => {
+    setError(null);
     setFiles(fs);
     onCount?.(fs.length);
     setOpen((cur) => cur ?? fs.find((f) => f.name.endsWith(".md"))?.name ?? fs[0]?.name ?? null);
-  }).catch(() => setFiles([]));
+  }).catch((e) => {
+    setError(e.message);
+    setFiles((f) => f ?? []);
+  });
 
   useEffect(() => { load(); }, [slug, ticketId]);
   useEffect(() => subscribe((e) => {
@@ -32,7 +38,14 @@ export function Outputs({ slug, ticketId, onCount }: { slug: string; ticketId: s
     api.outputText(slug, ticketId, open).then(setText).catch((e) => setText(`Could not load: ${e.message}`));
   }, [slug, ticketId, open, current?.updatedAt]);
 
-  if (files === null) return <div className="muted">Loading…</div>;
+  if (files === null) return <div className="muted"><span className="spinner" /> Loading…</div>;
+  if (error && !files.length) {
+    return (
+      <div className="banner error inline load-error" role="alert">
+        Couldn't load the outputs: {error} <button className="link-btn" onClick={load}>Retry</button>
+      </div>
+    );
+  }
   if (!files.length) return <div className="muted">No outputs yet. Research and writing tasks save their report here.</div>;
 
   return (
@@ -41,7 +54,7 @@ export function Outputs({ slug, ticketId, onCount }: { slug: string; ticketId: s
         {files.map((f) => (
           <button key={f.name} className={`output-file ${f.name === open ? "on" : ""}`} onClick={() => setOpen(f.name)}>
             <span className="output-name">{f.name}</span>
-            <span className="muted small">{kb(f.size)} · {timeAgo(f.updatedAt)}</span>
+            <span className="muted small" title={fullTime(f.updatedAt)}>{kb(f.size)} · {timeAgo(f.updatedAt)}</span>
           </button>
         ))}
       </div>

@@ -131,6 +131,43 @@ export function scopeOf(name: string, cfg: { user: Set<string>; local: Set<strin
   return "other";
 }
 
+/** Quotes one word for a POSIX shell (only when needed). */
+export function shellQuote(s: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Saved settings of a server, unmasked, for the edit form and for running it in a terminal. */
+export interface McpConfig extends McpAddInput {
+  scope: McpScope;
+  /** Shell line that starts a stdio server the way Claude does (env included). Null for http/sse. */
+  commandLine: string | null;
+}
+
+/** Reads a server's entry from Claude's config files. Null when it isn't in them (claude.ai, plugins). */
+export function readMcpConfig(name: string, cwd: string, configFile: string): McpConfig | null {
+  const cfg = readJson(configFile) ?? {};
+  const sources: [McpScope, any][] = [
+    ["local", cfg.projects?.[cwd]?.mcpServers],
+    ["project", readJson(join(cwd, ".mcp.json"))?.mcpServers],
+    ["user", cfg.mcpServers],
+  ];
+  for (const [scope, servers] of sources) {
+    const e = servers && typeof servers === "object" ? servers[name] : null;
+    if (!e || typeof e !== "object") continue;
+    const kind = String(e.type ?? (e.url ? "http" : "stdio"));
+    if (kind === "http" || kind === "sse") {
+      const headers = Object.entries(e.headers ?? {}).map(([k, v]) => ({ name: k, value: String(v) }));
+      return { name, scope, transport: kind, url: String(e.url ?? ""), headers, commandLine: null };
+    }
+    const command = String(e.command ?? "");
+    const args = Array.isArray(e.args) ? e.args.map(String) : [];
+    const env = Object.entries(e.env ?? {}).map(([k, v]) => ({ key: k, value: String(v) }));
+    const commandLine = [...env.map((x) => `${x.key}=${shellQuote(x.value)}`), shellQuote(command), ...args.map(shellQuote)].join(" ");
+    return { name, scope, transport: "stdio", command, args, env, commandLine };
+  }
+  return null;
+}
+
 function readJson(path: string): any {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -320,6 +357,34 @@ export class McpManager {
     this.saveSeen();
     this.emit();
     return this.servers[i];
+  }
+
+  /** Saved settings of one server (unmasked). Throws 404 if it isn't in Claude's config files. */
+  config(name: string): McpConfig {
+    this.find(name);
+    const c = readMcpConfig(name, this.cwd, this.configFile);
+    if (!c) throw new McpError(404, `${name} isn't in Claude's config files, so it can't be edited here`);
+    return c;
+  }
+
+  /** Replaces a user-scope server: remove, then add with the new settings (restores the old one if that fails). */
+  async update(name: string, input: McpAddInput): Promise<void> {
+    const s = this.find(name);
+    if (s.scope !== "user") throw new McpError(400, `${name} isn't a user-scope server; edit it where it's configured`);
+    const args = addArgs(input);
+    const next = String(input.name).trim();
+    if (next !== name && this.servers.some((x) => x.name === next)) throw new McpError(409, `a server named "${next}" already exists`);
+    const old = readMcpConfig(name, this.cwd, this.configFile);
+    const rm = await this.run(["mcp", "remove", name, "--scope", "user"], 60_000);
+    if (rm.code !== 0) throw new McpError(502, errorText(rm, "claude mcp remove"));
+    const r = await this.run(args, 60_000);
+    if (r.code !== 0) {
+      if (old) await this.run(addArgs(old), 60_000).catch(() => null);
+      this.refresh();
+      throw new McpError(502, errorText(r, "claude mcp add"));
+    }
+    this.logins.delete(name);
+    this.refresh();
   }
 
   /**

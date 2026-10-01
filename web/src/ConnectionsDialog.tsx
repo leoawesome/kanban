@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { api, safeHref, type McpAddInput, type McpServer, type McpState, type McpTransport } from "./api";
+import { api, copy, safeHref, type McpAddInput, type McpConfig, type McpServer, type McpState, type McpTransport } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { CloseIcon, CopyIcon, TerminalIcon } from "./icons";
 import { Modal } from "./Modal";
-import { timeAgo } from "./time";
+import { timeAgo, useNow } from "./time";
 
 const STATUS_LABEL: Record<McpServer["status"], [string, string]> = {
   connected: ["Connected", "ok"],
@@ -19,6 +20,16 @@ export function canLogin(s: McpServer): boolean {
   return s.scope === "claude.ai" || s.transport === "http" || s.transport === "sse";
 }
 
+/** Quotes one word for a POSIX shell (only when needed). */
+export function shellQuote(s: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Quotes args for the edit form's single "Arguments" line (inverse of splitArgs). */
+function joinArgs(args: string[]): string {
+  return args.map((a) => (/^[^\s"'\\]+$/.test(a) ? a : `"${a.replace(/(["\\])/g, "\\$1")}"`)).join(" ");
+}
+
 /** Splits an argument line like a shell would for quotes, without running anything. */
 export function splitArgs(line: string): string[] {
   const out: string[] = [];
@@ -27,13 +38,33 @@ export function splitArgs(line: string): string[] {
   return out;
 }
 
-/** Claude Code MCP servers, like `/mcp`: status, OAuth log in / out, add and remove (user scope). */
-export function ConnectionsDialog({ state, onClose }: { state: McpState | null; onClose: () => void }) {
+const SCOPE_HELP: Record<McpServer["scope"], string> = {
+  user: "Your user config (~/.claude.json): every Claude session can use it.",
+  local: "Local to your home folder's project entry in ~/.claude.json. Edit or remove it with `claude mcp` there.",
+  project: "From a .mcp.json file. Edit or remove it in that file.",
+  "claude.ai": "A claude.ai connector. Add or remove it in claude.ai → Settings → Connectors.",
+  other: "From a plugin or another config. Manage it where it's defined.",
+};
+
+const looksLikeTty = (err: string | null | undefined) => !!err && /terminal|tty|stdin|interactive/i.test(err);
+
+/** Claude Code MCP servers, like `/mcp`: status, OAuth log in / out, add, edit and remove (user scope). */
+export function ConnectionsDialog({ state, onClose, onRunInTerminal }: {
+  state: McpState | null;
+  onClose: () => void;
+  /** Opens the board's terminal and runs the command there. Missing when there's no terminal (no profile). */
+  onRunInTerminal?: (command: string) => void;
+}) {
   const [adding, setAdding] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ kind: "remove" | "logout"; server: McpServer } | null>(null);
   const [showIdle, setShowIdle] = useState(false);
+  const [editing, setEditing] = useState<McpConfig | null>(null);
+  // Command to show with a Copy button when there is no terminal to run it in.
+  const [manual, setManual] = useState<{ server: string; command: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  useNow();
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key);
@@ -47,6 +78,25 @@ export function ConnectionsDialog({ state, onClose }: { state: McpState | null; 
     }
   };
 
+  const run = (server: string, command: string) => {
+    if (onRunInTerminal) onRunInTerminal(command);
+    else {
+      setCopied(false);
+      setManual({ server, command });
+    }
+  };
+  // Same folder as the Connections list (home), so local servers resolve the same way.
+  const loginCommand = (s: McpServer) => `cd ~ && claude mcp login ${shellQuote(s.name)}`;
+  const runServer = (s: McpServer) => act(`run:${s.name}`, async () => {
+    const cfg = await api.mcpConfig(s.name).catch(() => null);
+    const line = cfg?.commandLine ?? (s.target && !s.target.includes("***") ? s.target : null);
+    run(s.name, line ? `cd ~ && ${line}` : `claude mcp get ${shellQuote(s.name)}`);
+  });
+  const startEdit = (s: McpServer) => act(`edit:${s.name}`, async () => {
+    setAdding(false);
+    setEditing(await api.mcpConfig(s.name));
+  });
+
   const servers = state?.servers ?? [];
   const attention = servers.filter((s) => s.attention);
   const mine = servers.filter((s) => !s.attention && s.scope !== "claude.ai");
@@ -54,49 +104,130 @@ export function ConnectionsDialog({ state, onClose }: { state: McpState | null; 
   // claude.ai connectors never set up here; kept out of the way (and out of the badge).
   const idle = servers.filter((s) => !s.attention && s.scope === "claude.ai" && s.status !== "connected");
 
+  const terminalButton = (label: string, onClick: () => void, key?: string) => (
+    <button className="btn small" disabled={!!key && busy === key} onClick={onClick}>
+      {onRunInTerminal ? <TerminalIcon size={12} /> : <CopyIcon size={12} />} {onRunInTerminal ? label : "Show command"}
+    </button>
+  );
+
+  const details = (text: string) => (
+    <details className="mcp-details">
+      <summary>Details</summary>
+      <pre>{text}</pre>
+    </details>
+  );
+
   const row = (s: McpServer) => {
     const [label, tone] = STATUS_LABEL[s.status];
     const waiting = s.login?.state === "waiting";
+    const loginFailed = s.login?.state === "failed";
+    const failed = s.status === "failed";
+    const stdio = !canLogin(s);
     return (
-      <div key={s.name} className="mcp-row">
-        <div className="mcp-main">
-          <div className="mcp-name">
-            <span>{s.name}</span>
-            <span className={`badge ${tone}`}>{label}</span>
-            <span className="badge stopped">{SCOPE_LABEL[s.scope]}</span>
-            {s.transport && s.scope !== "claude.ai" && <span className="badge stopped">{s.transport}</span>}
-          </div>
-          {s.target && <div className="mcp-target" title={s.target}>{s.target}</div>}
-          {s.message && s.status !== "needs_auth" && <div className="mcp-msg">{s.message}</div>}
-          {waiting && (
-            <div className="mcp-msg info">
-              <span className="spinner" /> Waiting for you to finish in the browser…{" "}
-              {safeHref(s.login?.url) && <a href={safeHref(s.login?.url)} target="_blank" rel="noreferrer">Open the login page</a>}
+      <div key={s.name} className="mcp-item">
+        <div className="mcp-row">
+          <div className="mcp-main">
+            <div className="mcp-name">
+              <span>{s.name}</span>
+              <span className={`badge ${tone}`}>{label}</span>
+              <span className="badge stopped" title={SCOPE_HELP[s.scope]}>{SCOPE_LABEL[s.scope]}</span>
+              {s.transport && s.scope !== "claude.ai" && <span className="badge stopped">{s.transport}</span>}
             </div>
-          )}
-          {s.login?.state === "failed" && <div className="mcp-msg">{s.login.error}</div>}
+            {s.target && (
+              <div className="mcp-target-row">
+                <span className="mcp-target" title={s.target}>{s.target}</span>
+                {!s.target.includes("***") && (
+                  <button className="icon-btn tiny" aria-label={`Copy ${s.name} ${stdio ? "command" : "URL"}`} title="Copy"
+                    onClick={() => copy(s.target)}><CopyIcon size={12} /></button>
+                )}
+              </div>
+            )}
+            {waiting && (
+              <div className="mcp-msg info">
+                <span className="spinner" /> Waiting for you to finish in the browser…{" "}
+                {safeHref(s.login?.url) && <a href={safeHref(s.login?.url)} target="_blank" rel="noreferrer">Open the login page</a>}
+              </div>
+            )}
+            {loginFailed && (
+              <div className="mcp-help">
+                <div className="mcp-help-text">
+                  {looksLikeTty(s.login?.error)
+                    ? <><b>Login needs an interactive terminal.</b> Run it there and follow the prompts; this list updates by itself afterwards.</>
+                    : <><b>Login didn't finish.</b> Try it in the terminal to see what the CLI asks for.</>}
+                </div>
+                <div className="mcp-help-actions">
+                  {terminalButton("Open in terminal", () => run(s.name, loginCommand(s)))}
+                  <button className="btn small ghost" disabled={busy === `recheck:${s.name}`}
+                    onClick={() => act(`recheck:${s.name}`, () => api.mcpRecheck(s.name))}>
+                    {busy === `recheck:${s.name}` ? "Checking…" : "Check again"}
+                  </button>
+                </div>
+                {s.login?.error && details(s.login.error)}
+              </div>
+            )}
+            {failed && !loginFailed && (
+              <div className="mcp-help">
+                <div className="mcp-help-text">
+                  {stdio
+                    ? <><b>The server command exits on start.</b> Run it in the terminal to see why (a missing tool, token or package).</>
+                    : <><b>Couldn't reach the server.</b> Retry, or log in again from the terminal if it worked before.</>}
+                </div>
+                <div className="mcp-help-actions">
+                  {stdio
+                    ? terminalButton("Run in terminal", () => runServer(s), `run:${s.name}`)
+                    : terminalButton("Log in in terminal", () => run(s.name, loginCommand(s)))}
+                  <button className="btn small ghost" disabled={busy === `recheck:${s.name}`}
+                    onClick={() => act(`recheck:${s.name}`, () => api.mcpRecheck(s.name))}>
+                    {busy === `recheck:${s.name}` ? "Checking…" : "Retry"}
+                  </button>
+                </div>
+                {s.message && details(s.message)}
+              </div>
+            )}
+            {!failed && !loginFailed && s.message && s.status !== "needs_auth" && <div className="mcp-msg">{s.message}</div>}
+            {manual?.server === s.name && (
+              <div className="mcp-manual">
+                <span className="muted small">Run this in a terminal:</span>
+                <code>{manual.command}</code>
+                <button className="btn small" onClick={async () => { await copy(manual.command); setCopied(true); }}>
+                  {copied ? "Copied!" : "Copy"}
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="mcp-actions">
+            {canLogin(s) && waiting && (
+              <button className="btn small ghost" onClick={() => act(`cancel:${s.name}`, () => api.mcpCancelLogin(s.name))}>Cancel</button>
+            )}
+            {canLogin(s) && !waiting && s.status === "needs_auth" && (
+              <button className="btn small primary" disabled={busy === `login:${s.name}`}
+                onClick={() => act(`login:${s.name}`, () => api.mcpLogin(s.name))}>
+                {busy === `login:${s.name}` ? "Starting…" : "Log in"}
+              </button>
+            )}
+            {canLogin(s) && !waiting && s.status === "connected" && (
+              <>
+                <button className="btn small ghost" disabled={busy === `login:${s.name}`}
+                  onClick={() => act(`login:${s.name}`, () => api.mcpLogin(s.name))}>
+                  {busy === `login:${s.name}` ? "Starting…" : "Re-authenticate"}
+                </button>
+                <button className="btn small ghost" onClick={() => setConfirm({ kind: "logout", server: s })}>Log out</button>
+              </>
+            )}
+            {s.scope === "user" && (
+              <>
+                <button className="btn small ghost" disabled={busy === `edit:${s.name}`} onClick={() => startEdit(s)}>Edit</button>
+                <button className="btn small ghost danger" onClick={() => setConfirm({ kind: "remove", server: s })}>Remove</button>
+              </>
+            )}
+            {s.scope !== "user" && s.scope !== "claude.ai" && (
+              <span className="muted small mcp-managed" title={SCOPE_HELP[s.scope]}>Managed in {s.scope === "project" ? ".mcp.json" : "its config"}</span>
+            )}
+          </div>
         </div>
-        <div className="mcp-actions">
-          {canLogin(s) && waiting && (
-            <button className="btn small ghost" onClick={() => act(`cancel:${s.name}`, () => api.mcpCancelLogin(s.name))}>Cancel</button>
-          )}
-          {canLogin(s) && !waiting && s.status !== "connected" && (
-            <button className="btn small primary" disabled={busy === `login:${s.name}`}
-              onClick={() => act(`login:${s.name}`, () => api.mcpLogin(s.name))}>
-              {s.status === "needs_auth" ? "Log in" : "Re-authenticate"}
-            </button>
-          )}
-          {canLogin(s) && !waiting && s.status === "connected" && (
-            <>
-              <button className="btn small ghost" disabled={busy === `login:${s.name}`}
-                onClick={() => act(`login:${s.name}`, () => api.mcpLogin(s.name))}>Re-authenticate</button>
-              <button className="btn small ghost" onClick={() => setConfirm({ kind: "logout", server: s })}>Log out</button>
-            </>
-          )}
-          {s.scope === "user" && (
-            <button className="btn small ghost danger-text" onClick={() => setConfirm({ kind: "remove", server: s })}>Remove</button>
-          )}
-        </div>
+        {editing?.name === s.name && (
+          <AddServerForm key={s.name} initial={editing} onAdded={() => setEditing(null)} onCancel={() => setEditing(null)} />
+        )}
       </div>
     );
   };
@@ -118,12 +249,12 @@ export function ConnectionsDialog({ state, onClose }: { state: McpState | null; 
           </span>
           <div className="spacer" />
           <button className="btn small" disabled={!!state?.checking} onClick={() => act("refresh", api.mcpRefresh)}>Refresh</button>
-          <button className="btn small primary" onClick={() => setAdding((v) => !v)}>{adding ? "Close form" : "Add server"}</button>
+          <button className="btn small primary" onClick={() => { setEditing(null); setAdding((v) => !v); }}>{adding ? "Close form" : "Add server"}</button>
         </div>
-        {adding && <AddServerForm onAdded={() => setAdding(false)} />}
+        {adding && <AddServerForm onAdded={() => setAdding(false)} onCancel={() => setAdding(false)} />}
         {state?.error && <div className="banner error mcp-banner">{state.error}</div>}
-        {err && <div className="form-error">{err}</div>}
-        {!state && <div className="muted">Loading…</div>}
+        {err && <div className="form-error" role="alert">{err}</div>}
+        {!state && <div className="muted"><span className="spinner" /> Loading…</div>}
         {state && !servers.length && !state.checking && !state.error && (
           <div className="muted">No MCP servers configured. Add one above, or with <code>claude mcp add</code>.</div>
         )}
@@ -135,7 +266,7 @@ export function ConnectionsDialog({ state, onClose }: { state: McpState | null; 
         {section("claude.ai connectors", connectors)}
         {idle.length > 0 && (
           <div className="mcp-section">
-            <button className="link-btn small" onClick={() => setShowIdle((v) => !v)}>
+            <button className="link-btn small" onClick={() => setShowIdle((v) => !v)} aria-expanded={showIdle}>
               {showIdle ? "Hide" : "Show"} {idle.length} claude.ai connector{idle.length === 1 ? "" : "s"} not connected
             </button>
             {showIdle && idle.map(row)}
@@ -171,13 +302,15 @@ export function ConnectionsDialog({ state, onClose }: { state: McpState | null; 
 
 type Pair = { k: string; v: string };
 
-function AddServerForm({ onAdded }: { onAdded: () => void }) {
-  const [name, setName] = useState("");
-  const [transport, setTransport] = useState<McpTransport>("stdio");
-  const [command, setCommand] = useState("");
-  const [args, setArgs] = useState("");
-  const [url, setUrl] = useState("");
-  const [pairs, setPairs] = useState<Pair[]>([]);
+function AddServerForm({ onAdded, initial, onCancel }: { onAdded: () => void; initial?: McpConfig; onCancel?: () => void }) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? "stdio");
+  const [command, setCommand] = useState(initial?.command ?? "");
+  const [args, setArgs] = useState(joinArgs(initial?.args ?? []));
+  const [url, setUrl] = useState(initial?.url ?? "");
+  const [pairs, setPairs] = useState<Pair[]>(
+    initial?.transport === "stdio" ? (initial.env ?? []).map((e) => ({ k: e.key, v: e.value }))
+      : (initial?.headers ?? []).map((h) => ({ k: h.name, v: h.value })));
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const stdio = transport === "stdio";
@@ -191,7 +324,8 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
     setBusy(true);
     setErr(null);
     try {
-      await api.mcpAdd(input);
+      if (initial) await api.mcpUpdate(initial.name, input);
+      else await api.mcpAdd(input);
       onAdded();
     } catch (e: any) {
       setErr(e.message);
@@ -251,17 +385,20 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
               aria-label={stdio ? "Variable name" : "Header name"} spellCheck={false} />
             <input type="password" value={p.v} onChange={(e) => setPair(i, { v: e.target.value })} placeholder="value"
               aria-label="Value" autoComplete="off" />
-            <button type="button" className="icon-btn" aria-label="Remove" onClick={() => setPairs((ps) => ps.filter((_, j) => j !== i))}>×</button>
+            <button type="button" className="icon-btn" aria-label="Remove" onClick={() => setPairs((ps) => ps.filter((_, j) => j !== i))}><CloseIcon /></button>
           </div>
         ))}
         <span className="muted small">
-          Added with <code>--scope user</code>, so every Claude session can use it.{!stdio && " If it uses OAuth, click Log in once it shows up."}
+          {initial
+            ? <>Saving runs <code>claude mcp remove</code> then <code>claude mcp add</code> with the new settings (user scope).</>
+            : <>Added with <code>--scope user</code>, so every Claude session can use it.{!stdio && " If it uses OAuth, click Log in once it shows up."}</>}
         </span>
       </div>
       {err && <div className="form-error">{err}</div>}
       <div className="form-actions">
+        {onCancel && <button type="button" className="btn ghost" onClick={onCancel}>Cancel</button>}
         <button type="submit" className="btn primary" disabled={busy || !name.trim() || (stdio ? !command.trim() : !url.trim())}>
-          {busy ? "Adding…" : "Add server"}
+          {initial ? (busy ? "Saving…" : "Save changes") : busy ? "Adding…" : "Add server"}
         </button>
       </div>
     </form>

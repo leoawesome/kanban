@@ -1,16 +1,31 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Schedule, type Status, type Ticket } from "./api";
+import { api, copy, COLUMNS, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Schedule, type Status, type Ticket } from "./api";
 import { ConnectionsDialog } from "./ConnectionsDialog";
+import { HeaderMenu } from "./HeaderMenu";
+import { ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
 import { Inbox } from "./Inbox";
+import { anyLayerOpen } from "./layers";
 import { Board } from "./Board";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { ProfileDialog } from "./ProfileDialog";
 import { SchedulesDialog } from "./SchedulesDialog";
 import { Select } from "./Select";
+import { QuickSwitcher, ShortcutsDialog } from "./Shortcuts";
 import { TicketDrawer } from "./TicketDrawer";
+import { toast, Toaster } from "./toast";
 
-// xterm.js and highlight.js only load once the panel is opened.
-const Dock = lazy(() => import("./Dock"));
+// xterm.js and highlight.js only load once the panel is opened. After an upgrade the old chunk is gone:
+// reload once to get the new build instead of blanking the whole page.
+const Dock = lazy(() => import("./Dock").then((m) => {
+  sessionStorage.removeItem("ckanban.chunkReload");
+  return m;
+}, () => {
+  if (!sessionStorage.getItem("ckanban.chunkReload")) {
+    sessionStorage.setItem("ckanban.chunkReload", "1");
+    location.reload();
+  }
+  return { default: () => <div className="dock dock-failed">Couldn't load the terminal panel. Reload the page.</div> };
+}));
 const DOCK_OPEN = "ckanban.dock.open";
 
 const LAST_PROFILE = "ckanban.profile";
@@ -29,6 +44,32 @@ function hashFor(slug: string | null, ticket?: string | null): string {
 function isTyping(e: KeyboardEvent): boolean {
   const el = e.target as HTMLElement | null;
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+}
+
+/** Board filter chips; several on = tickets matching any of them. */
+const FILTERS = [
+  { id: "you", label: "Needs you", test: (t: Ticket) => !!t.attention && t.status !== "in_progress" && !t.running },
+  { id: "running", label: "Running", test: (t: Ticket) => t.status === "in_progress" || !!t.running },
+  { id: "pr", label: "Has PR", test: (t: Ticket) => !!t.prUrl },
+] as const;
+type FilterId = (typeof FILTERS)[number]["id"];
+
+const DISMISSED = "ckanban.dismissedBanners";
+function readDismissed(): Set<string> {
+  try {
+    return new Set(JSON.parse(sessionStorage.getItem(DISMISSED) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+const tildePath = (p: string) => p.replace(/^\/Users\/[^/]+/, "~");
+
+/** Background load: retry once after a few seconds, then say so (quietly) instead of failing silently. */
+function quiet<T>(load: () => Promise<T>, what: string, set: (v: T) => void) {
+  load().then(set).catch(() => {
+    setTimeout(() => load().then(set).catch(() => toast(`Couldn't load ${what}. It will retry when the connection comes back.`, { tone: "error" })), 3000);
+  });
 }
 
 function readLast(): string | null {
@@ -60,7 +101,13 @@ export function App() {
   const inboxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [profileDialog, setProfileDialog] = useState<"new" | "edit" | null>(null);
   const [newTicket, setNewTicket] = useState<Status | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const setError = (msg: string) => toast(msg, { tone: "error" });
+  const [filters, setFilters] = useState<Set<FilterId>>(new Set());
+  const [dismissed, setDismissed] = useState(readDismissed);
+  const [shortcuts, setShortcuts] = useState(false);
+  const [switcher, setSwitcher] = useState(false);
+  // Command to type into the dock's terminal (e.g. "claude mcp login x"); n makes repeats count.
+  const [dockCommand, setDockCommand] = useState<{ text: string; n: number } | null>(null);
   const [mcp, setMcp] = useState<McpState | null>(null);
   const [connections, setConnections] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
@@ -89,7 +136,7 @@ export function App() {
     }, 300);
   }, [loadSchedules]);
 
-  const loadInbox = useCallback(() => api.inbox().then(setInbox).catch(() => {}), []);
+  const loadInbox = useCallback(() => quiet(api.inbox, "the inbox", setInbox), []);
   const refreshInboxSoon = useCallback(() => {
     if (inboxTimer.current) return;
     inboxTimer.current = setTimeout(() => {
@@ -101,9 +148,9 @@ export function App() {
   useEffect(() => {
     loadProfiles().catch((e) => setError(e.message));
     loadInbox();
-    api.health().then(setHealth).catch(() => {});
-    api.version().then(setVersion).catch(() => {});
-    api.mcp().then(setMcp).catch(() => {});
+    quiet(api.health, "tool checks", setHealth);
+    quiet(api.version, "the version", setVersion);
+    quiet(api.mcp, "connections", setMcp);
   }, [loadProfiles, loadInbox]);
 
   // Browser Back/Forward and pasted links drive the open board and ticket.
@@ -159,7 +206,8 @@ export function App() {
     } catch {}
   }, [dockOpen]);
 
-  // Shortcuts: N new ticket, / search, Ctrl+` terminal & files. Esc is handled by the panel and dialogs.
+  // Shortcuts: N new ticket, / search, ? cheatsheet, ⌘K jump to a ticket, Ctrl+` terminal & files.
+  // Esc is handled by the panel and dialogs (one layer at a time, see layers.ts).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "`") {
@@ -167,19 +215,41 @@ export function App() {
         setDockOpen((o) => !o);
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+        if ((e.target as HTMLElement | null)?.closest?.(".xterm")) return;
+        e.preventDefault();
+        if (slug && !anyLayerOpen()) setSwitcher(true);
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
-      if (openId || profileDialog || newTicket || connections || schedulesOpen || document.querySelector(".overlay")) return;
+      if (openId || profileDialog || newTicket || connections || schedulesOpen || anyLayerOpen() || document.querySelector(".overlay")) return;
       if (e.key === "n" || e.key === "N") {
         e.preventDefault();
         if (slug) setNewTicket("backlog");
       } else if (e.key === "/") {
         e.preventDefault();
         searchRef.current?.focus();
+      } else if (e.key === "?") {
+        e.preventDefault();
+        setShortcuts(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [openId, profileDialog, newTicket, connections, schedulesOpen, slug]);
+
+  const runInTerminal = useCallback((text: string) => {
+    setDockOpen(true);
+    setDockCommand({ text, n: Date.now() });
+  }, []);
+
+  const dismiss = (key: string) => setDismissed((d) => {
+    const next = new Set(d).add(key);
+    try {
+      sessionStorage.setItem(DISMISSED, JSON.stringify([...next]));
+    } catch {}
+    return next;
+  });
 
   useEffect(() => {
     if (!slug) return;
@@ -230,20 +300,31 @@ export function App() {
   const profile = useMemo(() => profiles?.find((p) => p.slug === slug) ?? null, [profiles, slug]);
   const open = tickets.find((t) => t.id === openId) ?? null;
   const q = query.trim().toLowerCase();
-  const shownTickets = q ? tickets.filter((t) => `${t.title}\n${t.body}`.toLowerCase().includes(q)) : tickets;
+  const activeFilters = FILTERS.filter((f) => filters.has(f.id));
+  const shownTickets = tickets.filter((t) =>
+    (!q || `${t.title}\n${t.body}`.toLowerCase().includes(q)) && (!activeFilters.length || activeFilters.some((f) => f.test(t))));
+  const filtering = !!q || activeFilters.length > 0;
   const perBoard = useMemo(() => {
     const m = new Map<string, number>();
     for (const i of inbox) m.set(i.profile, (m.get(i.profile) ?? 0) + 1);
     return m;
   }, [inbox]);
 
-  const move = async (id: string, status: Status, order: number) => {
+  const move = async (id: string, status: Status, order: number, undo = true) => {
+    const board = slug!;
+    const before = tickets.find((t) => t.id === id);
     setTickets((ts) => ts.map((t) => (t.id === id ? { ...t, status, order } : t)));
     try {
-      await api.updateTicket(slug!, id, { status, order });
+      await api.updateTicket(board, id, { status, order });
+      if (undo && before && before.status !== status) {
+        const label = COLUMNS.find((c) => c.id === status)?.label ?? status;
+        toast(<>Moved <b>{before.title}</b> to {label}</>, {
+          action: { label: "Undo", run: () => { if (slugRef.current === board) move(id, before.status, before.order, false); } },
+        });
+      }
     } catch (e: any) {
-      setError(e.message);
-      api.tickets(slug!).then(setTickets);
+      setError(`Couldn't move the ticket: ${e.message}`);
+      api.tickets(board).then(setTickets).catch(() => {});
     }
   };
 
@@ -251,6 +332,16 @@ export function App() {
   const scheduleErrors = schedules?.filter((s) => s.lastError).length ?? 0;
   const missing = health ? (["claude", "git", "gh"] as const).filter((k) => !health[k]) : [];
   const running = tickets.filter((t) => t.status === "in_progress").length;
+
+  const updateKey = `update:${version?.latest}`;
+  const pathKey = `path:${missing.join(",")}`;
+  const folderKey = `folder:${profile?.slug}`;
+  const toggleFilter = (id: FilterId) => setFilters((f) => {
+    const next = new Set(f);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
 
   return (
     <div className="app">
@@ -261,7 +352,7 @@ export function App() {
             <i />
             <i />
           </span>
-          Claude Kanban
+          <span className="brand-name">Claude Kanban</span>
         </div>
         {profiles && profiles.length > 0 && (
           <Select
@@ -272,84 +363,80 @@ export function App() {
             options={profiles.map((p) => ({
               value: p.slug,
               label: perBoard.get(p.slug) ? <>{p.name} <span className="need-chip">{perBoard.get(p.slug)} need you</span></> : p.name,
-              hint: p.path.replace(/^\/Users\/[^/]+/, "~"),
+              hint: tildePath(p.path),
             }))}
             renderValue={() => profile?.name}
-            footer={[{ label: "New profile…", onSelect: () => setProfileDialog("new") }]}
+            footer={[
+              ...(profile ? [{
+                label: "Copy folder path",
+                icon: <CopyIcon size={12} />,
+                onSelect: () => { copy(profile.path).then(() => toast(<>Copied <code>{tildePath(profile.path)}</code></>, { tone: "ok" })); },
+              }] : []),
+              { label: "New profile…", onSelect: () => setProfileDialog("new") },
+            ]}
           />
         )}
         {profile && (
-          <>
-            <span className="profile-path" title={profile.path}>
-              {profile.path}
-            </span>
-            <span className="pill">
-              {running}/{profile.maxParallel} running
-            </span>
-            <button className="btn ghost" onClick={() => setProfileDialog("edit")}>
-              Settings
-            </button>
-            <button className={`btn ghost${dockOpen ? " on" : ""}`} onClick={() => setDockOpen((o) => !o)}
-              aria-pressed={dockOpen} title="Terminal and files for this folder (Ctrl+`)">
-              Terminal & files
-            </button>
-            <button className="btn ghost connections-btn" onClick={() => setSchedulesOpen(true)}
-              title={scheduleErrors ? `${scheduleErrors} schedule${scheduleErrors === 1 ? "" : "s"} could not start their last run` : "Recurring tickets on a cron schedule"}>
-              Schedules
-              {schedules && schedules.length > 0 && !scheduleErrors && <span className="muted small">{schedules.filter((s) => s.enabled).length}</span>}
-              {scheduleErrors > 0 && <span className="need-chip">{scheduleErrors}</span>}
-            </button>
-          </>
+          <span className="pill" title={`At most ${profile.maxParallel} tickets run at the same time on this board`}>
+            {running}/{profile.maxParallel} running
+          </span>
         )}
         <div className="spacer" />
-        {profile && (
-          <div className="search">
-            <input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tickets  /"
-              aria-label="Search tickets on this board"
-              onKeyDown={(e) => { if (e.key === "Escape") { setQuery(""); e.currentTarget.blur(); } }} />
-            {q && <span className="muted small">{shownTickets.length} match{shownTickets.length === 1 ? "" : "es"}</span>}
-          </div>
-        )}
         <Inbox items={inbox} onPick={(i) => {
           if (i.profile !== slug) setSlug(i.profile);
           openTicket(i.id, i.profile);
         }} />
-        <button className="btn ghost connections-btn" onClick={() => setConnections(true)}
+        {profile && (
+          <button className={`btn ghost icon-label${dockOpen ? " on" : ""}`} onClick={() => setDockOpen((o) => !o)}
+            aria-pressed={dockOpen} title="Terminal and files for this folder (Ctrl+`)" aria-label="Terminal and files">
+            <TerminalIcon /><span className="label">Terminal & files</span>
+          </button>
+        )}
+        {profile && (
+          <button className="btn ghost icon-label" onClick={() => setSchedulesOpen(true)} aria-label="Schedules"
+            title={scheduleErrors ? `${scheduleErrors} schedule${scheduleErrors === 1 ? "" : "s"} could not start their last run` : "Recurring tickets on a cron schedule"}>
+            <ClockIcon /><span className="label">Schedules</span>
+            {schedules && schedules.length > 0 && !scheduleErrors && <span className="muted small">{schedules.filter((s) => s.enabled).length}</span>}
+            {scheduleErrors > 0 && <span className="need-chip">{scheduleErrors}</span>}
+          </button>
+        )}
+        <button className="btn ghost icon-label" onClick={() => setConnections(true)} aria-label="Connections"
           title={mcpAttention ? `${mcpAttention} MCP server${mcpAttention === 1 ? "" : "s"} failed or need you to log in again` : "Claude Code MCP servers"}>
-          Connections
+          <PlugIcon /><span className="label">Connections</span>
           {mcpAttention > 0 && <span className="need-chip">{mcpAttention}</span>}
         </button>
-        {version && version.version !== "dev" && <span className="muted small">v{version.version}</span>}
         {profile && (
-          <button className="btn primary" onClick={() => setNewTicket("backlog")}>
+          <button className="btn primary" onClick={() => setNewTicket("backlog")} title="New ticket (N)">
             New ticket
           </button>
         )}
+        <HeaderMenu items={[
+          ...(profile ? [{ label: "Board settings", icon: <GearIcon />, onSelect: () => setProfileDialog("edit") }] : []),
+          { label: "Keyboard shortcuts", hint: "?", icon: <KeyboardIcon />, onSelect: () => setShortcuts(true) },
+        ]} footer={version && version.version !== "dev" ? `Claude Kanban v${version.version}` : null} />
       </header>
 
-      {version?.updateAvailable && (
-        <div className="banner info">
-          Claude Kanban v{version.latest} is available (you have v{version.version}). Run <code>ckanban update</code> in a terminal.
+      {version?.updateAvailable && !dismissed.has(updateKey) && (
+        <div className="banner info" role="status">
+          <span>Claude Kanban v{version.latest} is available (you have v{version.version}). Run <code>ckanban update</code> in a terminal.</span>
+          <button className="icon-btn" aria-label="Dismiss" title="Hide until next time" onClick={() => dismiss(updateKey)}><CloseIcon size={12} /></button>
         </div>
       )}
-      {missing.length > 0 && (
-        <div className="banner warn">
-          Not found on PATH: <b>{missing.join(", ")}</b>. {missing.includes("claude") ? "Tickets cannot run." : "PR features limited."}
+      {missing.length > 0 && !dismissed.has(pathKey) && (
+        <div className="banner warn" role="status">
+          <span>Not found on PATH: <b>{missing.join(", ")}</b>. {missing.includes("claude") ? "Tickets cannot run." : "PR features limited."}</span>
+          <button className="icon-btn" aria-label="Dismiss" title="Hide until next time" onClick={() => dismiss(pathKey)}><CloseIcon size={12} /></button>
         </div>
       )}
-      {profile && profile.pathExists === false && (
-        <div className="banner warn">
-          Profile folder <code>{profile.path}</code> does not exist. Tickets will not be picked up.
-        </div>
-      )}
-      {error && (
-        <div className="banner error" onClick={() => setError(null)}>
-          {error} <span className="muted">(click to dismiss)</span>
+      {profile && profile.pathExists === false && !dismissed.has(folderKey) && (
+        <div className="banner warn" role="status">
+          <span>Profile folder <code>{profile.path}</code> does not exist. Tickets will not be picked up.</span>
+          <button className="icon-btn" aria-label="Dismiss" title="Hide until next time" onClick={() => dismiss(folderKey)}><CloseIcon size={12} /></button>
         </div>
       )}
 
       {profiles === null ? (
-        <div className="empty">Loading…</div>
+        <div className="empty"><span className="spinner" /> Loading boards…</div>
       ) : !profile ? (
         <div className="empty">
           <h2>No profiles yet</h2>
@@ -360,18 +447,55 @@ export function App() {
         </div>
       ) : (
         <>
-          {q && shownTickets.length === 0 && <div className="banner info">No tickets match "{query}". <button className="link-btn" onClick={() => setQuery("")}>Clear search</button></div>}
-          <Board tickets={shownTickets} onOpen={(id) => openTicket(id)} onMove={move} onAdd={setNewTicket} />
+          <div className="board-bar">
+            <div className="search">
+              <SearchIcon className="icon search-icon" />
+              <input ref={searchRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tickets"
+                aria-label="Search tickets on this board" aria-keyshortcuts="/"
+                onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); if (query) setQuery(""); else e.currentTarget.blur(); } }} />
+              {query ? (
+                <button className="search-clear" aria-label="Clear search" title="Clear (Esc)"
+                  onMouseDown={(e) => e.preventDefault()} onClick={() => { setQuery(""); searchRef.current?.focus(); }}>
+                  <CloseIcon size={12} />
+                </button>
+              ) : <kbd className="search-kbd" aria-hidden>/</kbd>}
+            </div>
+            <div className="filter-chips" role="group" aria-label="Filter tickets">
+              {FILTERS.map((f) => {
+                const n = tickets.filter(f.test).length;
+                return (
+                  <button key={f.id} className={`chip${filters.has(f.id) ? " on" : ""}`} aria-pressed={filters.has(f.id)} onClick={() => toggleFilter(f.id)}>
+                    {f.label}{n > 0 && <span className="chip-count">{n}</span>}
+                  </button>
+                );
+              })}
+            </div>
+            {filtering && (
+              <span className="muted small" aria-live="polite">
+                {shownTickets.length} of {tickets.length} ticket{tickets.length === 1 ? "" : "s"}
+                {" · "}<button className="link-btn small" onClick={() => { setQuery(""); setFilters(new Set()); }}>Clear all</button>
+              </span>
+            )}
+          </div>
+          <Board tickets={shownTickets} filtered={filtering} onOpen={(id) => openTicket(id)} onMove={move} onAdd={setNewTicket} />
         </>
       )}
 
       {dockOpen && profile && (
         <Suspense fallback={null}>
-          <Dock profile={profile} pty={health?.pty ?? true} onClose={() => setDockOpen(false)} />
+          <Dock profile={profile} pty={health?.pty ?? true} onClose={() => setDockOpen(false)} command={dockCommand}
+            onCommandSent={() => setDockCommand(null)} />
         </Suspense>
       )}
 
-      {connections && <ConnectionsDialog state={mcp} onClose={() => setConnections(false)} />}
+      {connections && (
+        <ConnectionsDialog state={mcp} onClose={() => setConnections(false)}
+          onRunInTerminal={profile && health?.pty !== false ? (cmd) => { setConnections(false); runInTerminal(cmd); } : undefined} />
+      )}
+      {shortcuts && <ShortcutsDialog onClose={() => setShortcuts(false)} />}
+      {switcher && profile && (
+        <QuickSwitcher tickets={tickets} onClose={() => setSwitcher(false)} onPick={(id) => { setSwitcher(false); openTicket(id); }} />
+      )}
       {schedulesOpen && profile && (
         <SchedulesDialog profile={profile} schedules={schedules} tickets={tickets} onClose={() => setSchedulesOpen(false)}
           onOpenTicket={(id) => { setSchedulesOpen(false); openTicket(id); }} />
@@ -407,6 +531,7 @@ export function App() {
           }}
         />
       )}
+      <Toaster />
     </div>
   );
 }

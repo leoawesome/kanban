@@ -1,3 +1,34 @@
+import { useSyncExternalStore } from "react";
+
+// One shared ticker for every relative time on screen ("5m ago" keeps moving without a reload).
+let now = Date.now();
+const subs = new Set<() => void>();
+let timer: ReturnType<typeof setInterval> | null = null;
+function subscribeNow(fn: () => void) {
+  subs.add(fn);
+  timer ??= setInterval(() => {
+    now = Date.now();
+    subs.forEach((f) => f());
+  }, 30_000);
+  return () => {
+    subs.delete(fn);
+    if (!subs.size && timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+}
+
+/** Re-renders the caller every 30s; use around timeAgo(). */
+export function useNow(): number {
+  return useSyncExternalStore(subscribeNow, () => now);
+}
+
+/** Full local date and time, for tooltips next to relative times. */
+export function fullTime(iso: string): string {
+  return new Date(iso).toLocaleString();
+}
+
 export function timeAgo(iso: string): string {
   const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return "just now";

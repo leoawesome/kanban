@@ -1,5 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { CheckIcon, PlusIcon } from "./icons";
+import { useLayer } from "./layers";
 
 const GAP = 4;
 const MARGIN = 8;
@@ -11,13 +13,22 @@ export interface SelectOption<T extends string> {
   disabled?: boolean;
 }
 
-/** Styled dropdown replacing the native <select>. Keyboard: Enter/Space/↓ open, ↑↓ move, Enter pick, Esc close. */
+/** Plain text of a label for type-ahead (labels can be JSX). */
+function textOf(n: ReactNode): string {
+  if (n == null || typeof n === "boolean") return "";
+  if (typeof n === "string" || typeof n === "number") return String(n);
+  if (Array.isArray(n)) return n.map(textOf).join("");
+  if (typeof n === "object" && "props" in n) return textOf((n as any).props.children);
+  return "";
+}
+
+/** Styled dropdown replacing the native <select>. Keyboard: Enter/Space/↓ open, ↑↓ move, type to jump, Enter pick, Esc close. */
 export function Select<T extends string>({ value, options, onChange, footer, className, ariaLabel, renderValue }: {
   value: T;
   options: SelectOption<T>[];
   onChange: (v: T) => void;
   /** Extra items under a divider, e.g. "New profile…". */
-  footer?: { label: ReactNode; onSelect: () => void }[];
+  footer?: { label: ReactNode; onSelect: () => void; icon?: ReactNode }[];
   className?: string;
   ariaLabel?: string;
   renderValue?: (o: SelectOption<T> | undefined) => ReactNode;
@@ -27,6 +38,9 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
   const root = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<CSSProperties>({ visibility: "hidden" });
+  const listId = useId();
+  const typed = useRef({ text: "", at: 0 });
+  useLayer(() => setOpen(false), { active: open });
   const items = [
     ...options.map((o) => ({ kind: "option" as const, o })),
     ...(footer ?? []).map((f) => ({ kind: "footer" as const, f })),
@@ -79,6 +93,10 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
     };
   }, [open]);
 
+  useEffect(() => {
+    if (open) document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
   const openMenu = () => {
     setActive(Math.max(0, options.findIndex((o) => o.value === value)));
     setOpen(true);
@@ -104,6 +122,14 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
       }
       return;
     }
+    if (e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      // Type-ahead: jump to the first option starting with what was typed in the last second.
+      const now = Date.now();
+      typed.current = { text: (now - typed.current.at < 1000 ? typed.current.text : "") + e.key.toLowerCase(), at: now };
+      const i = options.findIndex((o) => !o.disabled && textOf(o.label).trim().toLowerCase().startsWith(typed.current.text));
+      if (i >= 0) setActive(i);
+      return;
+    }
     if (e.key === "Escape") {
       e.stopPropagation();
       setOpen(false);
@@ -124,6 +150,7 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
   return (
     <div className={`select ${open ? "open" : ""} ${className ?? ""}`} ref={root} onKeyDown={onKey}>
       <button type="button" className="select-trigger" aria-haspopup="listbox" aria-expanded={open} aria-label={ariaLabel}
+        aria-controls={open ? listId : undefined} aria-activedescendant={open ? `${listId}-${active}` : undefined}
         onClick={() => (open ? setOpen(false) : openMenu())}>
         <span className="select-value">{renderValue ? renderValue(current) : current?.label ?? "Select…"}</span>
         <svg className="select-chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden>
@@ -131,19 +158,19 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
         </svg>
       </button>
       {open && createPortal(
-        <div className="select-menu" role="listbox" ref={menu} style={pos}>
+        <div className="select-menu" role="listbox" id={listId} aria-label={ariaLabel} ref={menu} style={pos}>
           {items.map((it, i) =>
             it.kind === "option" ? (
-              <div key={it.o.value} role="option" aria-selected={it.o.value === value} aria-disabled={it.o.disabled}
+              <div key={it.o.value} id={`${listId}-${i}`} role="option" aria-selected={it.o.value === value} aria-disabled={it.o.disabled}
                 className={`select-item ${i === active ? "active" : ""} ${it.o.value === value ? "selected" : ""} ${it.o.disabled ? "disabled" : ""}`}
                 onMouseEnter={() => setActive(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(i)}>
-                <span className="select-check" aria-hidden>{it.o.value === value ? "✓" : ""}</span>
+                <span className="select-check" aria-hidden>{it.o.value === value && <CheckIcon size={12} />}</span>
                 <span className="select-label">{it.o.label}{it.o.hint && <span className="select-hint">{it.o.hint}</span>}</span>
               </div>
             ) : (
-              <div key={`f${i}`} className={`select-item footer ${i === active ? "active" : ""} ${i === options.length ? "first-footer" : ""}`}
+              <div key={`f${i}`} id={`${listId}-${i}`} role="option" aria-selected={false} className={`select-item footer ${i === active ? "active" : ""} ${i === options.length ? "first-footer" : ""}`}
                 onMouseEnter={() => setActive(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(i)}>
-                <span className="select-check" aria-hidden>+</span>
+                <span className="select-check" aria-hidden>{it.f.icon ?? <PlusIcon size={12} />}</span>
                 <span className="select-label">{it.f.label}</span>
               </div>
             ),

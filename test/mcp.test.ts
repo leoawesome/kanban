@@ -2,7 +2,7 @@ import { beforeEach, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Bus, type BusEvent } from "../src/server/events";
-import { addArgs, maskSecrets, McpManager, parseMcpGet, parseMcpList, scopeOf } from "../src/server/mcp";
+import { addArgs, maskSecrets, McpManager, parseMcpGet, parseMcpList, readMcpConfig, scopeOf, shellQuote } from "../src/server/mcp";
 import { tempDir } from "./helpers";
 
 const FAKE = join(import.meta.dir, "fixtures", "fake-claude-mcp.ts");
@@ -79,6 +79,7 @@ function setup(servers: Record<string, { target: string; status: string }>, user
   process.env.FAKE_MCP_STATE = join(dir, "state.json");
   process.env.FAKE_ARGS_FILE = argsFile;
   delete process.env.FAKE_LOGIN;
+  delete process.env.FAKE_ADD;
   const bus = new Bus();
   events = [];
   bus.on((e) => events.push(e));
@@ -177,4 +178,70 @@ test("slow CLI times out", async () => {
   const m = new McpManager(new Bus(), { claudeBin: slow, cwd: tempDir(), listTimeoutMs: 100 });
   await m.refresh();
   expect(m.state().error).toMatch(/timed out/);
+});
+
+test("shellQuote only quotes when needed", () => {
+  expect(shellQuote("uvx")).toBe("uvx");
+  expect(shellQuote("mcp-google-sheets@latest")).toBe("mcp-google-sheets@latest");
+  expect(shellQuote("a b")).toBe("'a b'");
+  expect(shellQuote("it's")).toBe("'it'\\''s'");
+  expect(shellQuote("$(rm -rf ~)")).toBe("'$(rm -rf ~)'");
+});
+
+test("readMcpConfig: unmasked settings and a runnable command line, local before user", () => {
+  const d = tempDir("ck-mcpcfg-");
+  const cfg = join(d, "claude.json");
+  writeFileSync(cfg, JSON.stringify({
+    mcpServers: {
+      sheets: { type: "stdio", command: "uvx", args: ["mcp-google-sheets@latest", "--token", "s3cr3t"], env: { API_KEY: "a b" } },
+      docs: { type: "http", url: "https://d.dev/mcp", headers: { Authorization: "Bearer t" } },
+      both: { command: "user-one" },
+    },
+    projects: { [d]: { mcpServers: { both: { command: "local-one" } } } },
+  }));
+  expect(readMcpConfig("sheets", d, cfg)).toEqual({
+    name: "sheets", scope: "user", transport: "stdio", command: "uvx", args: ["mcp-google-sheets@latest", "--token", "s3cr3t"],
+    env: [{ key: "API_KEY", value: "a b" }], commandLine: "API_KEY='a b' uvx mcp-google-sheets@latest --token s3cr3t",
+  });
+  expect(readMcpConfig("docs", d, cfg)).toMatchObject({ transport: "http", url: "https://d.dev/mcp", headers: [{ name: "Authorization", value: "Bearer t" }], commandLine: null });
+  expect(readMcpConfig("both", d, cfg)).toMatchObject({ scope: "local", command: "local-one" });
+  expect(readMcpConfig("nope", d, cfg)).toBeNull();
+});
+
+test("recheck updates one server without a full list", async () => {
+  setup({ sheets: { target: "uvx sheets", status: "✘ Failed to connect" } }, ["sheets"]);
+  await mgr.refresh();
+  expect(mgr.state().servers[0].status).toBe("failed");
+  writeFileSync(join(dir, "state.json"), JSON.stringify({ sheets: { target: "uvx sheets", status: "✔ Connected" } }));
+  const before = calls().length;
+  const s = await mgr.recheck("sheets");
+  expect(s?.status).toBe("connected");
+  expect(mgr.state().servers[0].attention).toBe(false);
+  expect(calls().slice(before)).toEqual([["mcp", "get", "sheets"]]);
+});
+
+test("update replaces a user-scope server (remove + add) and restores it if add fails", async () => {
+  setup({ fs: { target: "npx fs", status: "✔ Connected" } }, ["fs"]);
+  writeFileSync(join(dir, "claude.json"), JSON.stringify({ mcpServers: { fs: { command: "npx", args: ["fs"] } } }));
+  await mgr.refresh();
+  expect(mgr.config("fs")).toMatchObject({ command: "npx", args: ["fs"], commandLine: "npx fs" });
+  await mgr.update("fs", { name: "fs", transport: "stdio", command: "npx", args: ["-y", "fs2"] });
+  const after = calls().map((c) => c.join(" "));
+  expect(after).toContain("mcp remove fs --scope user");
+  expect(after).toContain("mcp add --scope user --transport stdio fs -- npx -y fs2");
+
+  process.env.FAKE_ADD = "fail";
+  const n = calls().length;
+  await expect(mgr.update("fs", { name: "fs", transport: "stdio", command: "bad" })).rejects.toThrow(/add failed/);
+  // Background `mcp list` refreshes can interleave; only the edits matter here.
+  const tried = calls().slice(n).map((c) => c.join(" ")).filter((c) => c !== "mcp list");
+  expect(tried[0]).toBe("mcp remove fs --scope user");
+  expect(tried.filter((c) => c.startsWith("mcp add")).length).toBe(2); // the new one, then the restore
+});
+
+test("update and config refuse servers that aren't editable here", async () => {
+  setup({ "claude.ai X": { target: "https://x", status: "✔ Connected" } }, []);
+  await mgr.refresh();
+  await expect(mgr.update("claude.ai X", { name: "claude.ai X", transport: "http", url: "https://x" })).rejects.toThrow(/user-scope/);
+  expect(() => mgr.config("claude.ai X")).toThrow(/config files/);
 });
