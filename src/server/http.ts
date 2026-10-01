@@ -3,7 +3,7 @@ import { join, normalize } from "node:path";
 import { ConflictError, type Board } from "./board";
 import { claudeDefaults, listClaudeProjects, listSessions, liveSessionMatch, pickFolder, processCommands } from "./claude";
 import type { Bus, BusEvent } from "./events";
-import { detectBaseBranch, isGitRepo, which } from "./git";
+import { detectBaseBranch, isGitRepo, resolveBaseBranch, which } from "./git";
 import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
 import { cronError, describeCron, nextRuns, parseCron } from "./cron";
@@ -246,7 +246,8 @@ export function createServer(deps: ServerDeps) {
         for (let i = 2; store.getProfile(slug); i++) slug = `${slugify(name)}-${i}`;
         const profile: Profile = {
           name, slug, path,
-          baseBranch: b.baseBranch || ((await isGitRepo(path)) ? await detectBaseBranch(path) : "main"),
+          // Empty when there is nothing to branch from yet (not a repo, or no commits); runs re-detect it.
+          baseBranch: b.baseBranch || ((await isGitRepo(path)) ? (await resolveBaseBranch(path, await detectBaseBranch(path))) ?? "" : ""),
           maxParallel: Math.max(1, Number(b.maxParallel) || DEFAULT_MAX_PARALLEL),
           model: b.model || null,
           createdAt: nowIso(),
@@ -380,13 +381,14 @@ export function createServer(deps: ServerDeps) {
       if (m === "PATCH") {
         const b = await body(req);
         if (b.status !== undefined && !STATUSES.includes(b.status)) throw new HttpError(400, `invalid status ${b.status}`);
-        const patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode">> & { expectedBody?: string } = {};
+        const patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice">> & { expectedBody?: string } = {};
         if (b.mode === "auto" || b.mode === "interview") patch.mode = b.mode;
         if (typeof b.expectedBody === "string") patch.expectedBody = b.expectedBody;
         if (typeof b.title === "string") patch.title = b.title;
         if (typeof b.body === "string") patch.body = b.body;
         if (b.status) patch.status = b.status;
         if (typeof b.order === "number") patch.order = b.order;
+        if (b.notice === null) patch.notice = null;
         const t = await board.updateTicket(slug, id, patch);
         return json(view(profile, t));
       }

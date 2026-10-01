@@ -32,7 +32,7 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
         <div className={`your-turn att-${att.kind}`}>
           <span className="yt-dot" aria-hidden />
           <span className="yt-label">Your turn</span>
-          <span className="yt-why">{att.label}</span>
+          <span className="yt-why" title={ticket.error ?? undefined}>{att.label}</span>
         </div>
       )}
       <div className="card-title" title={ticket.title}>{ticket.title}</div>

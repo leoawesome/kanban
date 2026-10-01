@@ -36,6 +36,25 @@ export async function detectBaseBranch(path: string): Promise<string> {
   return "main";
 }
 
+async function isCommit(repo: string, ref: string): Promise<boolean> {
+  if (!ref) return false;
+  return (await run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repo)).code === 0;
+}
+
+/**
+ * The ref new worktrees branch from: the saved base branch if it still points at a commit, else the
+ * first of the detected default branch, its origin/ copy, main, master or HEAD that does.
+ * Null when the repo has no commits yet (fresh `git init`), so no worktree can be made.
+ */
+export async function resolveBaseBranch(repo: string, saved: string): Promise<string | null> {
+  if (await isCommit(repo, saved)) return saved;
+  const detected = await detectBaseBranch(repo);
+  for (const ref of [detected, `origin/${detected}`, "main", "master", "HEAD"]) {
+    if (ref !== saved && (await isCommit(repo, ref))) return ref;
+  }
+  return null;
+}
+
 export function worktreeDir(profile: Pick<Profile, "path" | "slug">, id: string): string {
   return join(dirname(profile.path), ".ckanban-worktrees", profile.slug, id);
 }
@@ -45,7 +64,9 @@ export async function addWorktree(repo: string, dir: string, branch: string, bas
   const exists = (await run(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo)).code === 0;
   const args = exists ? ["git", "worktree", "add", dir, branch] : ["git", "worktree", "add", "-b", branch, dir, base];
   const r = await run(args, repo);
-  if (r.code !== 0) throw new Error(`git worktree add failed: ${r.stderr.trim()}`);
+  if (r.code !== 0) {
+    throw new Error(`Could not create an isolated git worktree for this ticket from "${base}". Check the board's base branch in its settings, then send a message to retry.\n\ngit worktree add failed: ${r.stderr.trim()}`);
+  }
 }
 
 export async function removeWorktree(repo: string, dir: string): Promise<{ removed: boolean; reason?: string }> {

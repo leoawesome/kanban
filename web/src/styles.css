@@ -129,9 +129,11 @@ kbd {
 .banner.warn { background: var(--warn-soft); color: var(--warn); }
 .banner.info { background: var(--info-soft); color: var(--info); }
 .banner code { background: color-mix(in srgb, currentColor 10%, transparent); padding: 1px 5px; border-radius: 4px; }
+.banner a { color: inherit; text-decoration: underline; }
 .banner.error { background: var(--err-soft); color: var(--err); cursor: pointer; }
 .banner.inline { border-radius: 8px; border: 0; margin: 0 20px 12px; cursor: default; display: block; }
 .banner.inline.load-error { margin: 0; }
+.banner.inline.notice { display: flex; align-items: flex-start; }
 .banner.inline pre { margin: 0; white-space: pre-wrap; max-height: 140px; overflow: auto; }
 
 .empty { margin: auto; text-align: center; color: var(--muted); padding: 40px; }

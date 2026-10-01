@@ -39,6 +39,8 @@ export interface Ticket {
   lastRunAt: string | null;
   runCount: number;
   error: string | null;
+  /** Non-fatal heads-up about how the ticket runs (e.g. no worktree yet); the user can dismiss it. */
+  notice?: string | null;
   /** Set on tickets created by a schedule (see Schedule). */
   scheduleId?: string | null;
   /** Chat messages sent while Claude was working that it has not read yet, oldest first. */

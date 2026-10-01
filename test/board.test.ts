@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Board } from "../src/server/board";
 import { Bus } from "../src/server/events";
+import { run } from "../src/server/git";
 import { Store } from "../src/server/store";
 import type { Profile } from "../src/server/types";
 import { makeRepo, tempDir } from "./helpers";
@@ -216,6 +217,68 @@ test("non-git profile runs in profile path without worktree", async () => {
   expect(readArgs()[0].cwd).toBe(p.path);
   const prompt = readArgs()[0].prompt;
   expect(prompt).toContain("NOT a git repository");
+});
+
+test("repo with no commits runs in the folder with a notice, then worktrees once it has a commit", async () => {
+  const p = await setup({ git: false });
+  await run(["git", "init", "-q", "-b", "main"], p.path);
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.whenIdle();
+  const got = store.getTicket("p", t.id)!;
+  expect(got.outcome).toBe("done");
+  expect(got.worktree).toBeNull();
+  expect(got.notice).toContain("no commits yet");
+  expect(readArgs()[0].cwd).toBe(p.path);
+
+  // A follow-up run stays in the folder: its Claude session lives there.
+  await board.updateTicket("p", t.id, { status: "ready" });
+  await board.whenIdle();
+  expect(readArgs()[1].cwd).toBe(p.path);
+
+  writeFileSync(join(p.path, "a.txt"), "a\n");
+  await run(["git", "add", "."], p.path);
+  await run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], p.path);
+  const t2 = await board.createTicket("p", { title: "y", body: "", status: "ready" });
+  await board.whenIdle();
+  const got2 = store.getTicket("p", t2.id)!;
+  expect(got2.worktree).toBeTruthy();
+  expect(readArgs()[2].cwd).toBe(got2.worktree!);
+  expect(got2.notice ?? null).toBeNull();
+});
+
+test("wrong saved base branch is corrected from the repo", async () => {
+  const p = await setup();
+  await run(["git", "branch", "-m", "main", "master"], p.path);
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.whenIdle();
+  const got = store.getTicket("p", t.id)!;
+  expect(got.outcome).toBe("done");
+  expect(got.worktree).toBeTruthy();
+  expect(store.getProfile("p")!.baseBranch).toBe("master");
+  expect(got.notice).toContain('"master"');
+  await board.updateTicket("p", t.id, { notice: null });
+  expect(store.getTicket("p", t.id)!.notice).toBeNull();
+});
+
+test("refine that cannot start can be retried by moving into Planning again", async () => {
+  const p = await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "backlog" });
+  // Make worktree creation fail: a branch nested under the ticket's branch name blocks creating it.
+  const blocker = `ck/${t.id}-x/blocker`;
+  await run(["git", "branch", blocker], p.path);
+  await board.updateTicket("p", t.id, { status: "planning" });
+  await board.whenIdle();
+  let got = store.getTicket("p", t.id)!;
+  expect(got.outcome).toBe("failed");
+  expect(got.refineStarted).toBe(false);
+  expect(store.listComments("p", t.id).at(-1)!.text).toContain("Could not start");
+  await run(["git", "branch", "-D", blocker], p.path);
+  await board.updateTicket("p", t.id, { status: "backlog" });
+  await board.updateTicket("p", t.id, { status: "planning" });
+  await board.whenIdle();
+  got = store.getTicket("p", t.id)!;
+  expect(got.worktree).toBeTruthy();
+  expect(got.refineStarted).toBe(true);
 });
 
 test("moving to done removes clean worktree", async () => {

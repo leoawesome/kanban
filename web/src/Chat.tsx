@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, subscribe, type SessionEntry, type Ticket } from "./api";
-import { ArrowDownIcon } from "./icons";
+import { ArrowDownIcon, CloseIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
@@ -344,6 +344,13 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
         ))}
         {!running && ticket.error && !ticket.error.startsWith("corrupt") && (
           <div className="banner error inline"><pre>{ticket.error}</pre></div>
+        )}
+        {ticket.notice && (
+          <div className="banner info inline notice" role="status">
+            <span>{ticket.notice}</span>
+            <button className="icon-btn" aria-label="Dismiss" title="Dismiss"
+              onClick={() => api.updateTicket(slug, ticket.id, { notice: null }).catch((e) => onError(e.message))}><CloseIcon size={12} /></button>
+          </div>
         )}
         {/* Sticky inside the log, so it floats just above the composer. */}
         {jump && (

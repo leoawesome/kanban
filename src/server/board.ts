@@ -5,7 +5,7 @@ import { extractFinalText, summarizeEvent } from "./activity";
 import { deleteAttachments, localizeImages, referencedAttachments } from "./attachments";
 import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
-import { addWorktree, isGitRepo, removeWorktree, worktreeDir } from "./git";
+import { addWorktree, isGitRepo, removeWorktree, resolveBaseBranch, worktreeDir } from "./git";
 import { MOVE_TO_PLANNING_RE } from "./session";
 import { chatPrompt, firstRunPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode } from "./prompts";
 import { parseResult } from "./result";
@@ -264,7 +264,8 @@ export class Board {
     } catch (e) {
       const msg = (e as Error).message;
       this.store.addComment(slug, id, "ai", `Could not start: ${msg}`);
-      this.patch(slug, id, { ...this.endStatus(run), outcome: "failed", error: msg, lastActivity: null });
+      // refineStarted back off: moving the card into Planning again retries the interview.
+      this.patch(slug, id, { ...this.endStatus(run), outcome: "failed", error: msg, lastActivity: null, ...(run.chat?.mode === "refine" ? { refineStarted: false } : {}) });
       return;
     }
     if (this.shuttingDown) return;
@@ -419,12 +420,27 @@ export class Board {
     const isGit = await isGitRepo(profile.path);
     const patch: Partial<Ticket> = {};
     if (t.workdir && !existsSync(t.workdir)) throw new Error(`linked session folder no longer exists: ${t.workdir}`);
-    if (isGit && !t.workdir && (!t.worktree || !existsSync(t.worktree))) {
+    // A ticket that already ran in the folder itself stays there: its Claude session belongs to that folder.
+    const ranInPlace = !t.worktree && (!!t.sessionStarted || t.runCount > 0);
+    if (isGit && !t.workdir && !ranInPlace && (!t.worktree || !existsSync(t.worktree))) {
       const dir = worktreeDir(profile, id);
       const branch = t.branch ?? `ck/${id}-${slugify(t.title)}`;
-      if (!existsSync(dir)) await addWorktree(profile.path, dir, branch, profile.baseBranch);
-      patch.worktree = dir;
-      patch.branch = branch;
+      const base = existsSync(dir) ? profile.baseBranch : await resolveBaseBranch(profile.path, profile.baseBranch);
+      if (base === null) {
+        // Fresh `git init` with no commits: nothing to branch from, so run in the folder rather than fail.
+        patch.notice = "This repo has no commits yet, so Claude works directly in your folder instead of an isolated worktree. Make a first commit to give new tickets their own worktree.";
+      } else {
+        if (base !== profile.baseBranch) {
+          console.log(`profile ${slug}: base branch "${profile.baseBranch}" not found, using "${base}"`);
+          const fixed = { ...profile, baseBranch: base };
+          this.store.saveProfile(fixed);
+          this.bus.emit({ type: "profile.updated", slug, profile: fixed });
+          if (profile.baseBranch) patch.notice = `Base branch "${profile.baseBranch}" was not found in this repo, so the board now uses "${base}".`;
+        }
+        if (!existsSync(dir)) await addWorktree(profile.path, dir, branch, base);
+        patch.worktree = dir;
+        patch.branch = branch;
+      }
     }
     if (!t.sessionId) patch.sessionId = crypto.randomUUID();
     if (Object.keys(patch).length) t = this.patch(slug, id, patch);
@@ -455,7 +471,7 @@ export class Board {
   async updateTicket(
     slug: string,
     id: string,
-    patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode">> & { expectedBody?: string },
+    patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice">> & { expectedBody?: string },
   ): Promise<Ticket> {
     let current = this.store.getTicket(slug, id);
     if (!current) throw new Error(`ticket ${id} not found`);
@@ -467,6 +483,7 @@ export class Board {
     if (patch.body !== undefined) clean.body = patch.body;
     if (patch.order !== undefined) clean.order = patch.order;
     if (patch.mode !== undefined) clean.mode = patch.mode;
+    if (patch.notice !== undefined) clean.notice = patch.notice;
     let status = patch.status;
     if (status === "in_progress" && !this.isRunning(slug, id)) status = "ready";
 

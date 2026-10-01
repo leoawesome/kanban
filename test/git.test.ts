@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { makeRepo } from "./helpers";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addWorktree, detectBaseBranch, isGitRepo, removeWorktree, run, worktreeDir } from "../src/server/git";
+import { addWorktree, detectBaseBranch, isGitRepo, removeWorktree, resolveBaseBranch, run, worktreeDir } from "../src/server/git";
+import { tempDir } from "./helpers";
 
 let repo: string;
 
@@ -46,4 +47,29 @@ test("dirty worktree not removed", async () => {
 
 test("addWorktree failure throws with stderr", async () => {
   await expect(addWorktree(repo, join(repo + "-wt", "t3"), "ck/t3", "nope-branch")).rejects.toThrow();
+});
+
+test("resolveBaseBranch keeps a valid branch", async () => {
+  expect(await resolveBaseBranch(repo, "main")).toBe("main");
+});
+
+test("resolveBaseBranch replaces a missing branch with the detected one", async () => {
+  expect(await resolveBaseBranch(repo, "nope-branch")).toBe("main");
+  expect(await resolveBaseBranch(repo, "")).toBe("main");
+});
+
+test("resolveBaseBranch falls back to master", async () => {
+  const r = await makeRepo();
+  await run(["git", "branch", "-m", "main", "master"], r);
+  expect(await resolveBaseBranch(r, "main")).toBe("master");
+});
+
+test("resolveBaseBranch is null for a repo with no commits", async () => {
+  const r = tempDir("ck-empty-");
+  await run(["git", "init", "-q", "-b", "main"], r);
+  expect(await resolveBaseBranch(r, "main")).toBeNull();
+});
+
+test("addWorktree failure explains itself", async () => {
+  await expect(addWorktree(repo, join(repo + "-wt", "t4"), "ck/t4", "nope-branch")).rejects.toThrow(/Could not create an isolated git worktree[\s\S]*git worktree add failed/);
 });

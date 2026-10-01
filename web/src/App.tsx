@@ -423,8 +423,17 @@ export function App() {
         </div>
       )}
       {missing.length > 0 && !dismissed.has(pathKey) && (
-        <div className="banner warn" role="status">
-          <span>Not found on PATH: <b>{missing.join(", ")}</b>. {missing.includes("claude") ? "Tickets cannot run." : "PR features limited."}</span>
+        <div className={`banner ${missing.includes("claude") ? "warn" : "info"}`} role="status">
+          <span>
+            {missing.includes("claude") && <><b>claude</b> not found on PATH: tickets cannot run. </>}
+            {missing.includes("git") && <><b>git</b> not found: tickets still run, directly in the board folder without per-ticket worktrees. </>}
+            {missing.includes("gh") && (
+              <>
+                <b>gh</b> (GitHub CLI) is optional: tickets run without it; it is only needed to open and track pull requests.
+                {" "}To add it: <code>brew install gh</code>, then <code>gh auth login</code> (<a href="https://cli.github.com" target="_blank" rel="noreferrer">cli.github.com</a>).
+              </>
+            )}
+          </span>
           <button className="icon-btn" aria-label="Dismiss" title="Hide until next time" onClick={() => dismiss(pathKey)}><CloseIcon size={12} /></button>
         </div>
       )}

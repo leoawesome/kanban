@@ -77,6 +77,8 @@ export interface Ticket {
   lastRunAt: string | null;
   runCount: number;
   error: string | null;
+  /** Non-fatal heads-up about how the ticket runs (e.g. no worktree yet); dismissible. */
+  notice?: string | null;
   /** Created by this schedule. */
   scheduleId?: string | null;
   /** Messages sent while Claude was working that it has not read yet; "unsent" ones were cut off by Stop. */
@@ -314,7 +316,7 @@ export const api = {
   },
   createTicket: (slug: string, input: { title: string; body: string; status: Status; sessionId?: string; mode?: TicketMode }) =>
     req<Ticket>("POST", t(slug), input),
-  updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode">> & { expectedBody?: string }) =>
+  updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice">> & { expectedBody?: string }) =>
     req<Ticket>("PATCH", t(slug, id), patch),
   deleteTicket: (slug: string, id: string) => req<void>("DELETE", t(slug, id)),
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),
