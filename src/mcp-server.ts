@@ -1,11 +1,11 @@
 // `ckanban mcp`: a stdio MCP server (newline-delimited JSON-RPC 2.0) exposing the board as tools.
 // Hand-rolled instead of @modelcontextprotocol/sdk: we only need initialize, tools/list and tools/call.
 import {
-  assertCanChange, BoardClient, ClientError, parseMode, parseStatus, profileList, resolveProfile, runProfile,
+  assertCanChange, BoardClient, bugReportText, ClientError, parseMode, parseStatus, profileList, resolveProfile, runProfile,
   ticketLine, ticketText, type TicketPatch,
 } from "./client";
 import { STATUSES } from "./server/types";
-import { VERSION } from "./server/version";
+import { REPO, VERSION } from "./server/version";
 
 const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -37,7 +37,7 @@ interface Tool {
 
 export interface ToolContext {
   client: Pick<BoardClient,
-    "listProfiles" | "listTickets" | "getTicket" | "createTicket" | "updateTicket" | "deleteTicket" | "chat" | "stop" | "listComments" | "comment">;
+    "listProfiles" | "listTickets" | "getTicket" | "createTicket" | "updateTicket" | "deleteTicket" | "chat" | "stop" | "listComments" | "comment" | "reportBug">;
   cwd: string;
   env: Record<string, string | undefined>;
   main?: (dir: string) => string | null;
@@ -204,6 +204,40 @@ export const TOOLS: Tool[] = [
       const id = str(args, "id")!;
       await ctx.client.deleteTicket(slug, id);
       return `Deleted ${id}.`;
+    },
+  },
+  {
+    name: "report_bug",
+    description:
+      `File a bug in Claude Kanban (ckanban) itself as a GitHub issue on ${REPO}. ` +
+      "Only use it when the user asks to report a ckanban bug, never on your own initiative. " +
+      "Before calling, show the user the title and description you will send and wait for a yes. " +
+      "Write the description in markdown with: what happened, steps to reproduce (numbered), expected vs actual. " +
+      "Pass ticketId to attach that ticket's details, last run result and log tail (home and data paths and secrets are hidden). " +
+      "Screenshots can't be uploaded: tell the user to drag them into a comment on the issue. " +
+      "Returns the issue URL, or a prefilled link to finish it in the browser when gh is missing or logged out.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Short summary of the bug (under 80 characters)." },
+        description: { type: "string", description: "Markdown: what happened, steps to reproduce, expected vs actual." },
+        ticketId: { ...ID, description: "Ticket the bug showed up on (optional): its context is attached." },
+        includeLogs: { type: "boolean", description: "Attach the tail of the ticket's last run log. Default: true." },
+        profile: PROFILE,
+      },
+      required: ["title", "description"],
+    },
+    // Doesn't change the board, so it works from a board run's ticket chat too.
+    changes: false,
+    async run(args, ctx) {
+      const ticketId = str(args, "ticketId", false);
+      const slug = ticketId ? await slugFor(args, ctx) : undefined;
+      const include: ("env" | "ticket" | "log")[] = ["env", "ticket"];
+      if (args?.includeLogs !== false) include.push("log");
+      const r = await ctx.client.reportBug({
+        title: str(args, "title")!.trim(), description: str(args, "description")!, profile: slug, ticketId, include, source: "ai",
+      });
+      return bugReportText(r);
     },
   },
 ];

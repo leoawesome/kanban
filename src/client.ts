@@ -54,6 +54,22 @@ export interface TicketPatch {
   mode?: TicketMode;
 }
 
+export interface BugReportRequest {
+  title: string;
+  description: string;
+  profile?: string;
+  ticketId?: string;
+  include?: ("env" | "ticket" | "log")[];
+  source: "ai" | "cli";
+}
+
+export interface BugReportReply {
+  url: string | null;
+  fallbackUrl: string;
+  error: string | null;
+  screenshots: string[];
+}
+
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 export class BoardClient {
@@ -105,6 +121,7 @@ export class BoardClient {
   stop = (slug: string, id: string) => this.req<{ stopped: boolean }>("POST", `${this.t(slug, id)}/stop`, {});
   listComments = (slug: string, id: string) => this.req<CommentInfo[]>("GET", `${this.t(slug, id)}/comments`);
   comment = (slug: string, id: string, text: string) => this.req<CommentInfo>("POST", `${this.t(slug, id)}/comments`, { text });
+  reportBug = (input: BugReportRequest) => this.req<BugReportReply>("POST", "/api/bug-report", input);
 }
 
 function real(p: string): string {
@@ -230,4 +247,13 @@ export function ticketText(t: TicketInfo, comments: CommentInfo[] = []): string 
     for (const c of comments) lines.push(`- ${c.author} (${c.at}): ${c.text}`);
   }
   return lines.join("\n");
+}
+
+/** What a bug report did, for the CLI and MCP: the issue URL, or the browser link to finish it. */
+export function bugReportText(r: BugReportReply): string {
+  const shots = r.screenshots.length
+    ? `\n${r.screenshots.length} screenshot(s) from the ticket were not uploaded; ask the user to drag them into a comment on the issue.`
+    : "";
+  if (r.url) return `Created ${r.url}${shots}`;
+  return `Could not create the issue: ${r.error}\nOpen this link to file it in the browser instead (title and body are prefilled):\n${r.fallbackUrl}${shots}`;
 }

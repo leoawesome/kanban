@@ -118,6 +118,11 @@ ${artifactRule()}
 ${RESULT_RULE}`);
 }
 
+/** Ticket chats can file Claude Kanban bugs on the user's request (report_bug tool or the CLI). */
+export function bugReportRule(t: Ticket): string {
+  return `If the user asks to report a bug in Claude Kanban itself (this board app, not their project): draft a title and a markdown description (what happened, numbered steps to reproduce, expected vs actual), show it and wait for their yes, then file it with the ckanban \`report_bug\` tool (ticketId "${t.id}") or \`${helperCommand()} ticket report-bug ${t.id} --title "<title>" --body-file -\` (description on stdin), and reply with the issue URL or the fallback link it prints.`;
+}
+
 export type ChatMode = "refine" | "act";
 
 /** A chat message sent while Claude is already working: it arrives at Claude's next step. */
@@ -148,6 +153,7 @@ How to help:
 - Interview the user about what is still unclear: goal and why, who it is for, scope (must-haves vs nice-to-haves), constraints, how we know it's done. Ask only what matters for this ticket, in small rounds.
 - When you know enough (or the user asks), propose the improved ticket. After the user applies it they will move it to Ready and Claude will work on it autonomously, so make it self-contained.
 - Otherwise reply naturally and briefly, like in a normal chat.
+${bugReportRule(t)}
 
 ${QUESTIONS_FORMAT}
 
@@ -159,6 +165,7 @@ ${context("", `(Sent from the kanban board's ticket chat for "${t.title}". The u
 Act on the message as you would in an interactive session. If a pull request already exists, push new commits to the same branch. Save research/writing deliverables in ${outputDir}.
 If the message only asks you to plan, audit, review, list ideas, propose or discuss, and no changes are wanted yet (e.g. "don't change anything yet"): do not modify any files, answer, and end your reply with <ckanban-move to="planning"/> on its own line. The board then moves the ticket to Planning, where the next steps get shaped before any work.
 If you need decisions from the user, ask with the questions block.
+${bugReportRule(t)}
 
 ${QUESTIONS_FORMAT}
 

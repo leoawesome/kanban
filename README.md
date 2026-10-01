@@ -86,9 +86,9 @@ Then ask, for example:
 - "What's on my board? Start the dark-mode ticket."
 - "Tell the ticket about the login bug to also cover password reset."
 
-Tools: `list_profiles`, `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket`, `move_ticket`, `chat_ticket`, `stop_ticket`, `comment_ticket`, `delete_ticket`. New tickets land in **Backlog** in interview mode unless you ask otherwise. Every tool acts on the board whose folder contains the agent's working directory (a git worktree counts as its main checkout); pass `profile` to pick another. Answering a question form and applying a proposed ticket still happen on the board.
+Tools: `list_profiles`, `list_tickets`, `get_ticket`, `create_ticket`, `update_ticket`, `move_ticket`, `chat_ticket`, `stop_ticket`, `comment_ticket`, `delete_ticket`, `report_bug`. New tickets land in **Backlog** in interview mode unless you ask otherwise. Every tool acts on the board whose folder contains the agent's working directory (a git worktree counts as its main checkout); pass `profile` to pick another. Answering a question form and applying a proposed ticket still happen on the board.
 
-Board runs see the same server but can only read: inside a run (`CKANBAN_TICKET` is set) every tool that changes the board refuses, so a run can't create or start other runs.
+Board runs see the same server but can only read: inside a run (`CKANBAN_TICKET` is set) every tool that changes the board refuses, so a run can't create or start other runs. `report_bug` doesn't touch the board, so it works from a ticket chat too.
 
 The same operations work from a terminal:
 
@@ -103,9 +103,14 @@ ckanban ticket chat <id> "also handle the empty state"
 ckanban ticket comment <id> "note for the next run"
 ckanban ticket stop <id>
 ckanban ticket delete <id>
+ckanban ticket report-bug [<id>] --title "Chat froze" --body "1. ..."   # files a Claude Kanban bug on GitHub
 ```
 
 Add `--profile <slug>` to pick a board explicitly and `--json` for machine-readable output. The daemon must be running.
+
+### Reporting bugs
+
+Found a bug in Claude Kanban? Use **⋯ → Report a bug** in the header, or **Report a bug in Claude Kanban** in a ticket's details to attach that ticket. You see everything that will be sent (version and OS, ticket details, last run result and log tail) and can untick any of it; home and data paths and secret-looking values are hidden. It's filed as an issue on `leoawesome/kanban` with `gh`. Without `gh` (or logged out) you get a prefilled GitHub link instead. `gh` can't upload images, so screenshots are listed for you to drag into the issue. In a ticket chat you can also ask Claude to "report this as a ckanban bug": it drafts the issue, asks you to confirm, then files it.
 
 ### claude.ai artifacts from board runs
 

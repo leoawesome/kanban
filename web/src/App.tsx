@@ -1,8 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, copy, COLUMNS, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Schedule, type Status, type Ticket } from "./api";
+import { BugReportDialog } from "./BugReportDialog";
 import { ConnectionsDialog } from "./ConnectionsDialog";
 import { HeaderMenu } from "./HeaderMenu";
-import { ChatIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
+import { BugIcon, ChatIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
 import { Inbox } from "./Inbox";
 import { anyLayerOpen } from "./layers";
 import { Board } from "./Board";
@@ -109,6 +110,7 @@ export function App() {
   const [filters, setFilters] = useState<Set<FilterId>>(new Set());
   const [dismissed, setDismissed] = useState(readDismissed);
   const [shortcuts, setShortcuts] = useState(false);
+  const [bugReport, setBugReport] = useState(false);
   const [switcher, setSwitcher] = useState(false);
   // Command to type into the dock's terminal (e.g. "claude mcp login x"); n makes repeats count.
   const [dockCommand, setDockCommand] = useState<{ text: string; n: number } | null>(null);
@@ -443,6 +445,7 @@ export function App() {
         <HeaderMenu items={[
           ...(profile ? [{ label: "Board settings", icon: <GearIcon />, onSelect: () => setProfileDialog("edit") }] : []),
           { label: "Keyboard shortcuts", hint: "?", icon: <KeyboardIcon />, onSelect: () => setShortcuts(true) },
+          { label: "Report a bug", icon: <BugIcon />, onSelect: () => setBugReport(true) },
         ]} footer={version && version.version !== "dev" ? `Claude Kanban v${version.version}` : null} />
       </header>
 
@@ -532,6 +535,7 @@ export function App() {
           onRunInTerminal={profile && health?.pty !== false ? (cmd) => { setConnections(false); runInTerminal(cmd); } : undefined} />
       )}
       {shortcuts && <ShortcutsDialog onClose={() => setShortcuts(false)} />}
+      {bugReport && <BugReportDialog onClose={() => setBugReport(false)} />}
       {switcher && profile && (
         <QuickSwitcher tickets={tickets} onClose={() => setSwitcher(false)} onPick={(id) => { setSwitcher(false); openTicket(id); }} />
       )}

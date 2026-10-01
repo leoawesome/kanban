@@ -292,6 +292,23 @@ export interface InboxItem {
   attention: { kind: AttentionKind; label: string };
 }
 
+export type BugBlockId = "env" | "ticket" | "log";
+
+/** Context a bug report attaches; the user sees it and can leave it out. */
+export interface BugBlock {
+  id: BugBlockId;
+  label: string;
+  text: string;
+}
+
+export interface BugReportResult {
+  url: string | null;
+  fallbackUrl: string;
+  error: string | null;
+  /** Local /api/attachments/ URLs of screenshots that were not uploaded. */
+  screenshots: string[];
+}
+
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const hasBody = method === "POST" || method === "PATCH" || method === "PUT";
   const r = await fetch(url, {
@@ -317,6 +334,10 @@ export const api = {
   pickFolder: () => req<{ path: string | null }>("POST", "/api/pick-folder"),
   version: () => req<{ version: string; latest: string | null; updateAvailable: boolean; url: string | null }>("GET", "/api/version"),
   health: () => req<Health>("GET", "/api/health"),
+  bugDraft: (ref: { profile: string; ticketId: string } | null) =>
+    req<{ blocks: BugBlock[]; screenshots: string[] }>("POST", "/api/bug-report/draft", ref ?? {}),
+  reportBug: (input: { title: string; description: string; include: BugBlockId[]; profile?: string; ticketId?: string }) =>
+    req<BugReportResult>("POST", "/api/bug-report", { ...input, source: "ui" }),
   profiles: () => req<Profile[]>("GET", "/api/profiles"),
   createProfile: (p: { name: string; path: string; maxParallel?: number; model?: string; baseBranch?: string }) =>
     req<Profile>("POST", "/api/profiles", p),

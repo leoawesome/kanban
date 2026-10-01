@@ -136,6 +136,7 @@ function fakeClient() {
     chat: rec("chat", () => ticket({ running: true })),
     stop: rec("stop", () => ({ stopped: true })),
     comment: rec("comment", () => ({ id: "c2", author: "user", text: "x", at: "" })),
+    reportBug: rec("reportBug", () => ({ url: "https://github.com/leoawesome/kanban/issues/7", fallbackUrl: "", error: null, screenshots: [] })),
   };
   return { client: client as unknown as ToolContext["client"], calls };
 }
@@ -199,7 +200,20 @@ test("inside a board run, changing tools are refused and read tools work", async
 
 test("every tool advertises a profile argument; change tools are flagged", () => {
   for (const t of TOOLS.filter((t) => t.name !== "list_profiles")) expect(t.inputSchema.properties.profile).toBeDefined();
-  expect(TOOLS.filter((t) => !t.changes).map((t) => t.name).sort()).toEqual(["get_ticket", "list_profiles", "list_tickets"]);
+  expect(TOOLS.filter((t) => !t.changes).map((t) => t.name).sort()).toEqual(["get_ticket", "list_profiles", "list_tickets", "report_bug"]);
+});
+
+test("report_bug files from inside a board run, with the ticket attached", async () => {
+  const { ctx, calls } = ctxWith({ CKANBAN_TICKET: "site/t_9" }, "/elsewhere");
+  const r = await callTool("report_bug", { title: " Chat froze ", description: "1. open", ticketId: "t_9" }, ctx);
+  expect(r.isError).toBeUndefined();
+  expect(r.content[0].text).toBe("Created https://github.com/leoawesome/kanban/issues/7");
+  expect(calls.at(-1)).toEqual({ fn: "reportBug", args: [{
+    title: "Chat froze", description: "1. open", profile: "site", ticketId: "t_9", include: ["env", "ticket", "log"], source: "ai",
+  }] });
+  await callTool("report_bug", { title: "x", description: "y", includeLogs: false }, ctx);
+  expect(calls.at(-1)?.args[0]).toMatchObject({ profile: undefined, ticketId: undefined, include: ["env", "ticket"] });
+  expect((await callTool("report_bug", { title: "x" }, ctx)).content[0].text).toBe("description is required");
 });
 
 test("JSON-RPC: initialize, tools/list, tools/call, notifications, unknown methods", async () => {

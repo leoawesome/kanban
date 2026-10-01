@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { api, copy, COLUMNS, safeHref, startWorkTarget, subscribe, type ClaudeSession, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
+import { BugReportDialog } from "./BugReportDialog";
 import { Chat, useStop } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, FileTextIcon, SparkIcon } from "./icons";
+import { BugIcon, CheckIcon, CloseIcon, CopyIcon, ExternalIcon, FileTextIcon, SparkIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { useFocusTrap, useLayer } from "./layers";
 import { ModeToggle } from "./ModeToggle";
@@ -100,6 +101,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
   useLayer(onClose, { skipInInputs: true });
   useFocusTrap(panelRef, true);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [reportingBug, setReportingBug] = useState(false);
   const [confirmStart, setConfirmStart] = useState(false);
   const [picking, setPicking] = useState(false);
   const [linked, setLinked] = useState<ClaudeSession | null>(null);
@@ -344,6 +346,10 @@ export function TicketDrawer({ profile, ticket, onClose }: {
               )}
             </section>
 
+            <button className="link-btn small bug-report-btn" onClick={() => setReportingBug(true)}
+              title="Something wrong with Claude Kanban on this ticket? File a GitHub issue with its details attached">
+              <BugIcon size={12} /> Report a bug in Claude Kanban
+            </button>
             <button className="btn ghost danger small delete-btn" onClick={() => setConfirmDelete(true)}>Delete ticket</button>
           </div>
 
@@ -381,6 +387,9 @@ export function TicketDrawer({ profile, ticket, onClose }: {
             onConfirm={async () => { await api.updateTicket(slug, ticket.id, { status: "ready" }); setConfirmStart(false); }}>
             <p>Claude will work on this on its own. When working: <b>{ticket.mode === "interview" ? "Interview me first" : "Just do it"}</b>.</p>
           </ConfirmDialog>
+        )}
+        {reportingBug && (
+          <BugReportDialog ticket={{ profile: slug, id: ticket.id, title: ticket.title }} onClose={() => setReportingBug(false)} />
         )}
         {confirmDelete && (
           <ConfirmDialog title={`Delete "${ticket.title}"?`} confirmLabel="Delete ticket" busyLabel="Deleting…" onCancel={() => setConfirmDelete(false)}

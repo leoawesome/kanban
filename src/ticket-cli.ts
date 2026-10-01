@@ -1,7 +1,7 @@
 // `ckanban profiles`, `ckanban ticket ...` and `ckanban mcp ...`: the board from a terminal or another agent.
 import { readFileSync } from "node:fs";
 import {
-  assertCanChange, BoardClient, ClientError, parseMode, parseStatus, profileList, resolveProfile, runProfile,
+  assertCanChange, BoardClient, bugReportText, ClientError, parseMode, parseStatus, profileList, resolveProfile, runProfile,
   ticketLine, ticketText, type TicketPatch,
 } from "./client";
 import { AGENT_IDS, AgentRegistry, type AgentId } from "./server/agents";
@@ -16,6 +16,9 @@ export const TICKET_USAGE = `  ckanban profiles     List boards (profiles) and t
   ckanban ticket comment <id> <text>
   ckanban ticket stop <id>
   ckanban ticket delete <id>
+  ckanban ticket report-bug [<id>] --title <t> [--body <md> | --body-file <f>] [--no-logs]
+                       File a Claude Kanban bug as a GitHub issue (with <id>: attach that
+                       ticket's details and last run log). Needs gh, else prints a link.
                        Ticket commands act on the board whose folder contains the current
                        directory; --profile <slug> picks another. --json prints raw JSON.
                        --body - / --body-file - read the description from stdin.
@@ -25,7 +28,7 @@ export const TICKET_USAGE = `  ckanban profiles     List boards (profiles) and t
   ckanban mcp uninstall [--claude] [--codex]
   ckanban mcp status   Show where the MCP server is registered`;
 
-const BOOLEAN_FLAGS = new Set(["json", "claude", "codex"]);
+const BOOLEAN_FLAGS = new Set(["json", "claude", "codex", "no-logs"]);
 
 export interface ParsedArgs {
   positional: string[];
@@ -103,8 +106,10 @@ export async function ticketCommand(argv: string[], io: CliIo = defaultIo()): Pr
   const [action, id, ...rest] = p.positional;
   const json = !!p.flags.json;
   const print = (data: unknown, text: string) => io.out(json ? JSON.stringify(data, null, 2) : text);
-  const known = ["list", "show", "create", "update", "move", "chat", "comment", "stop", "delete"];
+  const known = ["list", "show", "create", "update", "move", "chat", "comment", "stop", "delete", "report-bug"];
   if (!action || !known.includes(action)) throw new ClientError(`usage:\n${TICKET_USAGE}`);
+  // Filing a bug doesn't touch the board (and needs no board without a ticket id), so runs may do it.
+  if (action === "report-bug") return reportBug(p, id, io);
   if (!["list", "show"].includes(action)) assertCanChange(io.env);
   const slug = resolveProfile(await io.client.listProfiles(), {
     explicit: flagStr(p, "profile") ?? runProfile(io.env), cwd: io.cwd,
@@ -180,6 +185,23 @@ export async function ticketCommand(argv: string[], io: CliIo = defaultIo()): Pr
       return print({ deleted: tid }, `Deleted ${tid}.`);
     }
   }
+}
+
+async function reportBug(p: ParsedArgs, id: string | undefined, io: CliIo): Promise<void> {
+  const usage = "ticket report-bug [<id>] --title <t> [--body <md> | --body-file <f>] [--no-logs]";
+  const title = need(flagStr(p, "title")?.trim(), usage);
+  const slug = id
+    ? resolveProfile(await io.client.listProfiles(), { explicit: flagStr(p, "profile") ?? runProfile(io.env), cwd: io.cwd }).slug
+    : undefined;
+  const r = await io.client.reportBug({
+    title,
+    description: bodyFrom(p, io.stdin) ?? "",
+    profile: slug,
+    ticketId: id,
+    include: p.flags["no-logs"] ? ["env", "ticket"] : ["env", "ticket", "log"],
+    source: runProfile(io.env) ? "ai" : "cli",
+  });
+  io.out(p.flags.json ? JSON.stringify(r, null, 2) : bugReportText(r));
 }
 
 /** --claude / --codex, or both when neither is given. */

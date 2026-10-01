@@ -9,6 +9,7 @@ import { resumeCommand } from "./prompts";
 import { cronError, describeCron, nextRuns, parseCron } from "./cron";
 import { ScheduleError, Scheduler } from "./scheduler";
 import { attentionFor } from "./attention";
+import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
 import { FileError, listDir, openWithSystem, readFileForView } from "./files";
 import { McpError, McpManager } from "./mcp";
@@ -36,6 +37,8 @@ export interface ServerDeps {
   mcp?: McpManager;
   scheduler?: Scheduler;
   agents?: AgentRegistry;
+  /** Runs `gh` for bug reports (tests pass a fake). */
+  gh?: GhRunner;
 }
 
 interface ShellSocket {
@@ -244,6 +247,27 @@ export function createServer(deps: ServerDeps) {
     }
     if (parts[0] === "claude" && parts[1] === "defaults" && m === "GET") return json(claudeDefaults());
     if (parts[0] === "pick-folder" && m === "POST") return json({ path: await pickFolder() });
+
+    // Report bug: context preview, then file a GitHub issue on the ckanban repo.
+    if (parts[0] === "bug-report" && m === "POST" && parts.length <= 2) {
+      const b = await body(req);
+      const ref = b.ticketId ? { slug: String(b.profile ?? ""), id: String(b.ticketId) } : null;
+      try {
+        const draft = draftReport(store, ref);
+        if (parts[1] === "draft") return json(draft);
+        if (parts.length !== 1) throw new HttpError(404, "not found");
+        const source: BugSource = b.source === "ai" || b.source === "cli" ? b.source : "ui";
+        const include = Array.isArray(b.include) ? (b.include.map(String) as BugBlockId[]) : undefined;
+        const r = await submitReport(
+          { title: String(b.title ?? ""), description: String(b.description ?? ""), blocks: draft.blocks, include, source },
+          { dataRoot: store.root, gh: deps.gh },
+        );
+        return json(r, r.url ? 201 : 200);
+      } catch (e) {
+        if (e instanceof BugReportError) throw new HttpError(e.status, e.message);
+        throw e;
+      }
+    }
 
     if (parts[0] !== "profiles") throw new HttpError(404, "not found");
 
