@@ -95,3 +95,12 @@ test("run prompts point Claude at the artifact helper", () => {
   }
   expect(chatPrompt(t, "hi", "refine", "/o")).not.toContain("artifact publish");
 });
+
+test("a scheduled ticket's first run is told its schedule", () => {
+  const t = { ...ticket, scheduleId: "s1" } as Ticket;
+  const p = firstRunPrompt(t, { isGit: true, outputDir: "/out", schedule: { id: "s1", name: "Nightly audit", board: "kanban" } });
+  expect(p).toContain('created by schedule s1 ("Nightly audit") on board kanban');
+  expect(p).toContain("update_schedule");
+  expect(firstRunPrompt(t, { isGit: true, outputDir: "/out", schedule: { id: "s1", name: null, board: "kanban" } })).toContain("since been deleted");
+  expect(firstRunPrompt(ticket, { isGit: true, outputDir: "/out" })).not.toContain("schedule");
+});

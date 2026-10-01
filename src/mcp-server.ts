@@ -1,8 +1,8 @@
 // `ckanban mcp`: a stdio MCP server (newline-delimited JSON-RPC 2.0) exposing the board as tools.
 // Hand-rolled instead of @modelcontextprotocol/sdk: we only need initialize, tools/list and tools/call.
 import {
-  assertCanChange, BoardClient, bugReportText, ClientError, parseMode, parseStatus, profileList, resolveProfile, runProfile,
-  ticketLine, ticketText, type TicketPatch,
+  assertCanChange, BoardClient, bugReportText, ClientError, parseMode, parseStatus, profileList, resolveProfile, RUN_ENV, runProfile,
+  ticketLine, ticketText, type ScheduleHistoryInfo, type ScheduleInfo, type ScheduleInput, type TicketPatch,
 } from "./client";
 import { STATUSES } from "./server/types";
 import { REPO, VERSION } from "./server/version";
@@ -20,6 +20,29 @@ const STATUS = {
   description: "Column. backlog: idea, nothing runs. planning: Claude interviews the user in the board chat. " +
     "ready: queued, Claude starts working as soon as a slot is free. in_progress/review/done: usually set by the board.",
 };
+const SCHEDULE_ID = { type: "string", description: "Schedule id (from list_schedules)." };
+const CRON = {
+  type: "string",
+  description: "5-field cron (minute hour day-of-month month day-of-week) in this computer's local time. " +
+    "Examples: \"0 9 * * 1-5\" weekdays 09:00, \"0 3 * * *\" daily 03:00, \"0 9 * * 1\" Mondays 09:00, \"*/30 * * * *\" every 30 minutes, \"0 * * * *\" hourly.",
+};
+const SCHEDULE_FIELDS = {
+  name: { type: "string", description: "Short name shown in the Schedules list, e.g. \"Nightly dependency audit\"." },
+  title: { type: "string", description: "Title of each ticket it creates. {date} and {time} are filled in, e.g. \"Dependency audit {date}\"." },
+  body: {
+    type: "string",
+    description: "The prompt each ticket gets, in markdown. It runs unattended with no access to this conversation, " +
+      "so make it self-contained: goal, context (files, commands), steps, what done looks like.",
+  },
+  cron: CRON,
+  mode: {
+    type: "string", enum: ["auto", "interview"],
+    description: "auto: Claude just does it (right for unattended runs). interview: each ticket waits for the user's answers first. Default: auto.",
+  },
+  enabled: { type: "boolean", description: "false pauses the schedule (no runs, no catch-up when resumed). Default: true." },
+  skipIfRunning: { type: "boolean", description: "Skip a run while the previous ticket from this schedule is still queued or running. Default: true." },
+};
+
 const MODE = {
   type: "string",
   enum: ["interview", "auto"],
@@ -30,14 +53,21 @@ interface Tool {
   name: string;
   description: string;
   inputSchema: { type: "object"; properties: Record<string, unknown>; required?: string[] };
-  /** Changes the board: refused inside board runs. */
+  /** Changes the board: refused inside board runs, unless allowInRun. */
   changes: boolean;
+  /**
+   * Schedule edits only affect future fire times (the user can pause them), so board runs may make them,
+   * including a scheduled run refining its own schedule. Every edit is credited to the run's ticket in the history.
+   */
+  allowInRun?: boolean;
   run(args: any, ctx: ToolContext): Promise<string>;
 }
 
 export interface ToolContext {
   client: Pick<BoardClient,
-    "listProfiles" | "listTickets" | "getTicket" | "createTicket" | "updateTicket" | "deleteTicket" | "chat" | "stop" | "listComments" | "comment" | "reportBug">;
+    | "listProfiles" | "listTickets" | "getTicket" | "createTicket" | "updateTicket" | "deleteTicket" | "chat" | "stop" | "listComments"
+    | "comment" | "reportBug" | "listSchedules" | "createSchedule" | "updateSchedule" | "deleteSchedule" | "runSchedule"
+    | "scheduleHistory" | "cronPreview">;
   cwd: string;
   env: Record<string, string | undefined>;
   main?: (dir: string) => string | null;
@@ -54,6 +84,158 @@ function str(args: any, key: string, required = true): string | undefined {
   if (required) throw new ClientError(`${key} is required`);
   return undefined;
 }
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** ISO time as local "2026-10-01 09:00" (schedules run in this computer's local time). */
+export function localTime(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export function scheduleLine(s: ScheduleInfo): string {
+  const state = [s.enabled ? "active" : "paused"];
+  if (s.active) state.push("running");
+  const bits = [`${s.id}  [${state.join(", ")}]  ${s.name}: ${s.summary} (${s.cron})`];
+  if (s.enabled && s.nextRunAt) bits.push(`next ${localTime(s.nextRunAt)}`);
+  if (s.lastFiredAt) bits.push(`last ticket ${localTime(s.lastFiredAt)}`);
+  if (s.lastError) bits.push(`last run failed to start: ${s.lastError}`);
+  return bits.join("; ");
+}
+
+function scheduleText(s: ScheduleInfo): string {
+  return [
+    scheduleLine(s),
+    `ticket title: ${s.title}`,
+    `mode: ${s.mode}, skip while previous runs: ${s.skipIfRunning ? "yes" : "no"}`,
+    "", s.body.trim() || "(no prompt)",
+  ].join("\n");
+}
+
+function historyLine(e: ScheduleHistoryInfo): string {
+  const t = e.ticket ? `${e.ticket.id} "${e.ticket.title}" [${e.ticket.running ? "running" : [e.ticket.status, e.ticket.outcome].filter(Boolean).join(", ")}]` : null;
+  const at = localTime(e.at);
+  if (e.kind === "fired") return `${at}  fired (${e.trigger}): ${t ?? `${e.ticketId} (deleted)`}`;
+  if (e.kind === "skipped") return `${at}  skipped (${e.trigger}): previous ticket ${e.ticketId ?? ""} still queued or running`;
+  if (e.kind === "error") return `${at}  could not create the ticket (${e.trigger}): ${e.message}`;
+  const by = !e.by || e.by === "user" ? "the user" : `ticket ${e.by.ticketId}`;
+  const fields = e.fields?.length ? ` ${e.fields.join(", ")}` : "";
+  const prev = e.previous ? Object.entries(e.previous).map(([k, v]) => `\n    previous ${k}: ${String(v).replace(/\s+/g, " ").slice(0, 300)}`).join("") : "";
+  return `${at}  ${e.action}${fields} by ${by}${prev}`;
+}
+
+function scheduleInput(args: any, partial: boolean): ScheduleInput {
+  const out: ScheduleInput = {};
+  for (const k of ["name", "title", "body", "cron"] as const) {
+    if (typeof args?.[k] === "string") out[k] = args[k];
+    else if (!partial && k !== "body") throw new ClientError(`${k} is required`);
+  }
+  if (args?.mode !== undefined) out.mode = parseMode(args.mode);
+  for (const k of ["enabled", "skipIfRunning"] as const) {
+    if (args?.[k] === undefined) continue;
+    if (typeof args[k] !== "boolean") throw new ClientError(`${k} must be true or false`);
+    out[k] = args[k];
+  }
+  return out;
+}
+
+const SCHEDULE_TOOLS: Tool[] = [
+  {
+    name: "list_schedules",
+    description:
+      "List a board's schedules (recurring tickets): id, active/paused, when it fires (plain English + cron), next run, last ticket, errors. " +
+      "Check this before create_schedule to avoid duplicates.",
+    inputSchema: { type: "object", properties: { profile: PROFILE } },
+    changes: false,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const ss = await ctx.client.listSchedules(slug);
+      return ss.length ? `Schedules on board ${slug}:\n${ss.map(scheduleLine).join("\n")}` : `Board ${slug} has no schedules.`;
+    },
+  },
+  {
+    name: "create_schedule",
+    description:
+      "Create a schedule: at each cron time the board creates a ticket from it and Claude starts working on it right away, unattended. " +
+      "Use it when the user wants something done regularly (nightly audit, weekly changelog, daily CI check). " +
+      "Runs happen only while the Claude Kanban daemon is running; one missed run is caught up when it starts. " +
+      "Returns the schedule id and its next run times.",
+    inputSchema: { type: "object", properties: { profile: PROFILE, ...SCHEDULE_FIELDS }, required: ["name", "title", "body", "cron"] },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const s = await ctx.client.createSchedule(slug, scheduleInput(args, false), ctx.env[RUN_ENV]);
+      const p = await ctx.client.cronPreview(s.cron).catch(() => null);
+      const next = p?.next.length ? `\nNext runs: ${p.next.map(localTime).join(", ")}` : "";
+      return `Created schedule ${s.id} on board ${slug}: ${s.name}, ${s.summary} (${s.cron}), ${s.mode} mode.${next}\n` +
+        "The user can see, pause or edit it in the board's Schedules dialog.";
+    },
+  },
+  {
+    name: "update_schedule",
+    description:
+      "Change a schedule: any of name, title, prompt (body), cron, mode, skipIfRunning; enabled false/true pauses/resumes it. " +
+      "Only the fields you pass change. A run created by a schedule may update its own schedule (e.g. refine its prompt); " +
+      "the old prompt is kept in the schedule's history.",
+    inputSchema: { type: "object", properties: { profile: PROFILE, id: SCHEDULE_ID, ...SCHEDULE_FIELDS }, required: ["id"] },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const patch = scheduleInput(args, true);
+      if (!Object.keys(patch).length) throw new ClientError("nothing to change: pass name, title, body, cron, mode, enabled or skipIfRunning");
+      const s = await ctx.client.updateSchedule(slug, str(args, "id")!, patch, ctx.env[RUN_ENV]);
+      return `Updated: ${scheduleLine(s)}`;
+    },
+  },
+  {
+    name: "delete_schedule",
+    description: "Delete a schedule (tickets it already created stay). Only when the user asked; to stop it for a while, pause it with update_schedule enabled=false.",
+    inputSchema: { type: "object", properties: { profile: PROFILE, id: SCHEDULE_ID }, required: ["id"] },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const id = str(args, "id")!;
+      await ctx.client.deleteSchedule(slug, id, ctx.env[RUN_ENV]);
+      return `Deleted schedule ${id}.`;
+    },
+  },
+  {
+    name: "run_schedule",
+    description: "Fire a schedule now: creates its ticket and starts it, without moving the next scheduled run. Not available inside board runs.",
+    inputSchema: { type: "object", properties: { profile: PROFILE, id: SCHEDULE_ID }, required: ["id"] },
+    // Starts a run immediately, so like create_ticket it stays off-limits to board runs.
+    changes: true,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const { entry } = await ctx.client.runSchedule(slug, str(args, "id")!);
+      if (entry.kind === "fired") return `Started: created ticket ${entry.ticketId}, Claude is working on it.`;
+      if (entry.kind === "skipped") return `Skipped: the previous ticket ${entry.ticketId ?? ""} from this schedule is still queued or running.`;
+      throw new ClientError(`could not create the ticket: ${entry.message}`);
+    },
+  },
+  {
+    name: "schedule_history",
+    description: "Show a schedule's settings and history, newest first: tickets it created with their status, skips, errors, and edits (who changed what, with the previous prompt).",
+    inputSchema: {
+      type: "object",
+      properties: { profile: PROFILE, id: SCHEDULE_ID, limit: { type: "number", description: "Entries to show. Default: 20." } },
+      required: ["id"],
+    },
+    changes: false,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const id = str(args, "id")!;
+      const [all, h] = await Promise.all([ctx.client.listSchedules(slug), ctx.client.scheduleHistory(slug, id)]);
+      const s = all.find((x) => x.id === id);
+      const limit = Math.max(1, Math.min(100, Number(args?.limit) || 20));
+      const lines = h.slice(0, limit).map(historyLine);
+      return `${s ? scheduleText(s) : `Schedule ${id}`}\n\nHistory:\n${lines.length ? lines.join("\n") : "(not run yet)"}`;
+    },
+  },
+];
 
 export const TOOLS: Tool[] = [
   {
@@ -240,6 +422,7 @@ export const TOOLS: Tool[] = [
       return bugReportText(r);
     },
   },
+  ...SCHEDULE_TOOLS,
 ];
 
 export interface ToolResult {
@@ -252,7 +435,7 @@ export async function callTool(name: string, args: unknown, ctx: ToolContext): P
   const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError } : {}) });
   if (!tool) return text(`unknown tool ${name}`, true);
   try {
-    if (tool.changes) assertCanChange(ctx.env);
+    if (tool.changes && !tool.allowInRun) assertCanChange(ctx.env);
     return text(await tool.run(args ?? {}, ctx));
   } catch (e) {
     return text((e as Error).message, true);
@@ -275,7 +458,8 @@ export async function handleMessage(msg: JsonRpc, ctx: ToolContext): Promise<obj
         serverInfo: { name: "ckanban", version: VERSION },
         instructions:
           "Tools for the user's local Claude Kanban board. Use them when the user asks to put work on the board, " +
-          "find what to do next, or check on, start or steer tickets. Tickets you create land in Backlog in interview mode by default.",
+          "find what to do next, or check on, start or steer tickets. Tickets you create land in Backlog in interview mode by default. " +
+          "Schedules (create_schedule etc.) make the board create and run a ticket on a cron, for work the user wants done regularly.",
       });
     }
     case "ping":

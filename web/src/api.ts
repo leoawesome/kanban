@@ -262,9 +262,14 @@ export type ScheduleInput = Pick<Schedule, "name" | "title" | "body" | "mode" | 
 
 export type ScheduleTrigger = "schedule" | "missed" | "manual";
 
-export type ScheduleHistoryItem = { at: string; trigger: ScheduleTrigger } & (
-  | { kind: "fired" | "skipped"; ticketId: string | null }
-  | { kind: "error"; message: string }
+export type ScheduleHistoryItem = { at: string } & (
+  | { kind: "fired" | "skipped"; trigger: ScheduleTrigger; ticketId: string | null }
+  | { kind: "error"; trigger: ScheduleTrigger; message: string }
+  /** by: who changed it (a ticket = Claude in that ticket's run). previous: old title/prompt/cron. */
+  | {
+      kind: "edited"; action: "created" | "updated" | "paused" | "resumed"; fields: string[];
+      by: "user" | { ticketId: string }; previous?: { title?: string; body?: string; cron?: string };
+    }
 ) & { ticket: { id: string; title: string; status: Status; outcome: Outcome; running: boolean } | null };
 
 export interface CronPreview {

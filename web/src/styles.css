@@ -909,3 +909,8 @@ input[aria-invalid="true"] { border-color: var(--err); }
 .bug-shot-list img { max-width: 160px; max-height: 110px; border-radius: 6px; border: 1px solid var(--border); display: block; }
 .bug-report-btn { align-self: flex-start; margin-top: auto; display: inline-flex; align-items: center; gap: 5px; }
 .bug-report-btn + .delete-btn { margin-top: 6px; }
+.sched-edit { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; flex: 1; }
+.sched-prev { flex-basis: 100%; }
+.sched-prev summary { cursor: pointer; list-style: none; }
+.sched-prev pre { margin: 4px 0 6px; padding: 6px 8px; background: var(--surface); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
+.sched-entry { flex-wrap: wrap; align-items: baseline; padding: 2px 0; }

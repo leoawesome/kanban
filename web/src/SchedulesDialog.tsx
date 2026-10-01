@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  api, type CronPreview, type Outcome, type Profile, type Schedule, type ScheduleHistoryItem, type ScheduleInput, type Status,
+  api, type CronPreview, type ScheduleTrigger, type Outcome, type Profile, type Schedule, type ScheduleHistoryItem, type ScheduleInput, type Status,
   type Ticket, type TicketMode,
 } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -15,7 +15,13 @@ export const CRON_PRESETS: { label: string; cron: string }[] = [
   { label: "Weekly Mon 09:00", cron: "0 9 * * 1" },
 ];
 
-const TRIGGER_LABEL: Record<ScheduleHistoryItem["trigger"], string> = {
+const FIELD_LABEL: Record<string, string> = {
+  name: "name", title: "ticket title", body: "prompt", mode: "mode", cron: "timing", enabled: "on/off", skipIfRunning: "skip setting",
+};
+
+const ACTION_LABEL = { created: "Created", updated: "Edited", paused: "Paused", resumed: "Resumed" } as const;
+
+const TRIGGER_LABEL: Record<ScheduleTrigger, string> = {
   schedule: "on schedule", missed: "missed run, caught up", manual: "run now",
 };
 
@@ -180,7 +186,26 @@ function History({ slug, schedule, tickets, onOpenTicket }: {
         return (
           <div key={i} className="sched-entry">
             <span className="sched-at" title={new Date(e.at).toLocaleString()}>{when(e.at)}</span>
-            <span className="muted small">{TRIGGER_LABEL[e.trigger]}</span>
+            {e.kind !== "edited" && <span className="muted small">{TRIGGER_LABEL[e.trigger]}</span>}
+            {e.kind === "edited" && (
+              <span className="sched-edit">
+                <span className="badge stopped">{ACTION_LABEL[e.action]}{e.action === "updated" && e.fields.length ? `: ${e.fields.map((f) => FIELD_LABEL[f] ?? f).join(", ")}` : ""}</span>
+                <span className="muted small">by</span>
+                {e.by === "user"
+                  ? <span className="muted small">you</span>
+                  : t
+                  ? <button className="link-btn sched-ticket" onClick={() => onOpenTicket(t.id)} title={`Claude in ${t.title}`}>Claude in {t.title}</button>
+                  : <span className="muted small">Claude in {e.by.ticketId} (deleted)</span>}
+                {e.previous && Object.keys(e.previous).length > 0 && (
+                  <details className="sched-prev">
+                    <summary className="link-btn small">Previous</summary>
+                    {Object.entries(e.previous).map(([k, v]) => (
+                      <div key={k}><span className="muted small">{FIELD_LABEL[k] ?? k}</span><pre>{v}</pre></div>
+                    ))}
+                  </details>
+                )}
+              </span>
+            )}
             {e.kind === "error" && <span className="mcp-msg">Could not create the ticket: {e.message}</span>}
             {e.kind === "skipped" && <span className="badge stopped">Skipped (previous still running)</span>}
             {e.kind === "fired" && (t

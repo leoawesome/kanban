@@ -67,6 +67,16 @@ export interface PromptContext {
   linked?: boolean;
   comments?: Comment[];
   outputDir: string;
+  /** The ticket was created by this schedule (null name: schedule since deleted). */
+  schedule?: { id: string; name: string | null; board: string };
+}
+
+/** Tells a scheduled run where it came from, so it can read or refine its own schedule. */
+function scheduleNote(s: PromptContext["schedule"]): string {
+  if (!s) return "";
+  if (s.name === null) return `\nThis ticket was created by schedule ${s.id} on board ${s.board}, which has since been deleted.\n`;
+  return `\nThis ticket was created by schedule ${s.id} ("${s.name}") on board ${s.board}; it creates a new ticket like this on its own timetable. ` +
+    `You can read or change that schedule (for example refine its prompt for future runs) with the ckanban tools list_schedules, schedule_history and update_schedule.\n`;
 }
 
 export function firstRunPrompt(t: Ticket, ctx: PromptContext): string {
@@ -87,7 +97,7 @@ export function firstRunPrompt(t: Ticket, ctx: PromptContext): string {
 # Ticket: ${t.title}
 
 ${t.body.trim() || "(no description)"}
-${comments.length ? `\n# User notes\n${comments.map((c) => `- ${c.text}`).join("\n")}\n` : ""}
+${scheduleNote(ctx.schedule)}${comments.length ? `\n# User notes\n${comments.map((c) => `- ${c.text}`).join("\n")}\n` : ""}
 ${interview ? `${INTERVIEW}\n\n` : ""}# Rules
 - ${where}
 - Decide whether this task requires changing files in a code project.

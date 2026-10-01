@@ -1,6 +1,7 @@
 // Talks to the local daemon's HTTP API for the `ckanban ticket` CLI and the `ckanban mcp` server.
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { RUN_HEADER } from "./server/scheduler";
 import { defaultRoot, Store } from "./server/store";
 import { STATUSES, type Status, type TicketMode } from "./server/types";
 
@@ -35,9 +36,56 @@ export interface TicketInfo {
   branch: string | null;
   lastActivity: string | null;
   error: string | null;
+  scheduleId?: string | null;
   createdAt: string;
   updatedAt: string;
   attention?: { kind: string } | null;
+}
+
+export interface ScheduleInfo {
+  id: string;
+  name: string;
+  title: string;
+  body: string;
+  mode: TicketMode;
+  cron: string;
+  enabled: boolean;
+  skipIfRunning: boolean;
+  lastFiredAt: string | null;
+  nextRunAt: string | null;
+  lastError: string | null;
+  summary: string;
+  active: boolean;
+}
+
+export interface ScheduleInput {
+  name?: string;
+  title?: string;
+  body?: string;
+  mode?: TicketMode;
+  cron?: string;
+  enabled?: boolean;
+  skipIfRunning?: boolean;
+}
+
+export interface ScheduleHistoryInfo {
+  at: string;
+  kind: "fired" | "skipped" | "error" | "edited";
+  trigger?: string;
+  ticketId?: string | null;
+  message?: string;
+  action?: string;
+  fields?: string[];
+  by?: "user" | { ticketId: string };
+  previous?: { title?: string; body?: string; cron?: string };
+  ticket: { id: string; title: string; status: Status; outcome: string | null; running: boolean } | null;
+}
+
+export interface CronPreviewInfo {
+  valid: boolean;
+  error: string | null;
+  summary: string | null;
+  next: string[];
 }
 
 export interface CommentInfo {
@@ -84,12 +132,13 @@ export class BoardClient {
     return this.base;
   }
 
-  private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async req<T>(method: string, path: string, body?: unknown, extra: Record<string, string> = {}): Promise<T> {
     let res: Response;
+    const headers = { ...(body === undefined ? {} : { "content-type": "application/json" }), ...extra };
     try {
       res = await this.fetchFn(this.base + path, {
         method,
-        headers: body === undefined ? undefined : { "content-type": "application/json" },
+        headers: Object.keys(headers).length ? headers : undefined,
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch {
@@ -122,6 +171,24 @@ export class BoardClient {
   listComments = (slug: string, id: string) => this.req<CommentInfo[]>("GET", `${this.t(slug, id)}/comments`);
   comment = (slug: string, id: string, text: string) => this.req<CommentInfo>("POST", `${this.t(slug, id)}/comments`, { text });
   reportBug = (input: BugReportRequest) => this.req<BugReportReply>("POST", "/api/bug-report", input);
+
+  private s(slug: string, id?: string): string {
+    const base = `/api/profiles/${encodeURIComponent(slug)}/schedules`;
+    return id ? `${base}/${encodeURIComponent(id)}` : base;
+  }
+  /** `run` is the board run's CKANBAN_TICKET, so the daemon credits the change to that ticket. */
+  private by = (run?: string | null): Record<string, string> => (run ? { [RUN_HEADER]: run } : {});
+
+  listSchedules = (slug: string) => this.req<ScheduleInfo[]>("GET", this.s(slug));
+  createSchedule = (slug: string, input: ScheduleInput, run?: string | null) =>
+    this.req<ScheduleInfo>("POST", this.s(slug), input, this.by(run));
+  updateSchedule = (slug: string, id: string, patch: ScheduleInput, run?: string | null) =>
+    this.req<ScheduleInfo>("PATCH", this.s(slug, id), patch, this.by(run));
+  deleteSchedule = (slug: string, id: string, run?: string | null) => this.req<void>("DELETE", this.s(slug, id), undefined, this.by(run));
+  runSchedule = (slug: string, id: string) =>
+    this.req<{ entry: ScheduleHistoryInfo; schedule: ScheduleInfo }>("POST", `${this.s(slug, id)}/run`, {});
+  scheduleHistory = (slug: string, id: string) => this.req<ScheduleHistoryInfo[]>("GET", `${this.s(slug, id)}/history`);
+  cronPreview = (expr: string) => this.req<CronPreviewInfo>("GET", `/api/cron/preview?expr=${encodeURIComponent(expr)}`);
 }
 
 function real(p: string): string {
@@ -237,6 +304,7 @@ export function ticketText(t: TicketInfo, comments: CommentInfo[] = []): string 
     `status: ${state(t)}`,
     `mode: ${t.mode ?? "auto"}`,
   ];
+  if (t.scheduleId) lines.push(`schedule: ${t.scheduleId} (created by this schedule; see list_schedules)`);
   if (t.branch) lines.push(`branch: ${t.branch}`);
   if (t.prUrl) lines.push(`pr: ${t.prUrl}`);
   if (t.lastActivity) lines.push(`activity: ${t.lastActivity}`);

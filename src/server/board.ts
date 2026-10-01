@@ -295,7 +295,10 @@ export class Board {
     const prompt = localizeImages(run.chat
       ? chatPrompt(t, run.chat.text, run.chat.mode, outputDir)
       : t.runCount === 0
-      ? firstRunPrompt(t, { isGit: session.isGit, linked: !!t.workdir, comments: t.workdir ? newComments : [], outputDir })
+      ? firstRunPrompt(t, {
+        isGit: session.isGit, linked: !!t.workdir, comments: t.workdir ? newComments : [], outputDir,
+        schedule: t.scheduleId ? { id: t.scheduleId, name: this.store.getSchedule(slug, t.scheduleId)?.name ?? null, board: slug } : undefined,
+      })
       : resumePrompt(t, newComments, outputDir), this.store.attachmentsDir);
 
     let lastWrite = 0;

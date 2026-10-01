@@ -121,6 +121,11 @@ function fakeClient() {
     id: "t_1", title: "Dark mode", status: "backlog", mode: "interview", body: "b", outcome: null, prUrl: null, branch: null,
     lastActivity: null, error: null, createdAt: "", updatedAt: "", running: false, ...over,
   });
+  const schedule = (over: object = {}) => ({
+    id: "s1", name: "Nightly audit", title: "Audit {date}", body: "check deps", mode: "auto", cron: "0 9 * * 1-5", enabled: true,
+    skipIfRunning: true, lastFiredAt: null, nextRunAt: new Date(2026, 9, 2, 9).toISOString(), lastError: null,
+    summary: "Weekdays at 09:00", active: false, ...over,
+  });
   const rec = (fn: string, result: (...a: any[]) => unknown) => async (...args: unknown[]) => {
     calls.push({ fn, args });
     return result(...args);
@@ -137,6 +142,18 @@ function fakeClient() {
     stop: rec("stop", () => ({ stopped: true })),
     comment: rec("comment", () => ({ id: "c2", author: "user", text: "x", at: "" })),
     reportBug: rec("reportBug", () => ({ url: "https://github.com/leoawesome/kanban/issues/7", fallbackUrl: "", error: null, screenshots: [] })),
+    listSchedules: rec("listSchedules", () => [schedule(), schedule({ id: "s2", name: "Paused one", enabled: false, nextRunAt: null })]),
+    createSchedule: rec("createSchedule", (_s, input) => schedule(input)),
+    updateSchedule: rec("updateSchedule", (_s, _id, patch) => schedule(patch)),
+    deleteSchedule: rec("deleteSchedule", () => undefined),
+    runSchedule: rec("runSchedule", () => ({ entry: { at: "", kind: "fired", trigger: "manual", ticketId: "t_5", ticket: null }, schedule: schedule() })),
+    scheduleHistory: rec("scheduleHistory", () => [
+      { at: new Date(2026, 9, 1, 9, 5).toISOString(), kind: "edited", action: "updated", fields: ["body"], by: { ticketId: "t_5" }, previous: { body: "old prompt" }, ticket: null },
+      { at: new Date(2026, 9, 1, 9, 0).toISOString(), kind: "fired", trigger: "schedule", ticketId: "t_5",
+        ticket: { id: "t_5", title: "Audit 2026-10-01", status: "review", outcome: "done", running: false } },
+      { at: new Date(2026, 9, 1, 8, 0).toISOString(), kind: "skipped", trigger: "schedule", ticketId: "t_4", ticket: null },
+    ]),
+    cronPreview: rec("cronPreview", () => ({ valid: true, error: null, summary: "Weekdays at 09:00", next: [new Date(2026, 9, 2, 9).toISOString()] })),
   };
   return { client: client as unknown as ToolContext["client"], calls };
 }
@@ -186,7 +203,7 @@ test("chat, stop, comment, delete call the API", async () => {
 
 test("inside a board run, changing tools are refused and read tools work", async () => {
   const { ctx, calls } = ctxWith({ CKANBAN_TICKET: "site/t_9" }, "/elsewhere");
-  for (const tool of TOOLS.filter((t) => t.changes)) {
+  for (const tool of TOOLS.filter((t) => t.changes && !t.allowInRun)) {
     const r = await callTool(tool.name, { id: "t_1", title: "x", status: "ready", message: "m", text: "t" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content[0].text).toContain("inside a board run");
@@ -200,7 +217,10 @@ test("inside a board run, changing tools are refused and read tools work", async
 
 test("every tool advertises a profile argument; change tools are flagged", () => {
   for (const t of TOOLS.filter((t) => t.name !== "list_profiles")) expect(t.inputSchema.properties.profile).toBeDefined();
-  expect(TOOLS.filter((t) => !t.changes).map((t) => t.name).sort()).toEqual(["get_ticket", "list_profiles", "list_tickets", "report_bug"]);
+  expect(TOOLS.filter((t) => !t.changes).map((t) => t.name).sort()).toEqual([
+    "get_ticket", "list_profiles", "list_schedules", "list_tickets", "report_bug", "schedule_history",
+  ]);
+  expect(TOOLS.filter((t) => t.allowInRun).map((t) => t.name).sort()).toEqual(["create_schedule", "delete_schedule", "update_schedule"]);
 });
 
 test("report_bug files from inside a board run, with the ticket attached", async () => {
@@ -392,4 +412,67 @@ test("AgentRegistry: Codex install/uninstall keeps file mode and other entries; 
   expect(text).toContain("[mcp_servers.github]");
   await expect(new AgentRegistry({ claudeBin: "/usr/bin/false", claudeConfig: join(home, "none.json"), serverArgv: ["/bin/ck", "mcp"] }).install("claude"))
     .rejects.toThrow(/claude mcp add failed/);
+});
+
+// --- schedule tools -----------------------------------------------------------------------------
+
+test("create_schedule defaults, next runs, and validation", async () => {
+  const { ctx, calls } = ctxWith();
+  const r = await callTool("create_schedule", { name: "Nightly audit", title: "Audit {date}", body: "check deps", cron: "0 9 * * 1-5" }, ctx);
+  expect(r.isError).toBeUndefined();
+  expect(r.content[0].text).toContain("Created schedule s1 on board kanban: Nightly audit, Weekdays at 09:00 (0 9 * * 1-5), auto mode.");
+  expect(r.content[0].text).toContain("Next runs: 2026-10-02 09:00");
+  expect(calls.find((c) => c.fn === "createSchedule")?.args).toEqual([
+    "kanban", { name: "Nightly audit", title: "Audit {date}", body: "check deps", cron: "0 9 * * 1-5" }, undefined,
+  ]);
+  expect((await callTool("create_schedule", { name: "x", title: "t" }, ctx)).content[0].text).toBe("cron is required");
+  expect((await callTool("create_schedule", { name: "x", title: "t", cron: "* * * * *", enabled: "yes" }, ctx)).content[0].text)
+    .toBe("enabled must be true or false");
+});
+
+test("schedule edits are allowed inside a board run and credited to it; run_schedule is not", async () => {
+  const { ctx, calls } = ctxWith({ CKANBAN_TICKET: "site/t_9" }, "/elsewhere");
+  const c = await callTool("create_schedule", { name: "N", title: "T", body: "b", cron: "0 3 * * *" }, ctx);
+  expect(c.isError).toBeUndefined();
+  expect(calls.find((x) => x.fn === "createSchedule")?.args).toEqual(["site", { name: "N", title: "T", body: "b", cron: "0 3 * * *" }, "site/t_9"]);
+  const u = await callTool("update_schedule", { id: "s1", body: "better prompt" }, ctx);
+  expect(u.content[0].text).toStartWith("Updated: s1  [active]  Nightly audit");
+  expect(calls.find((x) => x.fn === "updateSchedule")?.args).toEqual(["site", "s1", { body: "better prompt" }, "site/t_9"]);
+  expect((await callTool("delete_schedule", { id: "s1" }, ctx)).content[0].text).toBe("Deleted schedule s1.");
+  expect(calls.find((x) => x.fn === "deleteSchedule")?.args).toEqual(["site", "s1", "site/t_9"]);
+  const run = await callTool("run_schedule", { id: "s1" }, ctx);
+  expect(run.isError).toBe(true);
+  expect(run.content[0].text).toContain("inside a board run");
+  expect(calls.some((x) => x.fn === "runSchedule")).toBe(false);
+  // Ticket tools stay refused.
+  expect((await callTool("create_ticket", { title: "x" }, ctx)).content[0].text).toContain("inside a board run");
+});
+
+test("update_schedule pauses and needs something to change", async () => {
+  const { ctx, calls } = ctxWith();
+  await callTool("update_schedule", { id: "s1", enabled: false }, ctx);
+  expect(calls.at(-1)?.args).toEqual(["kanban", "s1", { enabled: false }, undefined]);
+  expect((await callTool("update_schedule", { id: "s1" }, ctx)).content[0].text).toContain("nothing to change");
+  expect((await callTool("update_schedule", { id: "s1", mode: "lazy" }, ctx)).content[0].text).toContain("invalid mode");
+});
+
+test("run_schedule outside a run reports the new ticket", async () => {
+  const { ctx } = ctxWith();
+  expect((await callTool("run_schedule", { id: "s1" }, ctx)).content[0].text).toBe("Started: created ticket t_5, Claude is working on it.");
+});
+
+test("list_schedules and schedule_history format for Claude", async () => {
+  const { ctx } = ctxWith();
+  const list = (await callTool("list_schedules", {}, ctx)).content[0].text;
+  expect(list).toBe(
+    "Schedules on board kanban:\n" +
+    "s1  [active]  Nightly audit: Weekdays at 09:00 (0 9 * * 1-5); next 2026-10-02 09:00\n" +
+    "s2  [paused]  Paused one: Weekdays at 09:00 (0 9 * * 1-5)",
+  );
+  const h = (await callTool("schedule_history", { id: "s1" }, ctx)).content[0].text;
+  expect(h).toContain("ticket title: Audit {date}");
+  expect(h).toContain("check deps");
+  expect(h).toContain("2026-10-01 09:05  updated body by ticket t_5\n    previous body: old prompt");
+  expect(h).toContain('2026-10-01 09:00  fired (schedule): t_5 "Audit 2026-10-01" [review, done]');
+  expect(h).toContain("2026-10-01 08:00  skipped (schedule): previous ticket t_4 still queued or running");
 });

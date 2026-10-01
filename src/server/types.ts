@@ -74,10 +74,19 @@ export interface Schedule {
 
 export type ScheduleTrigger = "schedule" | "missed" | "manual";
 
+/** Who changed a schedule: the user (board UI, CLI, Claude outside a run) or the board run of a ticket. */
+export type ScheduleEditor = "user" | { ticketId: string };
+
+export type ScheduleEditAction = "created" | "updated" | "paused" | "resumed";
+
+/** Fields whose old value an "updated" entry keeps, so a bad edit (e.g. a run rewriting its own prompt) can be undone. */
+export type SchedulePrevious = Partial<Pick<Schedule, "title" | "body" | "cron">>;
+
 export type ScheduleHistoryEntry =
   | { at: string; kind: "fired"; trigger: ScheduleTrigger; ticketId: string }
   | { at: string; kind: "skipped"; trigger: ScheduleTrigger; ticketId: string | null }
-  | { at: string; kind: "error"; trigger: ScheduleTrigger; message: string };
+  | { at: string; kind: "error"; trigger: ScheduleTrigger; message: string }
+  | { at: string; kind: "edited"; action: ScheduleEditAction; fields: string[]; by: ScheduleEditor; previous?: SchedulePrevious };
 
 export interface QueuedMessage {
   id: string;

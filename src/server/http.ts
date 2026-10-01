@@ -7,7 +7,7 @@ import { detectBaseBranch, isGitRepo, resolveBaseBranch, which } from "./git";
 import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
 import { cronError, describeCron, nextRuns, parseCron } from "./cron";
-import { ScheduleError, Scheduler } from "./scheduler";
+import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
 import { attentionFor } from "./attention";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
@@ -19,7 +19,7 @@ import { ptySupported, ShellManager, type PtyKind, type Shell } from "./shell";
 import type { TerminalWatcher } from "./terminals";
 import { UpdateChecker } from "./update";
 import type { Store } from "./store";
-import { STATUSES, type Profile, type Status, type Ticket } from "./types";
+import { STATUSES, type Profile, type ScheduleEditor, type Status, type Ticket } from "./types";
 import { nowIso, slugify } from "./util";
 
 export interface ServerDeps {
@@ -393,12 +393,15 @@ export function createServer(deps: ServerDeps) {
 
     // /profiles/:p/schedules — recurring ticket templates
     if (parts[2] === "schedules") {
+      // Set by the ckanban MCP tools inside a board run ("<profile>/<ticket id>"): the edit is credited to that ticket.
+      const run = req.headers.get(RUN_HEADER)?.split("/")[1] ?? "";
+      const by: ScheduleEditor = /^t_[a-z0-9_]+$/i.test(run) ? { ticketId: run } : "user";
       if (parts.length === 3 && m === "GET") return json(store.listSchedules(slug).map((s) => scheduler.view(slug, s)));
-      if (parts.length === 3 && m === "POST") return json(scheduler.view(slug, scheduler.create(slug, (await body(req)) ?? {})), 201);
+      if (parts.length === 3 && m === "POST") return json(scheduler.view(slug, scheduler.create(slug, (await body(req)) ?? {}, by)), 201);
       const sid = parts[3];
-      if (parts.length === 4 && m === "PATCH") return json(scheduler.view(slug, scheduler.update(slug, sid, (await body(req)) ?? {})));
+      if (parts.length === 4 && m === "PATCH") return json(scheduler.view(slug, scheduler.update(slug, sid, (await body(req)) ?? {}, by)));
       if (parts.length === 4 && m === "DELETE") {
-        scheduler.remove(slug, sid);
+        scheduler.remove(slug, sid, by);
         return new Response(null, { status: 204 });
       }
       if (parts.length === 5 && parts[4] === "history" && m === "GET") return json(scheduler.history(slug, sid));

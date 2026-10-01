@@ -56,7 +56,7 @@ test("tick does nothing before the due time, then fires once", async () => {
   const after = store.getSchedule("p", s.id)!;
   expect(after.lastFiredAt).toBe(now.toISOString());
   expect(new Date(after.nextRunAt!)).toEqual(new Date(2026, 9, 2, 9));
-  const h = scheduler.history("p", s.id);
+  const h = scheduler.history("p", s.id).filter((e) => e.kind !== "edited");
   expect(h).toHaveLength(1);
   expect(h[0]).toMatchObject({ kind: "fired", trigger: "schedule", ticketId: tickets[0].id });
   expect(h[0].ticket?.id).toBe(tickets[0].id);
@@ -161,4 +161,35 @@ test("remove deletes the schedule and its history", async () => {
 
 test("fillTitle", () => {
   expect(fillTitle("Report {date} {time}", new Date(2026, 0, 5, 7, 3))).toBe("Report 2026-01-05 07:03");
+});
+
+test("edits are recorded with who made them and the previous prompt", async () => {
+  const s = create();
+  scheduler.update("p", s.id, { body: "check deps and licenses", cron: "0 4 * * *" }, { ticketId: "t_20261001_abcd" });
+  scheduler.update("p", s.id, { enabled: false });
+  scheduler.update("p", s.id, { enabled: true });
+  scheduler.update("p", s.id, { name: "Audit" }); // no change: no entry
+  const edits = store.readScheduleHistory("p", s.id).filter((e) => e.kind === "edited");
+  expect(edits.map((e) => e.kind === "edited" && e.action)).toEqual(["created", "updated", "paused", "resumed"]);
+  expect(edits[0]).toMatchObject({ by: "user", fields: [] });
+  expect(edits[1]).toMatchObject({
+    by: { ticketId: "t_20261001_abcd" }, fields: ["body", "cron"], previous: { body: "check deps", cron: "0 9 * * *" },
+  });
+  expect(edits[2]).toMatchObject({ by: "user", fields: ["enabled"] });
+  expect((edits[2] as any).previous).toBeUndefined();
+});
+
+test("history links an edit to the ticket whose run made it", () => {
+  const s = create();
+  const editor = store.createTicket("p", { title: "nightly run", body: "", status: "review", scheduleId: s.id });
+  scheduler.update("p", s.id, { body: "better prompt" }, { ticketId: editor.id });
+  const [e] = scheduler.history("p", s.id);
+  expect(e).toMatchObject({ kind: "edited", action: "updated", ticket: { id: editor.id, title: "nightly run" } });
+});
+
+test("the previous prompt kept in history is capped", () => {
+  const s = create({ body: "x".repeat(5000) });
+  scheduler.update("p", s.id, { body: "short" });
+  const e = store.readScheduleHistory("p", s.id).at(-1) as any;
+  expect(e.previous.body).toHaveLength(2000);
 });

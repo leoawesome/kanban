@@ -324,3 +324,15 @@ test("schedule CRUD, run now and history", async () => {
   r = await fetch(`${url}/${s.id}/history`);
   expect(r.status).toBe(404);
 });
+
+test("schedule edits from a board run are credited to its ticket", async () => {
+  let r = await fetch(`${base}/api/profiles`, json("POST", { name: "Credit", path: tempDir("ck-credit-") }));
+  const slug = ((await r.json()) as any).slug;
+  const url = `${base}/api/profiles/${slug}/schedules`;
+  const run = { "content-type": "application/json", "x-ckanban-run": `${slug}/t_20261001_wxyz` };
+  r = await fetch(url, { method: "POST", headers: run, body: JSON.stringify({ name: "N", title: "T", body: "b", cron: "0 3 * * *" }) });
+  const s = (await r.json()) as any;
+  await fetch(`${url}/${s.id}`, { method: "PATCH", headers: { "content-type": "application/json", "x-ckanban-run": "garbage" }, body: JSON.stringify({ body: "c" }) });
+  const h = (await (await fetch(`${url}/${s.id}/history`)).json()) as any[];
+  expect(h.map((e) => [e.action, e.by])).toEqual([["updated", "user"], ["created", { ticketId: "t_20261001_wxyz" }]]);
+});

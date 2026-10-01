@@ -3,8 +3,11 @@ import type { Board } from "./board";
 import { cronError, describeCron, nextRun, parseCron } from "./cron";
 import type { Bus } from "./events";
 import type { Store } from "./store";
-import type { Schedule, ScheduleHistoryEntry, ScheduleTrigger, Ticket } from "./types";
+import type { Schedule, ScheduleEditAction, ScheduleEditor, ScheduleHistoryEntry, SchedulePrevious, ScheduleTrigger, Ticket } from "./types";
 import { newId } from "./util";
+
+/** Request header the ckanban MCP tools send from inside a board run (value: the run's CKANBAN_TICKET). */
+export const RUN_HEADER = "x-ckanban-run";
 
 export class ScheduleError extends Error {
   constructor(public status: number, message: string) {
@@ -25,6 +28,11 @@ export interface ScheduleInput {
 /** A due time older than this when the scheduler sees it was missed (daemon off, laptop asleep). */
 const MISSED_AFTER_MS = 90_000;
 const HISTORY_LIMIT = 100;
+/** Old prompt/title/cron kept in an "updated" history entry, cut to this many characters. */
+const PREVIOUS_MAX = 2000;
+const EDITABLE = ["name", "title", "body", "mode", "cron", "enabled", "skipIfRunning"] as const;
+
+const editorText = (by: ScheduleEditor) => (by === "user" ? "the user" : `ticket ${by.ticketId}`);
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -93,7 +101,13 @@ export class Scheduler {
     return s;
   }
 
-  create(slug: string, input: ScheduleInput): Schedule {
+  private logEdit(slug: string, id: string, action: ScheduleEditAction, fields: string[], by: ScheduleEditor, previous?: SchedulePrevious) {
+    this.store.appendScheduleHistory(slug, id, {
+      at: this.now().toISOString(), kind: "edited", action, fields, by, ...(previous && Object.keys(previous).length ? { previous } : {}),
+    });
+  }
+
+  create(slug: string, input: ScheduleInput, by: ScheduleEditor = "user"): Schedule {
     const fields = this.validate(input);
     const at = this.now().toISOString();
     const s: Schedule = {
@@ -101,11 +115,12 @@ export class Scheduler {
       nextRunAt: fields.enabled ? this.nextRunAt(fields.cron) : null,
     };
     this.store.saveSchedule(slug, s);
+    this.logEdit(slug, s.id, "created", [], by);
     this.emit(slug, s.id, s);
     return s;
   }
 
-  update(slug: string, id: string, input: ScheduleInput): Schedule {
+  update(slug: string, id: string, input: ScheduleInput, by: ScheduleEditor = "user"): Schedule {
     const current = this.get(slug, id);
     const fields = this.validate(input, current);
     const next: Schedule = { ...current, ...fields, updatedAt: this.now().toISOString() };
@@ -113,12 +128,21 @@ export class Scheduler {
     if (!next.enabled) next.nextRunAt = null;
     else if (!current.enabled || next.cron !== current.cron || !current.nextRunAt) next.nextRunAt = this.nextRunAt(next.cron);
     this.store.saveSchedule(slug, next);
+    const changed: string[] = EDITABLE.filter((k) => next[k] !== current[k]);
+    if (changed.length) {
+      const toggle = changed.length === 1 && changed[0] === "enabled";
+      const previous: SchedulePrevious = {};
+      for (const k of ["title", "body", "cron"] as const) if (changed.includes(k)) previous[k] = current[k].slice(0, PREVIOUS_MAX);
+      this.logEdit(slug, id, toggle ? (next.enabled ? "resumed" : "paused") : "updated", changed, by, previous);
+    }
     this.emit(slug, id, next);
     return next;
   }
 
-  remove(slug: string, id: string): void {
-    this.get(slug, id);
+  remove(slug: string, id: string, by: ScheduleEditor = "user"): void {
+    const s = this.get(slug, id);
+    // The history file goes with it, so the daemon log is the only trace.
+    console.log(`schedule ${slug}/${id} (${s.name}) deleted by ${editorText(by)}`);
     this.store.deleteSchedule(slug, id);
     this.emit(slug, id, null);
   }
@@ -127,7 +151,9 @@ export class Scheduler {
   history(slug: string, id: string) {
     this.get(slug, id);
     return this.store.readScheduleHistory(slug, id).slice(-HISTORY_LIMIT).reverse().map((e) => {
-      const tid = e.kind === "error" ? null : e.ticketId;
+      // Fires and skips point at the schedule's ticket; edits at the ticket whose run made them.
+      const tid = e.kind === "fired" || e.kind === "skipped" ? e.ticketId
+        : e.kind === "edited" && e.by !== "user" ? e.by.ticketId : null;
       const t = tid ? this.store.getTicket(slug, tid) : null;
       return {
         ...e,
