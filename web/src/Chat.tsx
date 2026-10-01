@@ -3,8 +3,10 @@ import { api, subscribe, type SessionEntry, type Ticket } from "./api";
 import { useImagePaste } from "./imagePaste";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
+import { draftKey, formKey } from "./drafts";
 import { timeAgo } from "./time";
 import { Markdown } from "./Transcript";
+import { usePersistentState } from "./usePersistentState";
 
 type Block = { kind: "entry"; e: SessionEntry; index: number } | { kind: "tools"; items: SessionEntry[] };
 
@@ -65,7 +67,8 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   // Sent messages not yet in the session file (the server's queue covers ones Claude hasn't read).
   const [pending, setPending] = useState<string[]>([]);
   const queued = ticket.queued ?? [];
-  const [draft, setDraft] = useState("");
+  // Unsent text survives closing the drawer, switching tickets and reloads.
+  const [draft, setDraft] = usePersistentState(draftKey(slug, ticket.id), () => "", (v) => !v.trim(), (v) => typeof v === "string");
   const images = useImagePaste(setDraft);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   // Text Claude is writing right now (from the run's partial-message stream); not yet in the session file.
@@ -229,7 +232,8 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
               </div>
               {e.text && <Markdown text={e.text.replace(/^.*CKANBAN_RESULT:.*$/m, "").trim()} />}
               {e.questions && (
-                <QuestionsForm questions={e.questions} answered={answeredAfter(b.index)} disabled={running} onSubmit={send} />
+                <QuestionsForm questions={e.questions} answered={answeredAfter(b.index)} disabled={running} onSubmit={send}
+                  storageKey={formKey(slug, ticket.id, e.uuid)} />
               )}
               {e.proposal && (
                 <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)}

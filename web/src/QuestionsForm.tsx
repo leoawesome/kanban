@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { Question } from "./api";
+import { browserStore, forget } from "./drafts";
+import { usePersistentState } from "./usePersistentState";
 
 interface Answer {
   picked: string[];
@@ -12,6 +14,20 @@ function initial(q: Question): Answer {
   return { picked: rec ? [rec.label] : [], otherOn: false, other: "" };
 }
 
+/** Progress saved while answering; `sig` ties it to these exact questions. */
+interface Progress {
+  sig: string;
+  answers: Answer[];
+  step: number;
+  note: string;
+}
+
+const signature = (questions: Question[]) => JSON.stringify(questions.map((q) => [q.question, q.options.map((o) => o.label)]));
+
+function fresh(questions: Question[]): Progress {
+  return { sig: signature(questions), answers: questions.map(initial), step: 0, note: "" };
+}
+
 function answerText(a: Answer): string {
   const parts = [...a.picked, ...(a.otherOn && a.other.trim() ? [a.other.trim()] : [])];
   return parts.length ? parts.join("; ") : "(no preference)";
@@ -21,15 +37,30 @@ function answerText(a: Answer): string {
  * Claude's interview questions, one at a time (like Claude Code's question picker).
  * Keys: 1-9 pick an option, Enter goes next, Backspace/← goes back when not typing.
  */
-export function QuestionsForm({ questions, answered, disabled, onSubmit }: {
+export function QuestionsForm({ questions, answered, disabled, onSubmit, storageKey }: {
   questions: Question[];
   answered: boolean;
   disabled: boolean;
   onSubmit: (text: string) => void;
+  /** Where to keep unsent progress so it survives leaving the ticket; omit to not save. */
+  storageKey?: string;
 }) {
-  const [answers, setAnswers] = useState<Answer[]>(() => questions.map(initial));
-  const [step, setStep] = useState(0);
-  const [note, setNote] = useState("");
+  const sig = signature(questions);
+  const [progress, setProgress] = usePersistentState<Progress>(
+    answered ? null : storageKey ?? null,
+    () => fresh(questions),
+    (p) => JSON.stringify(p) === JSON.stringify(fresh(questions)),
+    (p) => p?.sig === sig && Array.isArray(p.answers) && p.answers.length === questions.length,
+  );
+  const { answers, step, note } = progress;
+  const setStep = (n: number) => setProgress((p) => ({ ...p, step: n }));
+  const setNote = (v: string) => setProgress((p) => ({ ...p, note: v }));
+  const setAnswers = (fn: (arr: Answer[]) => Answer[]) => setProgress((p) => ({ ...p, answers: fn(p.answers) }));
+
+  // Answered (here or elsewhere): saved progress is no longer needed.
+  useEffect(() => {
+    if (answered && storageKey) forget(browserStore(), storageKey);
+  }, [answered, storageKey]);
   const root = useRef<HTMLDivElement>(null);
   const total = questions.length;
   const summary = step >= total;
@@ -51,6 +82,7 @@ export function QuestionsForm({ questions, answered, disabled, onSubmit }: {
     update(step, (x) => ({ ...x, otherOn: !x.otherOn, picked: q.multiSelect || x.otherOn ? x.picked : [] }));
 
   const send = () => {
+    if (storageKey) forget(browserStore(), storageKey);
     const lines = questions.map((qq, i) => `- ${qq.question} → ${answerText(answers[i])}`);
     onSubmit(`My answers:\n${lines.join("\n")}${note.trim() ? `\n\n${note.trim()}` : ""}`);
   };
