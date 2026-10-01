@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { extractFinalText, summarizeEvent } from "../src/server/activity";
-import { chatPrompt, firstRunPrompt, planningCommand, planningPrompt, resumeCommand, resumePrompt } from "../src/server/prompts";
+import { chatPrompt, firstRunPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumeCommand, resumePrompt } from "../src/server/prompts";
 import { parseResult } from "../src/server/result";
 import type { Ticket } from "../src/server/types";
 
@@ -145,4 +145,24 @@ test("only the planning chat can propose new tickets", () => {
   expect(refine).toContain("list_tickets");
   expect(chatPrompt(t, "hi", "act", "/o")).not.toContain("ckanban-tickets");
   expect(firstRunPrompt(t, { isGit: true, outputDir: "/o" })).not.toContain("ckanban-tickets");
+});
+
+test("planner wake-ups: events or final check, scoped rights, one visible line first", () => {
+  const t = { ...ticket, id: "t_plan", title: "Big plan" } as Ticket;
+  const ev = orchestratorPrompt(t, { kind: "event", events: ['t_1 "A" failed (review)'], table: "- t_1 \"A\": review; failed", board: "kanban", outputDir: "/o" });
+  expect(ev.split("\n")[0]).toBe("Plan update: 1 child ticket needs a decision.");
+  expect(ev).toContain('- t_1 "A" failed (review)');
+  expect(ev).toContain("THIS plan's child tickets only");
+  expect(ev).toContain("gh pr merge");
+  expect(ev).toContain("CKANBAN_RESULT");
+  const fin = orchestratorPrompt(t, { kind: "final", events: [], table: "", board: "kanban", outputDir: "/o" });
+  expect(fin.split("\n")[0]).toStartWith("Plan finished");
+  expect(fin).toContain("/o/plan-summary.md");
+  expect(chatPrompt(t, "split it", "refine", "/o")).toContain('"dependsOn":["api"]');
+});
+
+test("a plan's child is told to rebase onto the remote base branch first", () => {
+  const t = { ...ticket, mode: "auto", parentId: "t_plan" } as Ticket;
+  expect(firstRunPrompt(t, { isGit: true, outputDir: "/o" })).toContain("part of a plan (planner ticket t_plan)");
+  expect(firstRunPrompt({ ...t, parentId: null } as Ticket, { isGit: true, outputDir: "/o" })).not.toContain("part of a plan");
 });

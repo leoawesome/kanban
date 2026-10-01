@@ -207,3 +207,11 @@ test("parseSession: ticket proposal and new tickets in one reply", () => {
   expect(e.newTickets).toEqual([{ title: "Child", description: "C" }]);
   expect(e.text).toBe("");
 });
+
+test("parseSession: proposed tickets keep key and dependsOn", () => {
+  const block = '<ckanban-tickets>[{"key":"api","title":"API","description":"d"},{"key":"ui","title":"UI","dependsOn":["api", 3, ""]}]</ckanban-tickets>';
+  expect(parseSession(asst([{ type: "text", text: block }], "1")).entries[0].newTickets).toEqual([
+    { key: "api", title: "API", description: "d" },
+    { key: "ui", title: "UI", description: "", dependsOn: ["api"] },
+  ]);
+});

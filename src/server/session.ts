@@ -22,6 +22,12 @@ export interface TicketProposal {
   description: string;
 }
 
+/** A ticket a planner's chat proposed creating; key/dependsOn order the plan. */
+export interface NewTicketDraft extends TicketProposal {
+  key?: string;
+  dependsOn?: string[];
+}
+
 export interface SessionEntry {
   uuid: string;
   at: string;
@@ -34,7 +40,7 @@ export interface SessionEntry {
   /** Improved title/description Claude proposed (rendered with an Apply button). */
   proposal?: TicketProposal;
   /** New tickets Claude proposed splitting the work into (rendered with Create buttons). */
-  newTickets?: TicketProposal[];
+  newTickets?: NewTicketDraft[];
   /** Claude asked the board to move the ticket (a planning-only request arrived in Review). */
   moved?: "planning";
 }
@@ -77,14 +83,21 @@ function parseProposal(json: string): TicketProposal | null {
   }
 }
 
-function parseNewTickets(json: string): TicketProposal[] | null {
+function parseNewTickets(json: string): NewTicketDraft[] | null {
   try {
     const v = JSON.parse(json);
     if (!Array.isArray(v)) return null;
-    const ts = v.map((x: any) => ({
-      title: typeof x?.title === "string" ? x.title.trim() : "",
-      description: typeof x?.description === "string" ? x.description.trim() : "",
-    })).filter((x) => x.title);
+    const ts = v.map((x: any) => {
+      const d: NewTicketDraft = {
+        title: typeof x?.title === "string" ? x.title.trim() : "",
+        description: typeof x?.description === "string" ? x.description.trim() : "",
+      };
+      const key = typeof x?.key === "string" ? x.key.trim() : "";
+      if (key) d.key = key;
+      const deps = Array.isArray(x?.dependsOn) ? x.dependsOn.filter((k: unknown) => typeof k === "string" && k.trim()).map((k: string) => k.trim()) : [];
+      if (deps.length) d.dependsOn = deps;
+      return d;
+    }).filter((x) => x.title);
     return ts.length ? ts : null;
   } catch {
     return null;

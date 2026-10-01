@@ -56,6 +56,6 @@ test("done and backlog tickets never need the user", () => {
 test("proposed new tickets need attention until each one exists", () => {
   const s = S({ pendingNewTickets: [{ title: "A", description: "" }, { title: "B", description: "" }] });
   expect(attentionFor(T({}), s, false)).toEqual({ kind: "proposal", label: "Review proposed tickets" });
-  expect(attentionFor(T({}), s, false, new Set(["A"]))!.kind).toBe("proposal");
-  expect(attentionFor(T({}), s, false, new Set(["A", "B"]))).toBeNull();
+  expect(attentionFor(T({}), s, false, { createdTitles: new Set(["A"]) })!.kind).toBe("proposal");
+  expect(attentionFor(T({}), s, false, { createdTitles: new Set(["A", "B"]) })).toBeNull();
 });

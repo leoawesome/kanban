@@ -9,9 +9,17 @@ export interface Attention {
   label: string;
 }
 
-/** createdTitles: titles of this ticket's children, to tell which proposed new tickets still wait for a click. */
-export function attentionFor(t: Ticket, s: SessionSummary | null, running: boolean, createdTitles?: Set<string>): Attention | null {
+/**
+ * createdTitles: titles of this ticket's children, to tell which proposed new tickets still wait for a click.
+ * managed: the ticket is a child of a running plan, so its planner, not the user, handles it.
+ */
+export function attentionFor(
+  t: Ticket, s: SessionSummary | null, running: boolean, o: { createdTitles?: Set<string>; managed?: boolean } = {},
+): Attention | null {
+  if (t.plan?.state === "stuck") return { kind: "blocked", label: "Plan stuck" };
   if (running || t.status === "in_progress") return null;
+  // A running plan's planner and children are handled unattended; the plan pings the user when stuck.
+  if (o.managed || t.plan?.state === "running" || t.plan?.state === "finishing" || t.plan?.state === "paused") return null;
   // Done means accepted as-is; Backlog means parked. Neither waits on the user, whatever the session holds.
   if (t.status === "done" || t.status === "backlog") return null;
   if (t.outcome === "failed") return { kind: "failed", label: "Run failed" };
@@ -23,7 +31,7 @@ export function attentionFor(t: Ticket, s: SessionSummary | null, running: boole
   if (p && !((!p.title || p.title === t.title) && (!p.description || p.description.trim() === t.body.trim()))) {
     return { kind: "proposal", label: "Review proposal" };
   }
-  if (s?.pendingNewTickets?.some((n) => !createdTitles?.has(n.title))) return { kind: "proposal", label: "Review proposed tickets" };
+  if (s?.pendingNewTickets?.some((n) => !o.createdTitles?.has(n.title))) return { kind: "proposal", label: "Review proposed tickets" };
   if (t.status === "review") return { kind: "review", label: "Ready for review" };
   if (t.status === "planning" && s?.lastMessage?.role === "assistant") return { kind: "reply", label: "Claude replied" };
   return null;

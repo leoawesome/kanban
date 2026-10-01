@@ -47,6 +47,12 @@ export interface Ticket {
   scheduleId?: string | null;
   /** Planner ticket whose Planning chat proposed this one. Missing on most tickets. */
   parentId?: string | null;
+  /** Short name siblings use in dependsOn (from the planner's proposal). */
+  planKey?: string | null;
+  /** Siblings (ticket id or planKey) that must be done before a running plan starts this ticket. */
+  dependsOn?: string[];
+  /** Set on a planner ticket once its plan was started: the board runs its children unattended. */
+  plan?: Plan | null;
   /** Chat messages sent while Claude was working that it has not read yet, oldest first. */
   queued?: QueuedMessage[];
   createdAt: string;
@@ -122,4 +128,29 @@ export interface ActivityEntry {
   run: number;
   at: string;
   event: any;
+}
+
+export type PlanState = "running" | "paused" | "finishing" | "done" | "stuck";
+
+/** A planner's unattended run of its child tickets (see plan.ts and Board.advancePlans). */
+export interface Plan {
+  state: PlanState;
+  /** Children of this plan in Ready or In progress at once. */
+  maxConcurrent: number;
+  /** Times the planner's Claude session was woken up (capped, see plan.ts). */
+  wakeups: number;
+  startedAt: string;
+  finishedAt?: string | null;
+  /** Children when the plan started; the planner may add up to the same number again. */
+  originalCount: number;
+  /** Child events waiting for the planner's next wake-up, so several arrive as one message. */
+  inbox?: string[];
+  /** Last child state the planner was told about, per child id, so it is told once. */
+  seen?: Record<string, string>;
+  /** Planner restarts of a child that already ran, per child id (capped). */
+  retries?: Record<string, number>;
+  /** The planner was woken and its reply decides what happens next. */
+  awaiting?: "event" | "final" | null;
+  /** Why the plan is stuck. */
+  reason?: string | null;
 }

@@ -1,8 +1,6 @@
 import { useState } from "react";
-import type { Ticket } from "./api";
+import type { NewTicketDraft as Draft, Ticket } from "./api";
 import { Markdown } from "./Transcript";
-
-type Draft = { title: string; description: string };
 
 /** Tickets a planner's chat proposed; Create adds each to Backlog, linked to the planner. */
 export function NewTicketsCard({ drafts, created, onCreate, onOpen }: {
@@ -67,12 +65,15 @@ export function NewTicketsCard({ drafts, created, onCreate, onOpen }: {
                 </button>
               )}
             </div>
+            {!!d.dependsOn?.length && (
+              <span className="muted small">After: {d.dependsOn.map((k) => drafts.find((x) => x.key === k)?.title ?? k).join(", ")}</span>
+            )}
             {open.has(i) && d.description && <div className="proposal-body"><Markdown text={d.description} /></div>}
           </div>
         );
       })}
       <span className="muted small">
-        {missing.length ? "Each lands in Backlog, linked to this ticket. Nothing starts until you move it." : "All created. They're in Backlog."}
+        {missing.length ? "Each lands in Backlog, linked to this ticket. Nothing starts until you move it or start the plan." : "All created. Press Start plan in the details to run them in order, unattended."}
       </span>
     </div>
   );

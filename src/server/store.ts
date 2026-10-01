@@ -150,7 +150,10 @@ export class Store {
     return status === "ready" ? this.nextOrder(slug, status) : this.topOrder(slug, status);
   }
 
-  createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string; parentId?: string }): Ticket {
+  createTicket(
+    slug: string,
+    input: { title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string; parentId?: string; planKey?: string; dependsOn?: string[] },
+  ): Ticket {
     const at = nowIso();
     const t: Ticket = {
       id: newTicketId(), title: input.title, status: input.status, mode: input.mode ?? "auto", order: this.entryOrder(slug, input.status),
@@ -158,6 +161,8 @@ export class Store {
       lastRunAt: null, runCount: 0, error: null, createdAt: at, updatedAt: at, body: input.body,
       ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(input.planKey ? { planKey: input.planKey } : {}),
+      ...(input.dependsOn?.length ? { dependsOn: input.dependsOn } : {}),
     };
     atomicWrite(this.ticketPath(slug, t.id), serializeTicket(t));
     return t;

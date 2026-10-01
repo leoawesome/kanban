@@ -101,6 +101,7 @@ export interface TicketPatch {
   body?: string;
   status?: Status;
   mode?: TicketMode;
+  dependsOn?: string[];
 }
 
 export interface BugReportRequest {
@@ -163,14 +164,16 @@ export class BoardClient {
   listProfiles = () => this.req<ProfileInfo[]>("GET", "/api/profiles");
   listTickets = (slug: string) => this.req<TicketInfo[]>("GET", this.t(slug));
   getTicket = (slug: string, id: string) => this.req<TicketInfo>("GET", this.t(slug, id));
-  createTicket = (slug: string, input: { title: string; body?: string; status?: Status; mode?: TicketMode }) =>
-    this.req<TicketInfo>("POST", this.t(slug), input);
-  updateTicket = (slug: string, id: string, patch: TicketPatch) => this.req<TicketInfo>("PATCH", this.t(slug, id), patch);
+  // `run` (a board run's CKANBAN_TICKET): the daemon only lets a running plan's planner change its own children.
+  createTicket = (slug: string, input: { title: string; body?: string; status?: Status; mode?: TicketMode; planKey?: string; dependsOn?: string[] }, run?: string | null) =>
+    this.req<TicketInfo>("POST", this.t(slug), input, this.by(run));
+  updateTicket = (slug: string, id: string, patch: TicketPatch, run?: string | null) => this.req<TicketInfo>("PATCH", this.t(slug, id), patch, this.by(run));
   deleteTicket = (slug: string, id: string) => this.req<void>("DELETE", this.t(slug, id));
-  chat = (slug: string, id: string, text: string) => this.req<TicketInfo>("POST", `${this.t(slug, id)}/chat`, { text });
-  stop = (slug: string, id: string) => this.req<{ stopped: boolean }>("POST", `${this.t(slug, id)}/stop`, {});
+  chat = (slug: string, id: string, text: string, run?: string | null) => this.req<TicketInfo>("POST", `${this.t(slug, id)}/chat`, { text }, this.by(run));
+  stop = (slug: string, id: string, run?: string | null) => this.req<{ stopped: boolean }>("POST", `${this.t(slug, id)}/stop`, {}, this.by(run));
   listComments = (slug: string, id: string) => this.req<CommentInfo[]>("GET", `${this.t(slug, id)}/comments`);
-  comment = (slug: string, id: string, text: string) => this.req<CommentInfo>("POST", `${this.t(slug, id)}/comments`, { text });
+  comment = (slug: string, id: string, text: string, run?: string | null) =>
+    this.req<CommentInfo>("POST", `${this.t(slug, id)}/comments`, { text }, this.by(run));
   reportBug = (input: BugReportRequest) => this.req<BugReportReply>("POST", "/api/bug-report", input);
 
   private s(slug: string, id?: string): string {

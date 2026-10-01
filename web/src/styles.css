@@ -520,6 +520,14 @@ textarea { resize: vertical; font-size: 13.5px; }
 .child-tickets { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .child-tickets li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .ticket-link { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.child-main { display: flex; flex-direction: column; min-width: 0; }
+.child-deps { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dep-list { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.plan-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.plan-cap { display: inline-flex; align-items: center; gap: 4px; }
+.plan-reason { color: var(--warn); }
+.badge.plan { background: var(--accent-soft); color: var(--accent); }
+.badge.plan.stuck { background: var(--warn-soft); color: var(--warn); }
 
 .body-view.clamped { max-height: 180px; overflow: hidden; position: relative; }
 .body-view.clamped::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 60px; background: linear-gradient(transparent, var(--surface)); pointer-events: none; }

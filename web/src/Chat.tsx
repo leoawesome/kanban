@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, subscribe, type SessionEntry, type Ticket } from "./api";
+import { api, subscribe, type NewTicketDraft, type SessionEntry, type Ticket } from "./api";
 import { ArrowDownIcon, CloseIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { NewTicketsCard } from "./NewTicketsCard";
@@ -224,9 +224,12 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onError }: {
   const empty = page !== null && !loadError && entries.length === 0 && !pending.length && !queued.length && !running;
 
   const childFor = (d: { title: string }) => tickets.find((t) => t.parentId === ticket.id && t.title === d.title);
-  const createChild = async (d: { title: string; description: string }) => {
+  const createChild = async (d: NewTicketDraft) => {
     try {
-      return await api.createTicket(slug, { title: d.title, body: d.description, status: "backlog", mode: "interview", parentId: ticket.id });
+      return await api.createTicket(slug, {
+        title: d.title, body: d.description, status: "backlog", mode: "interview", parentId: ticket.id,
+        ...(d.key ? { planKey: d.key } : {}), ...(d.dependsOn?.length ? { dependsOn: d.dependsOn } : {}),
+      });
     } catch (err: any) {
       onError(err.message);
       return null;

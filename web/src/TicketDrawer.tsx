@@ -8,6 +8,7 @@ import { BugIcon, CheckIcon, CloseIcon, CopyIcon, ExternalIcon, FileTextIcon, Sp
 import { useImagePaste } from "./imagePaste";
 import { useFocusTrap, useLayer } from "./layers";
 import { ModeToggle } from "./ModeToggle";
+import { PlanPanel } from "./PlanPanel";
 import { Outputs } from "./Outputs";
 import { Select } from "./Select";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
@@ -92,6 +93,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose }
   const slug = profile.slug;
   const parent = ticket.parentId ? tickets.find((t) => t.id === ticket.parentId) : undefined;
   const children = tickets.filter((t) => t.parentId === ticket.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const siblings = ticket.parentId ? tickets.filter((t) => t.parentId === ticket.parentId && t.id !== ticket.id) : [];
+  const deps = (ticket.dependsOn ?? []).map((ref) => siblings.find((s) => s.id === ref || s.planKey === ref) ?? ref);
   const [title, setTitle] = useState(ticket.title);
   const [body, setBody] = useState(ticket.body);
   const [editing, setEditing] = useState(false);
@@ -287,19 +290,19 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose }
                 )}
               </div>
             )}
+            {deps.length > 0 && (
+              <div className="field-row">
+                <span className="field-key" title="A running plan starts this ticket once these are done">Waits for</span>
+                <span className="dep-list">
+                  {deps.map((d) => typeof d === "string"
+                    ? <span key={d} className="muted small">{d} (missing)</span>
+                    : <button key={d.id} className="link-btn ticket-link" onClick={() => onOpenTicket(d.id)}>{d.title}</button>)}
+                </span>
+              </div>
+            )}
 
             {children.length > 0 && (
-              <section className="detail-section">
-                <h4>Tickets from this plan</h4>
-                <ul className="child-tickets">
-                  {children.map((c) => (
-                    <li key={c.id}>
-                      <button className="link-btn ticket-link" onClick={() => onOpenTicket(c.id)}>{c.title}</button>
-                      <span className="badge">{COLUMNS.find((x) => x.id === c.status)?.label ?? c.status}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
+              <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
             )}
 
             <section className="detail-section">

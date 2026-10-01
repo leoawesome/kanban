@@ -96,6 +96,12 @@ export interface Ticket {
   scheduleId?: string | null;
   /** Planner ticket whose chat proposed this one. */
   parentId?: string | null;
+  /** Short name siblings use in dependsOn. */
+  planKey?: string | null;
+  /** Siblings (ticket id or planKey) a running plan finishes before starting this one. */
+  dependsOn?: string[];
+  /** Set once this ticket's plan was started: the board runs its children unattended. */
+  plan?: Plan | null;
   /** Messages sent while Claude was working that it has not read yet; "unsent" ones were cut off by Stop. */
   queued?: QueuedMessage[];
   createdAt: string;
@@ -109,6 +115,21 @@ export interface Ticket {
   /** Why the ticket is waiting on you ("Your turn"), computed by the server. */
   attention?: { kind: AttentionKind; label: string } | null;
 }
+
+export type PlanState = "running" | "paused" | "finishing" | "done" | "stuck";
+
+export interface Plan {
+  state: PlanState;
+  maxConcurrent: number;
+  wakeups: number;
+  startedAt: string;
+  finishedAt?: string | null;
+  originalCount: number;
+  awaiting?: "event" | "final" | null;
+  reason?: string | null;
+}
+
+export type NewTicketDraft = { title: string; description: string; key?: string; dependsOn?: string[] };
 
 export interface QueuedMessage {
   id: string;
@@ -153,7 +174,7 @@ export interface SessionEntry {
   text: string;
   questions?: Question[];
   proposal?: { title: string; description: string };
-  newTickets?: { title: string; description: string }[];
+  newTickets?: NewTicketDraft[];
   moved?: "planning";
 }
 
@@ -370,8 +391,11 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.text();
   },
-  createTicket: (slug: string, input: { title: string; body: string; status: Status; sessionId?: string; mode?: TicketMode; parentId?: string }) =>
-    req<Ticket>("POST", t(slug), input),
+  createTicket: (slug: string, input: {
+    title: string; body: string; status: Status; sessionId?: string; mode?: TicketMode; parentId?: string; planKey?: string; dependsOn?: string[];
+  }) => req<Ticket>("POST", t(slug), input),
+  plan: (slug: string, id: string, action: "start" | "pause" | "resume" | "concurrency", maxConcurrent?: number) =>
+    req<Ticket>("POST", `${t(slug, id)}/plan`, { action, maxConcurrent }),
   updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice">> & { expectedBody?: string }) =>
     req<Ticket>("PATCH", t(slug, id), patch),
   deleteTicket: (slug: string, id: string) => req<void>("DELETE", t(slug, id)),

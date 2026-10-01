@@ -350,3 +350,56 @@ test("tickets created from a planner keep parentId; unknown parent is rejected",
   r = await fetch(tickets, json("POST", { title: "Orphan", parentId: "t_nope" }));
   expect(r.status).toBe(400);
 });
+
+test("inside a board run only a running plan's planner may change tickets, and only its own children", async () => {
+  const path = tempDir("ck-scope-");
+  const p = (await (await fetch(`${base}/api/profiles`, json("POST", { name: "Scope Proj", path }))).json()) as any;
+  const tickets = `${base}/api/profiles/${p.slug}/tickets`;
+  const post = async (u: string, b: unknown, run?: string, method = "POST") =>
+    fetch(u, { method, headers: { "content-type": "application/json", ...(run ? { "x-ckanban-run": run } : {}) }, body: JSON.stringify(b) });
+  const planner = (await (await post(tickets, { title: "Plan" })).json()) as any;
+  const child = (await (await post(tickets, { title: "Child", parentId: planner.id, planKey: "c" })).json()) as any;
+  const other = (await (await post(tickets, { title: "Other" })).json()) as any;
+  const run = `${p.slug}/${planner.id}`;
+
+  // No plan running yet: the planner's run is an ordinary board run.
+  let r = await post(`${tickets}/${child.id}`, { title: "x" }, run, "PATCH");
+  expect(r.status).toBe(403);
+  expect(((await r.json()) as any).error).toContain("disabled inside a board run");
+
+  // Start the plan paused right away so nothing runs in this test (no claude here).
+  r = await post(`${tickets}/${planner.id}/plan`, { action: "start", maxConcurrent: 1 });
+  expect(r.status).toBe(200);
+  expect(((await r.json()) as any).plan.state).toBe("running");
+  await post(`${tickets}/${planner.id}/plan`, { action: "pause" });
+  // A paused plan doesn't grant rights.
+  r = await post(`${tickets}/${child.id}`, { body: "clearer" }, run, "PATCH");
+  expect(r.status).toBe(403);
+  await post(`${tickets}/${planner.id}/plan`, { action: "resume" });
+  await post(`${tickets}/${planner.id}/plan`, { action: "concurrency", maxConcurrent: 3 });
+
+  r = await post(`${tickets}/${child.id}`, { body: "clearer", dependsOn: [] }, run, "PATCH");
+  expect(r.status).toBe(200);
+  r = await post(`${tickets}/${other.id}`, { body: "nope" }, run, "PATCH");
+  expect(r.status).toBe(403);
+  expect(((await r.json()) as any).error).toContain("is not a child ticket of plan");
+  r = await post(`${tickets}/${child.id}/comments`, { text: "try X" }, run);
+  expect(((await r.json()) as any).text).toBe("Planner: try X");
+  r = await post(tickets, { title: "Bad", dependsOn: ["ghost"] }, run);
+  expect(r.status).toBe(400);
+  r = await post(tickets, { title: "Split", status: "ready", dependsOn: ["c"] }, run);
+  expect(r.status).toBe(201);
+  const split = (await r.json()) as any;
+  expect([split.parentId, split.status, split.mode, split.dependsOn]).toEqual([planner.id, "backlog", "auto", ["c"]]);
+  // At most twice the plan's original children.
+  r = await post(tickets, { title: "One too many" }, run);
+  expect(r.status).toBe(409);
+  r = await fetch(`${tickets}/${child.id}`, { method: "DELETE", headers: { "x-ckanban-run": run } });
+  expect(r.status).toBe(403);
+  r = await post(`${tickets}/${planner.id}/plan`, { action: "pause" }, run);
+  expect(r.status).toBe(403);
+  // A different ticket's run gets nothing.
+  r = await post(`${tickets}/${child.id}`, { title: "x" }, `${p.slug}/${other.id}`, "PATCH");
+  expect(r.status).toBe(403);
+  await post(`${tickets}/${planner.id}/plan`, { action: "pause" });
+});

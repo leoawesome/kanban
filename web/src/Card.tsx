@@ -63,8 +63,13 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
           {plainPreview(last.text)}
         </div>
       )}
-      {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session || ticket.scheduleId) && (
+      {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session || ticket.scheduleId || ticket.plan) && (
         <div className="card-meta">
+          {ticket.plan && ticket.plan.state !== "done" && (
+            <span className={`badge plan ${ticket.plan.state}`} title="This ticket runs a plan of child tickets">
+              Plan {ticket.plan.state === "finishing" ? "final check" : ticket.plan.state}
+            </span>
+          )}
           {ticket.scheduleId && (
             <span className="badge sched" title="Created by a schedule" aria-label="Scheduled">
               <ClockIcon size={11} strokeWidth={1.8} />

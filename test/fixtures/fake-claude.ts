@@ -54,7 +54,8 @@ const first = streamIn ? await nextMessage() : null;
 if (process.env.FAKE_ARGS_FILE) {
   appendFileSync(process.env.FAKE_ARGS_FILE, JSON.stringify({ args, cwd: process.cwd(), prompt: first }) + "\n");
 }
-const mode = process.env.FAKE_MODE ?? "ok";
+// FAKE_BLOCK_MATCH: runs whose first prompt contains this text end "blocked" (per-ticket behaviour in one test).
+const mode = process.env.FAKE_BLOCK_MATCH && first?.includes(process.env.FAKE_BLOCK_MATCH) ? "blocked" : process.env.FAKE_MODE ?? "ok";
 const idx = Math.max(args.indexOf("--session-id"), args.indexOf("--resume"));
 const sessionId = idx >= 0 ? args[idx + 1] : "none";
 

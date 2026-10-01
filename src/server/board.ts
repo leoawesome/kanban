@@ -7,12 +7,16 @@ import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, resolveBaseBranch, worktreeDir } from "./git";
 import { MOVE_TO_PLANNING_RE } from "./session";
-import { chatPrompt, firstRunPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode } from "./prompts";
+import { chatPrompt, firstRunPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
+import {
+  childrenOf, DEFAULT_MAX_CONCURRENT, findCycle, planActive, planProblem, planStep, planTable, resolveDeps, wakeupCap,
+} from "./plan";
+import { run as runCmd } from "./git";
 import { parseResult } from "./result";
 import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
-import type { QueuedMessage, Status, Ticket, TicketMode } from "./types";
+import type { Plan, QueuedMessage, Status, Ticket, TicketMode } from "./types";
 import { nowIso, slugify } from "./util";
 
 export interface BoardOptions {
@@ -21,6 +25,17 @@ export interface BoardOptions {
   sessionExists?: (sessionId: string) => boolean;
   /** Whether an interactive claude process currently has this session open. */
   isSessionLive?: (sessionId: string, title: string | null) => Promise<boolean>;
+  /** Tells the user something needs them while they're away (default: a macOS notification). */
+  notify?: (title: string, body: string) => void;
+  /** Child events that arrive within this window wake the planner once (default 3s). */
+  planWakeDelayMs?: number;
+}
+
+/** macOS notification; silently nothing elsewhere or when osascript fails. */
+export function systemNotify(title: string, body: string): void {
+  if (process.platform !== "darwin") return;
+  const q = (s: string) => JSON.stringify(s.replace(/\s+/g, " ").slice(0, 240));
+  runCmd(["osascript", "-e", `display notification ${q(body)} with title ${q(title)}`], homedir()).catch(() => {});
 }
 
 interface ActiveRun {
@@ -31,8 +46,8 @@ interface ActiveRun {
   /** Status to land on when the run ends because the user moved the card. */
   targetStatus: Status | null;
   stopRequested: boolean;
-  /** Set for runs started from the ticket chat (not the Ready queue). */
-  chat?: { text: string; mode: ChatMode };
+  /** Set for runs started from the ticket chat (not the Ready queue). raw: text is the full prompt (planner wake-ups). */
+  chat?: { text: string; mode: ChatMode; raw?: boolean };
   /** Queued messages (ticket.queued) written to this claude process, keyed by id, with the text it was given. */
   inFlight: Map<string, string>;
   /** Queued message this chat run was started with; it leaves the queue once Claude reads the prompt. */
@@ -77,10 +92,12 @@ export class Board {
   private shuttingDown = false;
   private sessionExists: (id: string) => boolean;
   private isSessionLive: (id: string, title: string | null) => Promise<boolean>;
+  private notify: (title: string, body: string) => void;
 
   constructor(private store: Store, private bus: Bus, private opts: BoardOptions) {
     this.sessionExists = opts.sessionExists ?? claudeSessionExists;
     this.isSessionLive = opts.isSessionLive ?? psSessionLive;
+    this.notify = opts.notify ?? systemNotify;
   }
 
   private key(slug: string, id: string) {
@@ -220,6 +237,7 @@ export class Board {
         }
         // When the user moved the card, updateTicket() writes the new status and dispatches itself.
         if (!this.shuttingDown && !run.targetStatus) this.dispatch(slug);
+        if (!this.shuttingDown) this.advancePlans(slug);
       });
   }
 
@@ -295,7 +313,9 @@ export class Board {
     const runNo = t.runCount + 1;
     const newComments = this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt));
     const outputDir = this.store.outputsDir(slug, id);
-    const prompt = localizeImages(run.chat
+    const prompt = localizeImages(run.chat?.raw
+      ? run.chat.text
+      : run.chat
       ? chatPrompt(t, run.chat.text, run.chat.mode, outputDir)
       : t.runCount === 0
       ? firstRunPrompt(t, {
@@ -468,7 +488,7 @@ export class Board {
 
   async createTicket(
     slug: string,
-    input: { title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string; parentId?: string },
+    input: { title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string; parentId?: string; planKey?: string; dependsOn?: string[] },
   ): Promise<Ticket> {
     const status = input.status === "in_progress" ? "ready" : input.status;
     const t = this.store.createTicket(slug, { ...input, status });
@@ -478,13 +498,14 @@ export class Board {
     if (parent) this.emitTicket(slug, parent);
     if (status === "ready") this.dispatch(slug);
     if (status === "planning") this.autoRefine(slug, t.id);
+    if (parent) this.advancePlans(slug);
     return this.store.getTicket(slug, t.id)!;
   }
 
   async updateTicket(
     slug: string,
     id: string,
-    patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice">> & { expectedBody?: string },
+    patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice" | "dependsOn">> & { expectedBody?: string },
   ): Promise<Ticket> {
     let current = this.store.getTicket(slug, id);
     if (!current) throw new Error(`ticket ${id} not found`);
@@ -497,6 +518,17 @@ export class Board {
     if (patch.order !== undefined) clean.order = patch.order;
     if (patch.mode !== undefined) clean.mode = patch.mode;
     if (patch.notice !== undefined) clean.notice = patch.notice;
+    if (patch.dependsOn !== undefined) {
+      clean.dependsOn = patch.dependsOn;
+      if (current.parentId) {
+        const siblings = childrenOf(this.store.listTickets(slug), current.parentId).map((s) => (s.id === id ? { ...s, dependsOn: patch.dependsOn } : s));
+        const me = siblings.find((s) => s.id === id)!;
+        const { missing } = resolveDeps(me, siblings);
+        if (missing.length) throw new Error(`unknown dependency ${missing.map((m) => `"${m}"`).join(", ")}: use a sibling's ticket id or key`);
+        const cycle = findCycle(siblings);
+        if (cycle) throw new Error(`dependency cycle: ${cycle.join(" → ")}`);
+      }
+    }
     let status = patch.status;
     if (status === "in_progress" && !this.isRunning(slug, id)) status = "ready";
 
@@ -514,7 +546,180 @@ export class Board {
     if (clean.status === "done") t = await this.cleanupWorktree(slug, t);
     if (clean.status === "planning") this.autoRefine(slug, id);
     if (active || clean.status === "ready" || (clean.order !== undefined && t.status === "ready")) this.dispatch(slug);
+    this.advancePlans(slug);
     return this.store.getTicket(slug, id)!;
+  }
+
+  // ---- Plans: a planner ticket runs its children unattended (see plan.ts) ----
+
+  /** Start (or resume) the planner's plan: children switch to auto mode and start in dependency order. */
+  startPlan(slug: string, id: string, opts: { maxConcurrent?: number } = {}): Ticket {
+    const t = this.store.getTicket(slug, id);
+    if (!t) throw new Error(`ticket ${id} not found`);
+    const kids = childrenOf(this.store.listTickets(slug), id);
+    const problem = planProblem(kids);
+    if (problem) throw new Error(`can't start the plan: ${problem}`);
+    const prev = t.plan;
+    const resuming = prev && prev.state !== "done";
+    const plan: Plan = resuming
+      ? {
+        ...prev,
+        state: prev.awaiting === "final" || prev.state === "finishing" ? "finishing" : "running",
+        reason: null,
+        // A stuck plan starts fresh: its last wake-up is over and the planner looks at every open child again.
+        ...(prev.state === "stuck" ? { wakeups: 0, awaiting: null, seen: {} } : {}),
+      }
+      : { state: "running", maxConcurrent: DEFAULT_MAX_CONCURRENT, wakeups: 0, startedAt: nowIso(), originalCount: kids.length, inbox: [], seen: {}, retries: {}, awaiting: null };
+    if (opts.maxConcurrent !== undefined) plan.maxConcurrent = clampConcurrency(opts.maxConcurrent);
+    // Unattended: children must not stop to interview the user.
+    for (const k of kids) if (k.status === "backlog" && k.mode !== "auto") this.patch(slug, k.id, { mode: "auto" });
+    const out = this.patch(slug, id, { plan, ...(t.outcome && t.outcome !== "done" ? { outcome: null } : {}) });
+    this.store.addComment(slug, id, "ai", resuming ? "Plan resumed." : `Plan started: ${kids.length} child tickets, ${plan.maxConcurrent} at a time.`);
+    this.advancePlans(slug);
+    return this.store.getTicket(slug, id) ?? out;
+  }
+
+  /** Pause: no new children start and the planner isn't woken; running children finish. */
+  pausePlan(slug: string, id: string): Ticket {
+    const t = this.store.getTicket(slug, id);
+    if (!t?.plan) throw new Error("this ticket has no plan");
+    if (t.plan.state === "done") return t;
+    this.store.addComment(slug, id, "ai", "Plan paused.");
+    return this.patch(slug, id, { plan: { ...t.plan, state: "paused" } });
+  }
+
+  setPlanConcurrency(slug: string, id: string, n: number): Ticket {
+    const t = this.store.getTicket(slug, id);
+    if (!t?.plan) throw new Error("this ticket has no plan");
+    const out = this.patch(slug, id, { plan: { ...t.plan, maxConcurrent: clampConcurrency(n) } });
+    this.advancePlans(slug);
+    return out;
+  }
+
+  /** The planner ticket a run belongs to, if it is running a plan; used to scope its board rights. */
+  activePlanner(slug: string, runTicketId: string): Ticket | null {
+    const t = this.store.getTicket(slug, runTicketId);
+    return t && planActive(t.plan) ? t : null;
+  }
+
+  /** The planner restarts a child that already ran: counted, and refused past MAX_RETRIES. */
+  countRetry(slug: string, plannerId: string, childId: string, max: number): void {
+    const p = this.store.getTicket(slug, plannerId);
+    if (!p?.plan) return;
+    const n = (p.plan.retries?.[childId] ?? 0) + 1;
+    if (n > max) throw new Error(`retry limit reached: ${childId} was already restarted ${max} times; skip or split it, or end with "blocked" for the user`);
+    this.patch(slug, plannerId, { plan: { ...p.plan, retries: { ...p.plan.retries, [childId]: n } } });
+  }
+
+  private advancing = new Set<string>();
+  /** When a planner with waiting events gets woken, per planner: children that fail together arrive as one message. */
+  private wakeDue = new Map<string, number>();
+  private advanceAgain = new Set<string>();
+
+  /** Move every running plan on the board forward. Cheap and idempotent: call it after any change. */
+  advancePlans(slug: string): void {
+    if (this.shuttingDown) return;
+    if (this.advancing.has(slug)) {
+      this.advanceAgain.add(slug);
+      return;
+    }
+    this.advancing.add(slug);
+    try {
+      do {
+        this.advanceAgain.delete(slug);
+        const all = this.store.listTickets(slug);
+        let started = false;
+        for (const p of all) {
+          if (!p.plan || p.plan.state === "done" || p.plan.state === "paused") continue;
+          try {
+            started = this.advancePlan(slug, p, childrenOf(all, p.id)) || started;
+          } catch (e) {
+            console.error(`plan ${slug}/${p.id}:`, e);
+          }
+        }
+        if (started) this.dispatch(slug);
+      } while (this.advanceAgain.has(slug));
+    } finally {
+      this.advancing.delete(slug);
+    }
+  }
+
+  /** One plan; true when it moved children to Ready. */
+  private advancePlan(slug: string, planner: Ticket, kids: Ticket[]): boolean {
+    let plan = { ...planner.plan! };
+    const plannerBusy = this.isRunning(slug, planner.id);
+    // The planner's last wake-up has finished: its outcome decides whether we go on.
+    if (plan.awaiting && !plannerBusy) {
+      const o = planner.outcome;
+      if (o === "blocked" || o === "needs_input" || o === "failed" || o === "stopped") {
+        this.stuck(slug, planner, plan, o === "needs_input" ? "the planner has questions for you" : `the planner's run ${o === "blocked" ? "is blocked" : o}`);
+        return false;
+      }
+      if (plan.awaiting === "final") {
+        this.patch(slug, planner.id, { plan: { ...plan, state: "done", awaiting: null, finishedAt: nowIso() } });
+        this.store.addComment(slug, planner.id, "ai", "Plan done: all child tickets finished and the final check ran.");
+        this.notify(`Plan done: ${planner.title}`, "All child tickets finished. Summary in the ticket's outputs.");
+        return false;
+      }
+      plan.awaiting = null;
+    }
+    if (plan.state === "stuck") return false;
+    if (plan.state === "finishing") {
+      if (!plan.awaiting && !plannerBusy) this.wake(slug, planner, plan, "final", [], kids);
+      else if (!sameJson(plan, planner.plan)) this.patch(slug, planner.id, { plan });
+      return false;
+    }
+    const step = planStep(plan, kids, (id) => this.isRunning(slug, id));
+    for (const cid of step.start) this.patch(slug, cid, { status: "ready", mode: "auto", outcome: null, error: null });
+    if (step.events.length) {
+      plan.inbox = [...(plan.inbox ?? []), ...step.events.map((e) => e.line)];
+      plan.seen = { ...plan.seen, ...Object.fromEntries(step.events.map((e) => [e.childId, e.sig])) };
+    }
+    const inbox = plan.inbox ?? [];
+    if (!plannerBusy && !plan.awaiting) {
+      if (inbox.length) {
+        if (plan.wakeups >= wakeupCap(Math.max(plan.originalCount, kids.length))) {
+          this.stuck(slug, planner, plan, `wake-up limit reached (${plan.wakeups}); waiting events: ${inbox.join("; ")}`);
+          return step.start.length > 0;
+        }
+        const key = this.key(slug, planner.id);
+        const due = this.wakeDue.get(key);
+        if (due === undefined) {
+          const delay = this.opts.planWakeDelayMs ?? 3000;
+          this.wakeDue.set(key, Date.now() + delay);
+          setTimeout(() => this.advancePlans(slug), delay + 5);
+        } else if (Date.now() >= due) {
+          this.wakeDue.delete(key);
+          this.wake(slug, planner, plan, "event", inbox, kids);
+          return step.start.length > 0;
+        }
+        if (!sameJson(plan, planner.plan)) this.patch(slug, planner.id, { plan });
+        return step.start.length > 0;
+      }
+      if (step.allComplete) {
+        this.wake(slug, planner, { ...plan, state: "finishing" }, "final", [], kids);
+        return false;
+      }
+      if (step.deadEnd && !step.start.length) {
+        this.stuck(slug, planner, plan, step.deadEnd);
+        return false;
+      }
+    }
+    if (!sameJson(plan, planner.plan)) this.patch(slug, planner.id, { plan });
+    return step.start.length > 0;
+  }
+
+  /** Resume the planner's session with what happened; several events arrive as one message. */
+  private wake(slug: string, planner: Ticket, plan: Plan, kind: PlanWake, events: string[], kids: Ticket[]) {
+    const text = orchestratorPrompt(planner, { kind, events, table: planTable(kids), board: slug, outputDir: this.store.outputsDir(slug, planner.id) });
+    this.patch(slug, planner.id, { plan: { ...plan, inbox: [], awaiting: kind, wakeups: plan.wakeups + 1 } });
+    this.start(slug, planner.id, { text, mode: "act", raw: true });
+  }
+
+  private stuck(slug: string, planner: Ticket, plan: Plan, reason: string) {
+    this.patch(slug, planner.id, { plan: { ...plan, state: "stuck", awaiting: null, reason } });
+    this.store.addComment(slug, planner.id, "ai", `Plan stuck: ${reason}. Fix what's needed, then press Resume plan.`);
+    this.notify(`Plan stuck: ${planner.title}`, reason);
   }
 
   private async cleanupWorktree(slug: string, t: Ticket): Promise<Ticket> {
@@ -614,10 +819,20 @@ export class Board {
     for (const p of this.store.listProfiles()) {
       for (const t of this.store.listTickets(p.slug)) {
         if (t.status !== "in_progress" || this.isRunning(p.slug, t.id)) continue;
+        if (t.plan?.awaiting && planActive(t.plan)) {
+          // A planner wake-up was cut off: wake it again with the children's current state.
+          this.store.addComment(p.slug, t.id, "ai", "Planner interrupted by daemon restart; waking it again.");
+          this.patch(p.slug, t.id, {
+            status: "review", outcome: null, lastActivity: null,
+            plan: { ...t.plan, state: t.plan.awaiting === "final" ? "finishing" : t.plan.state, awaiting: null, seen: {} },
+          });
+          continue;
+        }
         this.store.addComment(p.slug, t.id, "ai", "Interrupted by daemon restart; resuming.");
         this.patch(p.slug, t.id, { status: "ready" });
       }
       this.dispatch(p.slug);
+      this.advancePlans(p.slug);
       // Messages a restarted chat run never got to: answer them in a chat reply now.
       for (const t of this.store.listTickets(p.slug)) {
         const next = this.waiting(p.slug, t.id)[0];
@@ -632,4 +847,12 @@ export class Board {
       await Promise.all([...this.runs.values()].map((r) => r.promise));
     }
   }
+}
+
+function clampConcurrency(n: number): number {
+  return Math.max(1, Math.min(10, Math.round(Number(n) || DEFAULT_MAX_CONCURRENT)));
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }

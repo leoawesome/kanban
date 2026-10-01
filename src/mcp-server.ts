@@ -43,6 +43,17 @@ const SCHEDULE_FIELDS = {
   skipIfRunning: { type: "boolean", description: "Skip a run while the previous ticket from this schedule is still queued or running. Default: true." },
 };
 
+const DEPENDS_ON = {
+  type: "array", items: { type: "string" },
+  description: "Sibling child tickets (ticket id or key) that must be done before a running plan starts this one. Replaces the list.",
+};
+
+function depList(args: any): string[] | undefined {
+  if (args?.dependsOn === undefined) return undefined;
+  if (!Array.isArray(args.dependsOn)) throw new ClientError("dependsOn must be a list of ticket ids or keys");
+  return args.dependsOn.filter((d: unknown) => typeof d === "string" && d.trim()).map((d: string) => d.trim());
+}
+
 const MODE = {
   type: "string",
   enum: ["interview", "auto"],
@@ -60,6 +71,8 @@ interface Tool {
    * including a scheduled run refining its own schedule. Every edit is credited to the run's ticket in the history.
    */
   allowInRun?: boolean;
+  /** Inside a board run the daemon decides: only a running plan's planner may use it, on its own child tickets. */
+  plannerScope?: boolean;
   run(args: any, ctx: ToolContext): Promise<string>;
 }
 
@@ -290,18 +303,24 @@ export const TOOLS: Tool[] = [
         body: { type: "string", description: "Markdown description." },
         status: { ...STATUS, description: `${STATUS.description} Default: backlog.` },
         mode: { ...MODE, description: `${MODE.description} Default: interview.` },
+        key: { type: "string", description: "Planner only: short name siblings can use in dependsOn." },
+        dependsOn: DEPENDS_ON,
       },
       required: ["title"],
     },
     changes: true,
+    plannerScope: true,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
+      const deps = depList(args);
       const t = await ctx.client.createTicket(slug, {
         title: str(args, "title")!.trim(),
         body: typeof args?.body === "string" ? args.body : "",
         status: args?.status ? parseStatus(args.status) : "backlog",
         mode: args?.mode ? parseMode(args.mode) : "interview",
-      });
+        ...(str(args, "key", false) ? { planKey: str(args, "key")!.trim() } : {}),
+        ...(deps ? { dependsOn: deps } : {}),
+      }, ctx.env[RUN_ENV]);
       return `Created ${t.id} on board ${slug} in ${t.status} (${t.mode} mode): ${t.title}`;
     },
   },
@@ -312,10 +331,14 @@ export const TOOLS: Tool[] = [
       "moving it to planning starts the interview in the board chat (same as dragging it on the board).",
     inputSchema: {
       type: "object",
-      properties: { profile: PROFILE, id: ID, title: { type: "string" }, body: { type: "string", description: "New markdown description (replaces the old one)." }, status: STATUS, mode: MODE },
+      properties: {
+        profile: PROFILE, id: ID, title: { type: "string" }, body: { type: "string", description: "New markdown description (replaces the old one)." },
+        status: STATUS, mode: MODE, dependsOn: DEPENDS_ON,
+      },
       required: ["id"],
     },
     changes: true,
+    plannerScope: true,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
       const patch: TicketPatch = {};
@@ -323,8 +346,10 @@ export const TOOLS: Tool[] = [
       if (typeof args?.body === "string") patch.body = args.body;
       if (args?.status) patch.status = parseStatus(args.status);
       if (args?.mode) patch.mode = parseMode(args.mode);
-      if (!Object.keys(patch).length) throw new ClientError("nothing to change: pass title, body, status or mode");
-      const t = await ctx.client.updateTicket(slug, str(args, "id")!, patch);
+      const deps = depList(args);
+      if (deps) patch.dependsOn = deps;
+      if (!Object.keys(patch).length) throw new ClientError("nothing to change: pass title, body, status, mode or dependsOn");
+      const t = await ctx.client.updateTicket(slug, str(args, "id")!, patch, ctx.env[RUN_ENV]);
       return `Updated ${t.id}: ${ticketLine(t)}`;
     },
   },
@@ -333,9 +358,10 @@ export const TOOLS: Tool[] = [
     description: "Move a ticket to another column. ready starts a Claude run; planning starts the interview in the board chat.",
     inputSchema: { type: "object", properties: { profile: PROFILE, id: ID, status: STATUS }, required: ["id", "status"] },
     changes: true,
+    plannerScope: true,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
-      const t = await ctx.client.updateTicket(slug, str(args, "id")!, { status: parseStatus(str(args, "status")) });
+      const t = await ctx.client.updateTicket(slug, str(args, "id")!, { status: parseStatus(str(args, "status")) }, ctx.env[RUN_ENV]);
       return `Moved ${t.id} to ${t.status}${t.running ? " (Claude is working on it)" : ""}.`;
     },
   },
@@ -346,9 +372,10 @@ export const TOOLS: Tool[] = [
       "Answering a question form or applying a proposed ticket can only be done in the board UI.",
     inputSchema: { type: "object", properties: { profile: PROFILE, id: ID, message: { type: "string" } }, required: ["id", "message"] },
     changes: true,
+    plannerScope: true,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
-      const t = await ctx.client.chat(slug, str(args, "id")!, str(args, "message")!);
+      const t = await ctx.client.chat(slug, str(args, "id")!, str(args, "message")!, ctx.env[RUN_ENV]);
       return `Sent to ${t.id}. ${t.running ? "Claude is working on it" : `Ticket is in ${t.status}`}; read the reply later with get_ticket or on the board.`;
     },
   },
@@ -357,10 +384,11 @@ export const TOOLS: Tool[] = [
     description: "Stop the Claude run working on a ticket.",
     inputSchema: { type: "object", properties: { profile: PROFILE, id: ID }, required: ["id"] },
     changes: true,
+    plannerScope: true,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
       const id = str(args, "id")!;
-      const r = await ctx.client.stop(slug, id);
+      const r = await ctx.client.stop(slug, id, ctx.env[RUN_ENV]);
       return r.stopped ? `Stopped the run on ${id}.` : `${id} had no run to stop.`;
     },
   },
@@ -369,10 +397,11 @@ export const TOOLS: Tool[] = [
     description: "Add a comment to a ticket. Claude reads new comments at the start of its next run.",
     inputSchema: { type: "object", properties: { profile: PROFILE, id: ID, text: { type: "string" } }, required: ["id", "text"] },
     changes: true,
+    plannerScope: true,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
       const id = str(args, "id")!;
-      await ctx.client.comment(slug, id, str(args, "text")!);
+      await ctx.client.comment(slug, id, str(args, "text")!, ctx.env[RUN_ENV]);
       return `Commented on ${id}.`;
     },
   },
@@ -435,7 +464,7 @@ export async function callTool(name: string, args: unknown, ctx: ToolContext): P
   const text = (t: string, isError = false): ToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError } : {}) });
   if (!tool) return text(`unknown tool ${name}`, true);
   try {
-    if (tool.changes && !tool.allowInRun) assertCanChange(ctx.env);
+    if (tool.changes && !tool.allowInRun && !tool.plannerScope) assertCanChange(ctx.env);
     return text(await tool.run(args ?? {}, ctx));
   } catch (e) {
     return text((e as Error).message, true);

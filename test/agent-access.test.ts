@@ -203,7 +203,7 @@ test("chat, stop, comment, delete call the API", async () => {
 
 test("inside a board run, changing tools are refused and read tools work", async () => {
   const { ctx, calls } = ctxWith({ CKANBAN_TICKET: "site/t_9" }, "/elsewhere");
-  for (const tool of TOOLS.filter((t) => t.changes && !t.allowInRun)) {
+  for (const tool of TOOLS.filter((t) => t.changes && !t.allowInRun && !t.plannerScope)) {
     const r = await callTool(tool.name, { id: "t_1", title: "x", status: "ready", message: "m", text: "t" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content[0].text).toContain("inside a board run");
@@ -444,8 +444,26 @@ test("schedule edits are allowed inside a board run and credited to it; run_sche
   expect(run.isError).toBe(true);
   expect(run.content[0].text).toContain("inside a board run");
   expect(calls.some((x) => x.fn === "runSchedule")).toBe(false);
-  // Ticket tools stay refused.
-  expect((await callTool("create_ticket", { title: "x" }, ctx)).content[0].text).toContain("inside a board run");
+  // Ticket tools go to the daemon tagged with the run, which only lets a running plan's planner through.
+  await callTool("create_ticket", { title: "x" }, ctx);
+  expect(calls.find((x) => x.fn === "createTicket")?.args[2]).toBe("site/t_9");
+});
+
+test("planner-scoped ticket tools pass the run to the daemon instead of refusing", async () => {
+  const { ctx, calls } = ctxWith({ CKANBAN_TICKET: "site/t_9" }, "/elsewhere");
+  expect(TOOLS.filter((t) => t.plannerScope).map((t) => t.name).sort()).toEqual([
+    "chat_ticket", "comment_ticket", "create_ticket", "move_ticket", "stop_ticket", "update_ticket",
+  ]);
+  await callTool("update_ticket", { id: "t_1", dependsOn: ["api", "t_2"] }, ctx);
+  expect(calls.at(-1)).toEqual({ fn: "updateTicket", args: ["site", "t_1", { dependsOn: ["api", "t_2"] }, "site/t_9"] });
+  await callTool("create_ticket", { title: "Split B", key: "b2", dependsOn: ["api"] }, ctx);
+  expect(calls.at(-1)?.args[1]).toMatchObject({ title: "Split B", planKey: "b2", dependsOn: ["api"] });
+  for (const name of ["move_ticket", "chat_ticket", "stop_ticket", "comment_ticket"]) {
+    await callTool(name, { id: "t_1", status: "ready", message: "m", text: "t" }, ctx);
+    expect(calls.at(-1)?.args.at(-1)).toBe("site/t_9");
+  }
+  expect((await callTool("delete_ticket", { id: "t_1" }, ctx)).content[0].text).toContain("inside a board run");
+  expect((await callTool("update_ticket", { id: "t_1", dependsOn: "api" }, ctx)).content[0].text).toContain("dependsOn must be a list");
 });
 
 test("update_schedule pauses and needs something to change", async () => {

@@ -9,6 +9,7 @@ import { resumeCommand } from "./prompts";
 import { cronError, describeCron, nextRuns, parseCron } from "./cron";
 import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
 import { attentionFor } from "./attention";
+import { MAX_RETRIES, planActive } from "./plan";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
 import { FileError, listDir, openWithSystem, readFileForView } from "./files";
@@ -113,6 +114,26 @@ export function createServer(deps: ServerDeps) {
   // Only read when a planner has proposed tickets, so listing the board stays cheap.
   const childTitles = (slug: string, id: string) =>
     new Set(store.listTickets(slug).filter((c) => c.parentId === id).map((c) => c.title));
+  /**
+   * Board runs send RUN_HEADER ("<profile>/<ticket id>") with ticket changes. Runs can't change the board,
+   * except a running plan's planner on its own child tickets. Returns that planner, or undefined for the user.
+   */
+  const plannerFor = (req: Request, slug: string, target?: Ticket): Ticket | undefined => {
+    const h = req.headers.get(RUN_HEADER);
+    if (!h) return undefined;
+    const [runSlug, runId] = h.split("/");
+    const planner = runSlug === slug && runId ? board.activePlanner(slug, runId) : null;
+    if (!planner) {
+      throw new HttpError(403, "changing the board is disabled inside a board run, so runs can't create or start other runs; " +
+        "only the planner of a running plan may change its own child tickets");
+    }
+    if (target && target.parentId !== planner.id) {
+      throw new HttpError(403, `${target.id} is not a child ticket of plan ${planner.id}; the planner may only change its own child tickets`);
+    }
+    return planner;
+  };
+  const strings = (v: unknown): string[] | undefined =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : undefined;
   const view = (p: Profile, t: Ticket) => {
     const running = board.isRunning(p.slug, t.id);
     const session = t.sessionId ? sessions.summary(t.sessionId) : null;
@@ -123,7 +144,10 @@ export function createServer(deps: ServerDeps) {
       session,
       /** Linked session is open in a terminal right now (board chat still works, UI warns). */
       terminalOpen: deps.terminals?.isOpen(p.slug, t.id) ?? false,
-      attention: attentionFor(t, session, running, session?.pendingNewTickets.length ? childTitles(p.slug, t.id) : undefined),
+      attention: attentionFor(t, session, running, {
+        createdTitles: session?.pendingNewTickets.length ? childTitles(p.slug, t.id) : undefined,
+        managed: t.parentId ? planActive(store.getTicket(p.slug, t.parentId)?.plan) : false,
+      }),
     };
   };
 
@@ -423,12 +447,27 @@ export function createServer(deps: ServerDeps) {
         const b = await body(req);
         const title = String(b.title ?? "").trim();
         if (!title) throw new HttpError(400, "title is required");
-        const status: Status = STATUSES.includes(b.status) ? b.status : "backlog";
-        const mode = b.mode === "auto" ? "auto" : "interview";
-        const parentId = typeof b.parentId === "string" && b.parentId ? b.parentId : undefined;
+        const planner = plannerFor(req, slug);
+        let status: Status = STATUSES.includes(b.status) ? b.status : "backlog";
+        let mode: "auto" | "interview" = b.mode === "auto" ? "auto" : "interview";
+        let parentId = typeof b.parentId === "string" && b.parentId ? b.parentId : undefined;
+        const planKey = typeof b.planKey === "string" && b.planKey.trim() ? b.planKey.trim() : undefined;
+        const dependsOn = strings(b.dependsOn);
+        if (planner) {
+          // A planner adds children to its own plan; the board starts them when their dependencies are done.
+          const kids = store.listTickets(slug).filter((c) => c.parentId === planner.id);
+          const cap = 2 * Math.max(1, planner.plan!.originalCount);
+          if (kids.length >= cap) throw new HttpError(409, `child ticket limit reached (${cap}) for this plan`);
+          const missing = (dependsOn ?? []).filter((d) => !kids.some((k) => k.id === d || k.planKey === d));
+          if (missing.length) throw new HttpError(400, `unknown dependency ${missing.join(", ")}: use a sibling's ticket id or key`);
+          [parentId, status, mode] = [planner.id, "backlog", "auto"];
+        }
         if (parentId && !store.getTicket(slug, parentId)) throw new HttpError(400, `parent ticket ${parentId} not found`);
-        let t = await board.createTicket(slug, { title, body: String(b.body ?? ""), status: b.sessionId ? "backlog" : status, mode, parentId });
-        if (b.sessionId) {
+        let t = await board.createTicket(slug, {
+          title, body: String(b.body ?? ""), status: b.sessionId && !planner ? "backlog" : status, mode, parentId, planKey, dependsOn,
+        });
+        if (planner) store.addComment(slug, t.id, "ai", `Created by the planner of plan ${planner.id}.`);
+        if (b.sessionId && !planner) {
           try {
             await board.linkSession(slug, t.id, String(b.sessionId));
             t = await board.updateTicket(slug, t.id, { status });
@@ -449,7 +488,11 @@ export function createServer(deps: ServerDeps) {
       if (m === "PATCH") {
         const b = await body(req);
         if (b.status !== undefined && !STATUSES.includes(b.status)) throw new HttpError(400, `invalid status ${b.status}`);
-        const patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice">> & { expectedBody?: string } = {};
+        const target = store.getTicket(slug, id)!;
+        const planner = plannerFor(req, slug, target);
+        const patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice" | "dependsOn">> & { expectedBody?: string } = {};
+        const deps = strings(b.dependsOn);
+        if (deps) patch.dependsOn = deps;
         if (b.mode === "auto" || b.mode === "interview") patch.mode = b.mode;
         if (typeof b.expectedBody === "string") patch.expectedBody = b.expectedBody;
         if (typeof b.title === "string") patch.title = b.title;
@@ -457,10 +500,32 @@ export function createServer(deps: ServerDeps) {
         if (b.status) patch.status = b.status;
         if (typeof b.order === "number") patch.order = b.order;
         if (b.notice === null) patch.notice = null;
-        const t = await board.updateTicket(slug, id, patch);
+        if (planner) {
+          delete patch.order;
+          delete patch.notice;
+          if (patch.status === "ready" && target.status !== "ready" && target.runCount > 0) {
+            try {
+              board.countRetry(slug, planner.id, id, MAX_RETRIES);
+            } catch (e) {
+              throw new HttpError(409, (e as Error).message);
+            }
+          }
+        }
+        let t: Ticket;
+        try {
+          t = await board.updateTicket(slug, id, patch);
+        } catch (e) {
+          if (e instanceof ConflictError) throw e;
+          throw new HttpError(400, (e as Error).message);
+        }
+        if (planner) {
+          const what = Object.entries(patch).map(([k, v]) => (k === "status" ? `moved it to ${v}` : `changed ${k}`)).join(", ");
+          if (what) store.addComment(slug, id, "ai", `Planner ${what}.`);
+        }
         return json(view(profile, t));
       }
       if (m === "DELETE") {
+        if (req.headers.get(RUN_HEADER)) throw new HttpError(403, "deleting tickets is disabled inside a board run");
         await board.deleteTicket(slug, id);
         return new Response(null, { status: 204 });
       }
@@ -498,10 +563,13 @@ export function createServer(deps: ServerDeps) {
         const b = await body(req);
         const text = String(b.text ?? "").trim();
         if (!text) throw new HttpError(400, "text is required");
-        return json(board.addComment(slug, id, text), 201);
+        // The child reads user comments on its next run; mark who wrote this one.
+        const planner = plannerFor(req, slug, store.getTicket(slug, id)!);
+        return json(board.addComment(slug, id, planner ? `Planner: ${text}` : text), 201);
       }
     }
     if (m === "POST" && action === "chat") {
+      plannerFor(req, slug, store.getTicket(slug, id)!);
       const b = await body(req);
       const text = String(b.text ?? "").trim();
       if (!text) throw new HttpError(400, "text is required");
@@ -527,7 +595,29 @@ export function createServer(deps: ServerDeps) {
         throw new HttpError(400, (e as Error).message);
       }
     }
-    if (m === "POST" && action === "stop") return json({ stopped: board.stop(slug, id) });
+    if (m === "POST" && action === "stop") {
+      const planner = plannerFor(req, slug, store.getTicket(slug, id)!);
+      const stopped = board.stop(slug, id);
+      if (planner && stopped) store.addComment(slug, id, "ai", "Planner stopped this run.");
+      return json({ stopped });
+    }
+    // Start / pause / resume a planner's plan, or change how many children run at once.
+    if (m === "POST" && action === "plan") {
+      if (req.headers.get(RUN_HEADER)) throw new HttpError(403, "only the user can start or pause a plan");
+      const b = await body(req);
+      const n = b.maxConcurrent === undefined ? undefined : Number(b.maxConcurrent);
+      try {
+        const t = b.action === "pause" ? board.pausePlan(slug, id)
+          : b.action === "start" || b.action === "resume" ? board.startPlan(slug, id, { maxConcurrent: n })
+          : b.action === "concurrency" && n !== undefined ? board.setPlanConcurrency(slug, id, n)
+          : null;
+        if (!t) throw new HttpError(400, "action must be start, pause, resume or concurrency");
+        return json(view(profile, store.getTicket(slug, id) ?? t));
+      } catch (e) {
+        if (e instanceof HttpError) throw e;
+        throw new HttpError(400, (e as Error).message);
+      }
+    }
     if (m === "POST" && action === "check-pr") {
       const state = await checkPr(board, store, slug, id);
       return json({ state, ticket: view(profile, store.getTicket(slug, id)!) });

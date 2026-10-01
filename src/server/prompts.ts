@@ -1,4 +1,5 @@
 import { helperCommand } from "./artifact";
+import { MAX_RETRIES } from "./plan";
 import type { Comment, Ticket } from "./types";
 import { shellQuote } from "./util";
 
@@ -22,8 +23,8 @@ The board shows it as a card; the user clicks Apply to replace the ticket's titl
 
 /** How a planner ticket's chat proposes splitting the work into new tickets; the user creates them by clicking. */
 export const TICKETS_FORMAT = `When the user wants to split the work into separate tickets (this ticket as the planner), first call the ckanban \`list_tickets\` tool to avoid duplicates, then add ONE block like this (valid JSON array; description is markdown):
-<ckanban-tickets>[{"title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Acceptance criteria\\n- ..."}]</ckanban-tickets>
-Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket. You cannot create tickets yourself here.`;
+<ckanban-tickets>[{"key":"api","title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Acceptance criteria\\n- ..."},{"key":"ui","title":"...","description":"...","dependsOn":["api"]}]</ckanban-tickets>
+Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. "key" is a short unique name; "dependsOn" lists the keys that must be finished first. Give a dependency to tickets that build on each other or likely edit the same files, so they don't run at the same time and conflict. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket, and can then press Start plan: the board runs the tickets in dependency order and wakes you only when one needs a decision. You cannot create tickets yourself here.`;
 
 function context(note: string, body: string): string {
   return `<ckanban-context note="${note.replace(/"/g, "'")}">\n${body}\n</ckanban-context>`;
@@ -104,7 +105,8 @@ export function firstRunPrompt(t: Ticket, ctx: PromptContext): string {
 ${t.body.trim() || "(no description)"}
 ${scheduleNote(ctx.schedule)}${comments.length ? `\n# User notes\n${comments.map((c) => `- ${c.text}`).join("\n")}\n` : ""}
 ${interview ? `${INTERVIEW}\n\n` : ""}# Rules
-- ${where}
+- ${where}${t.parentId && ctx.isGit && !ctx.linked ? `
+- This ticket is part of a plan (planner ticket ${t.parentId}): earlier tickets of the plan may have landed on the remote base branch after this worktree was created. Before you start, \`git fetch\` and rebase this branch onto the remote base branch.` : ""}
 - Decide whether this task requires changing files in a code project.
 - If it changes files and this is a git repo with a GitHub remote: commit your changes, push the branch, open a pull request with \`gh pr create\`, and include the PR URL in the result line.
 - If it is a development task but git or a GitHub remote is not available, do NOT fake it. Stop, and report status "blocked" explaining what is missing.
@@ -209,4 +211,44 @@ export function resumeCommand(dir: string, sessionId: string): string {
 export function planningCommand(dir: string, sessionId: string, prompt: string, exists: boolean): string {
   const flag = exists ? `--resume ${sessionId}` : `--session-id ${sessionId}`;
   return `cd ${shellQuote(dir)} && claude ${flag} ${shellQuote(prompt)}`;
+}
+
+export type PlanWake = "event" | "final";
+
+/**
+ * Wakes a planner ticket's session while its plan runs: either child events to decide on, or the
+ * final check once every child is done. The first line is what the ticket chat shows.
+ */
+export function orchestratorPrompt(t: Ticket, o: { kind: PlanWake; events: string[]; table: string; board: string; outputDir: string }): string {
+  const head = o.kind === "final"
+    ? "Plan finished: every child ticket is done. Run the final check and write the summary."
+    : `Plan update: ${o.events.length} child ticket${o.events.length === 1 ? " needs" : "s need"} a decision.\n${o.events.map((e) => `- ${e}`).join("\n")}`;
+  const job = o.kind === "final"
+    ? `# Final check
+1. \`git fetch\`, then run the project's full checks (tests, typecheck, build, as its CLAUDE.md / README says) on the latest remote base branch, in a fresh temporary worktree (\`git worktree add --detach <tmp dir> origin/<base branch>\`; remove it afterwards), never in a folder with someone's uncommitted work.
+2. If something is broken, fix it if it is small and safe, following the repo's instructions for landing changes; otherwise add a follow-up child ticket with create_ticket and say so.
+3. Write ${o.outputDir}/plan-summary.md: TL;DR, what shipped per child (commit SHAs or PR links), what was skipped and why, follow-ups.
+4. End with status "done" (or "blocked" if a human must step in).`
+    : `# What to do
+Decide each event and act with the ckanban MCP tools, then end the run; the board keeps the plan going.
+- Child failed or blocked: read it with get_ticket, add a hint with comment_ticket (the child reads new comments on its next run), fix its description with update_ticket if it was unclear, then move_ticket it to "ready" to retry (at most ${MAX_RETRIES} retries per child). Or split it: create_ticket new children (they land in Backlog and start when their dependsOn are done) and move the old one to "done" with a comment saying why. Or skip it: comment why and move it to "done".
+- Child is asking questions: answer them yourself with chat_ticket when the plan and code give you the answer; only ask the user when it is a business decision you can't make.
+- Child finished with an open PR: review it (\`gh pr view\`, \`gh pr diff\`, its checks). If it is good, merge it with \`gh pr merge --squash\` (the board moves the child to Done once merged). If not, comment what to change and move it to "ready".
+- Don't do a child's work yourself in this session; keep this reply short.`;
+  return `${head}
+
+${context("Plan update from the board", `You are the planner (orchestrator) of ticket "${t.title}" (${t.id}) on board ${o.board}. The board runs this ticket's child tickets unattended, in dependency order, a few at a time, and wakes you only when a decision is needed. The user is not watching.
+
+# Child tickets
+${o.table}
+
+${job}
+
+# Your board rights
+The ckanban MCP tools create_ticket, update_ticket (title, body, status, mode, dependsOn), move_ticket, chat_ticket, stop_ticket and comment_ticket work on THIS plan's child tickets only; everything else on the board is refused. create_ticket here always makes a child of this plan in Backlog (auto mode). Every change is logged on the child.
+
+# When you need the user
+End with status "blocked" (or "questions" with the questions block) only when a human must decide or fix something. That pauses the plan and notifies the user. Otherwise end with "done".
+
+${RESULT_RULE}`)}`;
 }
