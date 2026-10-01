@@ -43,8 +43,16 @@ export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: 
           {plainPreview(last.text)}
         </div>
       )}
-      {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session) && (
+      {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session || ticket.scheduleId) && (
         <div className="card-meta">
+          {ticket.scheduleId && (
+            <span className="badge sched" title="Created by a schedule" aria-label="Scheduled">
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                <circle cx="8" cy="8" r="6.2" />
+                <path d="M8 4.6V8l2.4 1.6" strokeLinecap="round" />
+              </svg>
+            </span>
+          )}
           {badge}
           {ticket.prUrl && (
             <a className="badge pr" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>

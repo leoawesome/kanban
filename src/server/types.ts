@@ -39,10 +39,41 @@ export interface Ticket {
   lastRunAt: string | null;
   runCount: number;
   error: string | null;
+  /** Set on tickets created by a schedule (see Schedule). */
+  scheduleId?: string | null;
   createdAt: string;
   updatedAt: string;
   body: string;
 }
+
+/** Recurring ticket template: on each cron tick the board creates a ticket from it and runs it. */
+export interface Schedule {
+  id: string;
+  name: string;
+  /** Ticket title; `{date}` and `{time}` are filled in when it fires. */
+  title: string;
+  /** Ticket description (the prompt). */
+  body: string;
+  mode: TicketMode;
+  cron: string;
+  enabled: boolean;
+  /** Skip a fire while the previous ticket from this schedule is still queued or running. */
+  skipIfRunning: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastFiredAt: string | null;
+  /** Null while paused. */
+  nextRunAt: string | null;
+  /** Why the last fire could not create its ticket (cleared by the next successful fire). */
+  lastError: string | null;
+}
+
+export type ScheduleTrigger = "schedule" | "missed" | "manual";
+
+export type ScheduleHistoryEntry =
+  | { at: string; kind: "fired"; trigger: ScheduleTrigger; ticketId: string }
+  | { at: string; kind: "skipped"; trigger: ScheduleTrigger; ticketId: string | null }
+  | { at: string; kind: "error"; trigger: ScheduleTrigger; message: string };
 
 export interface Comment {
   id: string;

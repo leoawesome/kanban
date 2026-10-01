@@ -5,6 +5,7 @@ import { Bus } from "./events";
 import { createServer } from "./http";
 import { McpManager } from "./mcp";
 import { startPoller } from "./prpoller";
+import { Scheduler } from "./scheduler";
 import { SessionCache, startSessionWatcher } from "./session";
 import { ShellManager } from "./shell";
 import { TerminalWatcher } from "./terminals";
@@ -25,10 +26,13 @@ export async function startDaemon(): Promise<void> {
   const terminals = new TerminalWatcher(store, bus, sessions);
   const shells = new ShellManager();
   const mcp = new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude", seenFile: join(store.root, "mcp-seen.json") });
-  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, mcp, assets: WEB_ASSETS });
+  const scheduler = new Scheduler(board, store, bus);
+  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, mcp, scheduler, assets: WEB_ASSETS });
   console.log(`ckanban v${VERSION} listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();
   const stopPoller = startPoller(board, store, config.prPollMinutes);
+  // After recover(): a missed run's ticket must not be mistaken for an interrupted one.
+  const stopScheduler = scheduler.start();
   const stopWatcher = startSessionWatcher(store, bus, sessions);
   const stopTerminals = terminals.start();
   const stopMcp = mcp.start();
@@ -36,6 +40,7 @@ export async function startDaemon(): Promise<void> {
   const shutdown = async () => {
     console.log("ckanban shutting down");
     stopPoller();
+    stopScheduler();
     stopWatcher();
     stopTerminals();
     shells.killAll();

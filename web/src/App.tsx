@@ -1,10 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Status, type Ticket } from "./api";
+import { api, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Schedule, type Status, type Ticket } from "./api";
 import { ConnectionsDialog } from "./ConnectionsDialog";
 import { Inbox } from "./Inbox";
 import { Board } from "./Board";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { ProfileDialog } from "./ProfileDialog";
+import { SchedulesDialog } from "./SchedulesDialog";
 import { Select } from "./Select";
 import { TicketDrawer } from "./TicketDrawer";
 
@@ -62,6 +63,9 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [mcp, setMcp] = useState<McpState | null>(null);
   const [connections, setConnections] = useState(false);
+  const [schedules, setSchedules] = useState<Schedule[] | null>(null);
+  const [schedulesOpen, setSchedulesOpen] = useState(false);
+  const schedulesTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [version, setVersion] = useState<{ version: string; latest: string | null; updateAvailable: boolean } | null>(null);
 
   const loadProfiles = useCallback(async () => {
@@ -69,6 +73,21 @@ export function App() {
     setProfiles(ps);
     setSlug((cur) => (cur && ps.some((p) => p.slug === cur) ? cur : ps[0]?.slug ?? null));
   }, []);
+
+  const slugRef = useRef(slug);
+  slugRef.current = slug;
+  const loadSchedules = useCallback((board: string) => api.schedules(board).then((list) => {
+    // Ignore a late answer for a board we already left.
+    if (slugRef.current === board) setSchedules(list);
+  }).catch(() => {}), []);
+  // Fires and ticket changes move "next run", "running" and errors: refetch for the computed fields.
+  const refreshSchedulesSoon = useCallback((board: string) => {
+    if (schedulesTimer.current) return;
+    schedulesTimer.current = setTimeout(() => {
+      schedulesTimer.current = null;
+      loadSchedules(board);
+    }, 300);
+  }, [loadSchedules]);
 
   const loadInbox = useCallback(() => api.inbox().then(setInbox).catch(() => {}), []);
   const refreshInboxSoon = useCallback(() => {
@@ -123,8 +142,11 @@ export function App() {
     loadProfiles().catch(() => {});
     loadInbox();
     api.mcp().then(setMcp).catch(() => {});
-    if (slug) api.tickets(slug).then(setTickets).catch(() => {});
-  }), [slug, loadProfiles, loadInbox]);
+    if (slug) {
+      api.tickets(slug).then(setTickets).catch(() => {});
+      loadSchedules(slug);
+    }
+  }), [slug, loadProfiles, loadInbox, loadSchedules]);
 
   const needYou = inbox.length;
   useEffect(() => {
@@ -146,7 +168,7 @@ export function App() {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
-      if (openId || profileDialog || newTicket || connections || document.querySelector(".overlay")) return;
+      if (openId || profileDialog || newTicket || connections || schedulesOpen || document.querySelector(".overlay")) return;
       if (e.key === "n" || e.key === "N") {
         e.preventDefault();
         if (slug) setNewTicket("backlog");
@@ -157,7 +179,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openId, profileDialog, newTicket, connections, slug]);
+  }, [openId, profileDialog, newTicket, connections, schedulesOpen, slug]);
 
   useEffect(() => {
     if (!slug) return;
@@ -165,8 +187,10 @@ export function App() {
       localStorage.setItem(LAST_PROFILE, slug);
     } catch {}
     setTickets([]);
+    setSchedules(null);
     api.tickets(slug).then(setTickets).catch((e) => setError(e.message));
-  }, [slug]);
+    loadSchedules(slug);
+  }, [slug, loadSchedules]);
 
   useEffect(
     () =>
@@ -181,6 +205,8 @@ export function App() {
           return;
         }
         if (e.type === "ticket.updated" || e.type === "ticket.deleted" || e.type === "session.updated") refreshInboxSoon();
+        if (e.type === "schedule.updated" && e.profile === slug) refreshSchedulesSoon(slug);
+        if (e.type === "ticket.updated" && e.profile === slug && e.ticket.scheduleId) refreshSchedulesSoon(slug);
         if (e.type === "ticket.updated" && e.profile === slug) {
           setTickets((ts) => {
             const i = ts.findIndex((t) => t.id === e.ticket.id);
@@ -198,7 +224,7 @@ export function App() {
           setTickets((ts) => ts.filter((t) => t.id !== e.id));
         }
       }),
-    [slug, loadProfiles, refreshInboxSoon],
+    [slug, loadProfiles, refreshInboxSoon, refreshSchedulesSoon],
   );
 
   const profile = useMemo(() => profiles?.find((p) => p.slug === slug) ?? null, [profiles, slug]);
@@ -222,6 +248,7 @@ export function App() {
   };
 
   const mcpAttention = mcp?.servers.filter((s) => s.attention).length ?? 0;
+  const scheduleErrors = schedules?.filter((s) => s.lastError).length ?? 0;
   const missing = health ? (["claude", "git", "gh"] as const).filter((k) => !health[k]) : [];
   const running = tickets.filter((t) => t.status === "in_progress").length;
 
@@ -265,6 +292,12 @@ export function App() {
             <button className={`btn ghost${dockOpen ? " on" : ""}`} onClick={() => setDockOpen((o) => !o)}
               aria-pressed={dockOpen} title="Terminal and files for this folder (Ctrl+`)">
               Terminal & files
+            </button>
+            <button className="btn ghost connections-btn" onClick={() => setSchedulesOpen(true)}
+              title={scheduleErrors ? `${scheduleErrors} schedule${scheduleErrors === 1 ? "" : "s"} could not start their last run` : "Recurring tickets on a cron schedule"}>
+              Schedules
+              {schedules && schedules.length > 0 && !scheduleErrors && <span className="muted small">{schedules.filter((s) => s.enabled).length}</span>}
+              {scheduleErrors > 0 && <span className="need-chip">{scheduleErrors}</span>}
             </button>
           </>
         )}
@@ -339,6 +372,10 @@ export function App() {
       )}
 
       {connections && <ConnectionsDialog state={mcp} onClose={() => setConnections(false)} />}
+      {schedulesOpen && profile && (
+        <SchedulesDialog profile={profile} schedules={schedules} tickets={tickets} onClose={() => setSchedulesOpen(false)}
+          onOpenTicket={(id) => { setSchedulesOpen(false); openTicket(id); }} />
+      )}
       {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} onClose={closeTicket} />}
       {profileDialog && (
         <ProfileDialog

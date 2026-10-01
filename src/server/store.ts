@@ -4,7 +4,9 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import YAML from "yaml";
-import type { ActivityEntry, Comment, Config, OutputFile, Profile, Status, Ticket, TicketMode } from "./types";
+import type {
+  ActivityEntry, Comment, Config, OutputFile, Profile, Schedule, ScheduleHistoryEntry, Status, Ticket, TicketMode,
+} from "./types";
 import { newId, newTicketId, nowIso } from "./util";
 
 const DEFAULT_CONFIG: Config = { port: 7777, prPollMinutes: 5 };
@@ -148,12 +150,13 @@ export class Store {
     return status === "ready" ? this.nextOrder(slug, status) : this.topOrder(slug, status);
   }
 
-  createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode }): Ticket {
+  createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string }): Ticket {
     const at = nowIso();
     const t: Ticket = {
       id: newTicketId(), title: input.title, status: input.status, mode: input.mode ?? "auto", order: this.entryOrder(slug, input.status),
       sessionId: null, worktree: null, branch: null, prUrl: null, outcome: null, lastActivity: null,
       lastRunAt: null, runCount: 0, error: null, createdAt: at, updatedAt: at, body: input.body,
+      ...(input.scheduleId ? { scheduleId: input.scheduleId } : {}),
     };
     atomicWrite(this.ticketPath(slug, t.id), serializeTicket(t));
     return t;
@@ -223,5 +226,48 @@ export class Store {
 
   readActivity(slug: string, id: string): ActivityEntry[] {
     return readJsonl<ActivityEntry>(join(this.ticketDir(slug, id), "activity.jsonl"));
+  }
+
+  private schedulesDir(slug: string) {
+    return join(this.profileDir(slug), "schedules");
+  }
+
+  listSchedules(slug: string): Schedule[] {
+    const dir = this.schedulesDir(slug);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => this.getSchedule(slug, f.slice(0, -5)))
+      .filter((s): s is Schedule => s !== null)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  getSchedule(slug: string, id: string): Schedule | null {
+    if (!/^[a-z0-9]+$/.test(id)) return null;
+    const file = join(this.schedulesDir(slug), `${id}.json`);
+    if (!existsSync(file)) return null;
+    try {
+      return JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  saveSchedule(slug: string, s: Schedule): void {
+    atomicWrite(join(this.schedulesDir(slug), `${s.id}.json`), JSON.stringify(s, null, 2) + "\n");
+  }
+
+  deleteSchedule(slug: string, id: string): void {
+    rmSync(join(this.schedulesDir(slug), `${id}.json`), { force: true });
+    rmSync(join(this.schedulesDir(slug), `${id}.history.jsonl`), { force: true });
+  }
+
+  appendScheduleHistory(slug: string, id: string, e: ScheduleHistoryEntry): void {
+    mkdirSync(this.schedulesDir(slug), { recursive: true });
+    appendFileSync(join(this.schedulesDir(slug), `${id}.history.jsonl`), JSON.stringify(e) + "\n");
+  }
+
+  readScheduleHistory(slug: string, id: string): ScheduleHistoryEntry[] {
+    return readJsonl<ScheduleHistoryEntry>(join(this.schedulesDir(slug), `${id}.history.jsonl`));
   }
 }
