@@ -44,6 +44,8 @@ export interface ServerDeps {
 interface ShellSocket {
   kind: PtyKind;
   slug: string;
+  /** Profile display name (the quick chat tells Claude which board it is on). */
+  name: string;
   cwd: string;
   cols: number;
   rows: number;
@@ -366,7 +368,7 @@ export function createServer(deps: ServerDeps) {
       if (!ptySupported()) throw new HttpError(501, `terminal needs Bun 1.3.5 or newer (running ${Bun.version})`);
       if (!isAllowedSocket(req, server.port ?? deps.port)) throw new HttpError(403, "forbidden");
       const dim = (k: string, d: number) => Math.min(1000, Math.max(1, Number(url.searchParams.get(k)) || d));
-      const data: ShellSocket = { kind: "shell", slug, cwd: profile.path, cols: dim("cols", 80), rows: dim("rows", 24) };
+      const data: ShellSocket = { kind: "shell", slug, name: profile.name, cwd: profile.path, cols: dim("cols", 80), rows: dim("rows", 24) };
       if (server.upgrade(req, { data })) return undefined;
       throw new HttpError(400, "expected a WebSocket upgrade");
     }
@@ -376,7 +378,7 @@ export function createServer(deps: ServerDeps) {
       if (!ptySupported()) throw new HttpError(501, `terminal needs Bun 1.3.5 or newer (running ${Bun.version})`);
       if (!isAllowedSocket(req, server.port ?? deps.port)) throw new HttpError(403, "forbidden");
       const dim = (k: string, d: number) => Math.min(1000, Math.max(1, Number(url.searchParams.get(k)) || d));
-      const data: ShellSocket = { kind: "claude", slug, cwd: profile.path, cols: dim("cols", 80), rows: dim("rows", 24) };
+      const data: ShellSocket = { kind: "claude", slug, name: profile.name, cwd: profile.path, cols: dim("cols", 80), rows: dim("rows", 24) };
       if (server.upgrade(req, { data })) return undefined;
       throw new HttpError(400, "expected a WebSocket upgrade");
     }
@@ -600,7 +602,7 @@ export function createServer(deps: ServerDeps) {
       // An exited quick chat that has messages comes back on the same session ("Start again").
       const prev = shells.current(d.slug, d.kind);
       const resume = resumeChat && !!prev?.sessionId && sessions.version(prev.sessionId) !== null;
-      shell = shells.get(d.slug, d.cwd, d.cols, d.rows, restart, d.kind, resume);
+      shell = shells.get(d.slug, d.cwd, d.cols, d.rows, restart, d.kind, resume, d.name);
     } catch (e) {
       ws.send(JSON.stringify({ type: "error", message: (e as Error).message }));
       return;

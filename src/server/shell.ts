@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { helperArgv } from "./artifact";
 
 /** Bun ≥ 1.3.5 can spawn processes on a pseudo-terminal (`Bun.spawn({ terminal })`). */
 export function ptySupported(): boolean {
@@ -16,8 +17,32 @@ export type PtyKind = "shell" | "claude";
 const shQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** Shell script that replaces the login shell with interactive Claude Code on a known session. */
-export function claudeScript(bin: string, sessionId: string, resume = false): string {
-  return `exec ${shQuote(bin)} ${resume ? "--resume" : "--session-id"} ${sessionId}`;
+export function claudeScript(bin: string, sessionId: string, resume = false, args: string[] = []): string {
+  return [`exec ${shQuote(bin)} ${resume ? "--resume" : "--session-id"} ${sessionId}`, ...args.map(shQuote)].join(" ");
+}
+
+/** The profile a quick chat belongs to. */
+export interface ChatProfile {
+  name: string;
+  slug: string;
+  path: string;
+}
+
+/**
+ * Extra `claude` args for the quick chat: the board's MCP server (`ckanban mcp`) and a note on where it runs,
+ * so asking it to "make a ticket" works without registering ckanban with Claude Code first.
+ */
+export function quickChatArgs(profile: ChatProfile, serverArgv: string[] = [...helperArgv(), "mcp"]): string[] {
+  const [command, ...args] = serverArgv;
+  const mcp = JSON.stringify({ mcpServers: { ckanban: { command, args } } });
+  const note = [
+    `You are running in the quick Claude chat of Claude Kanban (ckanban), a local kanban board that runs tickets through Claude.`,
+    `This chat belongs to the board (profile) "${profile.name}" (slug: ${profile.slug}), whose folder is ${profile.path}.`,
+    `For board work (making, finding, updating or moving tickets) use the ckanban MCP tools: create_ticket, list_tickets, get_ticket, update_ticket, move_ticket, comment_ticket.`,
+    `Use profile "${profile.slug}" unless the user names another board. New tickets land in Backlog.`,
+    `Anything else, answer normally.`,
+  ].join(" ");
+  return ["--mcp-config", mcp, "--append-system-prompt", note];
 }
 
 /** One interactive login shell on a PTY. Output is kept (bounded) so a reconnecting client can replay it. */
@@ -35,7 +60,8 @@ export class Shell {
     let shell = opts.shell ?? (process.env.SHELL || "/bin/zsh");
     if (!existsSync(shell)) shell = "/bin/zsh";
     // Drop markers of a parent Claude session (daemon started from one) so `claude` runs normally in this shell.
-    const { CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, ...env } = process.env;
+    // Same for a board run's marker, which would make `ckanban` refuse to change the board from here.
+    const { CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, CKANBAN_TICKET, ...env } = process.env;
     this.proc = Bun.spawn(opts.script ? [shell, "-l", "-c", opts.script] : [shell, "-l"], {
       cwd,
       env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor" },
@@ -102,13 +128,16 @@ export interface SpawnRequest {
   rows: number;
   /** Quick chat: continue this session instead of starting a new one. */
   resume?: string;
+  /** Quick chat: the profile it belongs to (name, slug; `cwd` is its folder). */
+  profile?: { name: string; slug: string };
 }
 
 export function defaultSpawn(claudeBin = process.env.CKANBAN_CLAUDE_BIN ?? "claude") {
   return (r: SpawnRequest): Shell => {
     if (r.kind === "shell") return new Shell(r.cwd, r.cols, r.rows);
     const id = r.resume ?? randomUUID();
-    const s = new Shell(r.cwd, r.cols, r.rows, { script: claudeScript(claudeBin, id, !!r.resume) });
+    const args = r.profile ? quickChatArgs({ ...r.profile, path: r.cwd }) : [];
+    const s = new Shell(r.cwd, r.cols, r.rows, { script: claudeScript(claudeBin, id, !!r.resume, args) });
     s.sessionId = id;
     return s;
   };
@@ -127,9 +156,9 @@ export class ShellManager {
 
   /**
    * The profile's PTY of `kind`, starting one if there is none. `restart` replaces the current one;
-   * with `resume` an exited quick chat comes back on the same Claude session.
+   * with `resume` an exited quick chat comes back on the same Claude session. `name` is the profile's display name.
    */
-  get(slug: string, cwd: string, cols = 80, rows = 24, restart = false, kind: PtyKind = "shell", resume = false): Shell {
+  get(slug: string, cwd: string, cols = 80, rows = 24, restart = false, kind: PtyKind = "shell", resume = false, name = slug): Shell {
     const k = this.key(slug, kind);
     let s = this.shells.get(k);
     const previous = s?.sessionId ?? undefined;
@@ -138,7 +167,11 @@ export class ShellManager {
       s = undefined;
     }
     if (!s) {
-      s = this.spawn({ kind, cwd, cols, rows, resume: resume && kind === "claude" ? previous : undefined });
+      s = this.spawn({
+        kind, cwd, cols, rows,
+        resume: resume && kind === "claude" ? previous : undefined,
+        profile: kind === "claude" ? { name, slug } : undefined,
+      });
       this.shells.set(k, s);
     }
     return s;

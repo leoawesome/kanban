@@ -726,8 +726,11 @@ textarea.drop-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--
 .dock-pane { position: absolute; inset: 0; display: flex; }
 .dock-pane[hidden] { display: none; }
 
-.terminal-view { flex: 1; min-width: 0; position: relative; display: flex; }
-.terminal-host { flex: 1; min-width: 0; padding: 6px 0 0 10px; }
+/* Padding lives on the view, not the host: FitAddon sizes rows from the host's computed height, which includes padding under border-box. */
+.terminal-view { flex: 1; min-width: 0; position: relative; display: flex; padding: 6px 0 0 10px; }
+/* The quick Claude chat is always dark: Claude Code's colours assume a dark terminal. */
+.terminal-view.dark { background: #242320; }
+.terminal-host { flex: 1; min-width: 0; }
 .terminal-host .xterm { height: 100%; }
 .terminal-host .xterm-viewport { background: transparent !important; }
 .terminal-banner {

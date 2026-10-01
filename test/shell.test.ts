@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { claudeScript, Shell, ShellManager, type SpawnRequest } from "../src/server/shell";
+import { claudeScript, quickChatArgs, Shell, ShellManager, type SpawnRequest } from "../src/server/shell";
 
 class FakeShell {
   killed = false;
@@ -27,6 +27,33 @@ test("claudeScript starts or resumes a known session and quotes the binary", () 
   expect(claudeScript("claude", "abc")).toBe("exec 'claude' --session-id abc");
   expect(claudeScript("/opt/my bin/claude", "abc", true)).toBe("exec '/opt/my bin/claude' --resume abc");
   expect(claudeScript("it's", "x")).toBe(`exec 'it'\\''s' --session-id x`);
+  // Extra args are quoted one by one, for new and resumed chats.
+  expect(claudeScript("claude", "abc", false, ["--x", `{"a":"b c"}`, "it's"])).toBe(
+    `exec 'claude' --session-id abc '--x' '{"a":"b c"}' 'it'\\''s'`,
+  );
+  expect(claudeScript("claude", "abc", true, ["--y"])).toBe("exec 'claude' --resume abc '--y'");
+});
+
+test("quickChatArgs gives the chat the ckanban MCP server and says which board it is on", () => {
+  const args = quickChatArgs({ name: "My Board", slug: "my-board", path: "/w/repo" }, ["/bin/bun", "/src/cli.ts", "mcp"]);
+  expect(args[0]).toBe("--mcp-config");
+  expect(JSON.parse(args[1])).toEqual({ mcpServers: { ckanban: { command: "/bin/bun", args: ["/src/cli.ts", "mcp"] } } });
+  expect(args[2]).toBe("--append-system-prompt");
+  expect(args[3]).toContain(`"My Board" (slug: my-board)`);
+  expect(args[3]).toContain("/w/repo");
+  expect(args[3]).toContain("create_ticket");
+  expect(args[3]).toContain("Backlog");
+  // Default server command is this ckanban's own `mcp`.
+  expect(quickChatArgs({ name: "a", slug: "a", path: "/" }).length).toBe(4);
+  expect(JSON.parse(quickChatArgs({ name: "a", slug: "a", path: "/" })[1]).mcpServers.ckanban.args.at(-1)).toBe("mcp");
+});
+
+test("only the quick chat gets the profile it belongs to", () => {
+  const { m, spawned } = manager();
+  m.get("p", "/w", 80, 24, false, "shell", false, "Proj");
+  m.get("p", "/w", 80, 24, false, "claude", false, "Proj");
+  m.get("p", "/w", 80, 24, true, "claude", true, "Proj");
+  expect(spawned.map((s) => s.req.profile)).toEqual([undefined, { name: "Proj", slug: "p" }, { name: "Proj", slug: "p" }]);
 });
 
 test("a profile has an independent shell and quick chat", () => {

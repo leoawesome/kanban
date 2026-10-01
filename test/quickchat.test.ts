@@ -85,8 +85,11 @@ test.skipIf(!ptySupported())("quick chat runs claude on a known session, separat
   const origin = `http://localhost:${server.port}`;
   const a = await openSocket(`ws://localhost:${server.port}/api/profiles/${slug}/claude?cols=90&rows=20`, origin);
   expect(a.ok).toBe(true);
-  const args = await read(a.ws, /ARGS --session-id [0-9a-f-]{36}/);
+  // The chat knows the board: ckanban MCP server plus a note naming this profile.
+  const args = await read(a.ws, /ARGS --session-id [0-9a-f-]{36} .*board \(profile\) "Chat" \(slug: [a-z0-9-]+\)/);
   const id = args.match(/--session-id ([0-9a-f-]{36})/)![1];
+  expect(args).toContain(`--session-id ${id} --mcp-config {"mcpServers":{"ckanban":`);
+  expect(args).toContain(`(slug: ${slug})`);
 
   let s = (await (await fetch(`${base}/api/profiles/${slug}/claude/session`)).json()) as any;
   expect(s).toMatchObject({ sessionId: id, running: true, started: false });
@@ -139,7 +142,9 @@ test.skipIf(!ptySupported())("Start again after the chat ended resumes the same 
 
   const back = read(a.ws, /ARGS --resume [0-9a-f-]{36}/);
   a.ws.send(JSON.stringify({ type: "restart", resume: true }));
-  expect(await back).toContain(`--resume ${id}`);
+  const resumed = await back;
+  expect(resumed).toContain(`--resume ${id}`);
+  expect(resumed).toMatch(/--resume [0-9a-f-]{36} --mcp-config \{"mcpServers":\{"ckanban":/);
   expect(shells.current(slug, "claude")!.sessionId).toBe(id);
   a.ws.close();
 }, 15_000);

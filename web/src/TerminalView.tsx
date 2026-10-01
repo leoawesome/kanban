@@ -17,6 +17,18 @@ function themeFromCss(): ITheme {
   };
 }
 
+/** The quick Claude chat is always dark (the page's dark-mode colours): Claude Code's colours assume a dark terminal. */
+const DARK_THEME: ITheme = {
+  background: "#242320",
+  foreground: "#ecebe6",
+  cursor: "#e0805e",
+  cursorAccent: "#242320",
+  selectionBackground: "#3d2a22",
+  selectionForeground: "#ecebe6",
+};
+
+const themeFor = (kind: PtyKind) => (kind === "claude" ? DARK_THEME : themeFromCss());
+
 type State = "connecting" | "open" | "exited" | "closed";
 
 /**
@@ -59,7 +71,7 @@ export function TerminalView({ slug, kind = "shell", active, restartSignal, comm
       cursorBlink: true,
       scrollback: 5000,
       macOptionIsMeta: true,
-      theme: themeFromCss(),
+      theme: themeFor(kind),
     });
     const f = new FitAddon();
     t.loadAddon(f);
@@ -86,7 +98,7 @@ export function TerminalView({ slug, kind = "shell", active, restartSignal, comm
     });
     ro.observe(host.current!);
     const dark = matchMedia("(prefers-color-scheme: dark)");
-    const onScheme = () => (t.options.theme = themeFromCss());
+    const onScheme = () => (t.options.theme = themeFor(kind));
     dark.addEventListener("change", onScheme);
     return () => {
       onData.dispose();
@@ -191,7 +203,7 @@ export function TerminalView({ slug, kind = "shell", active, restartSignal, comm
   };
 
   return (
-    <div className="terminal-view">
+    <div className={kind === "claude" ? "terminal-view dark" : "terminal-view"}>
       <div ref={host} className="terminal-host" />
       {state === "exited" && kind === "claude" && (
         <div className="terminal-banner" role="status">
