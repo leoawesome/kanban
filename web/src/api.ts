@@ -94,6 +94,8 @@ export interface Ticket {
   notice?: string | null;
   /** Created by this schedule. */
   scheduleId?: string | null;
+  /** Planner ticket whose chat proposed this one. */
+  parentId?: string | null;
   /** Messages sent while Claude was working that it has not read yet; "unsent" ones were cut off by Stop. */
   queued?: QueuedMessage[];
   createdAt: string;
@@ -128,6 +130,7 @@ export interface SessionSummary {
   updatedAt: string;
   openQuestions: number;
   pendingProposal: { title: string; description: string } | null;
+  pendingNewTickets?: { title: string; description: string }[];
 }
 
 export interface QuestionOption {
@@ -150,6 +153,7 @@ export interface SessionEntry {
   text: string;
   questions?: Question[];
   proposal?: { title: string; description: string };
+  newTickets?: { title: string; description: string }[];
   moved?: "planning";
 }
 
@@ -366,7 +370,7 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.text();
   },
-  createTicket: (slug: string, input: { title: string; body: string; status: Status; sessionId?: string; mode?: TicketMode }) =>
+  createTicket: (slug: string, input: { title: string; body: string; status: Status; sessionId?: string; mode?: TicketMode; parentId?: string }) =>
     req<Ticket>("POST", t(slug), input),
   updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice">> & { expectedBody?: string }) =>
     req<Ticket>("PATCH", t(slug, id), patch),

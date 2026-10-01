@@ -8,7 +8,7 @@ const T = (p: Partial<Ticket>): Ticket => ({
   outcome: null, lastActivity: null, lastRunAt: null, runCount: 0, error: null, createdAt: "", updatedAt: "", body: "b", ...p,
 });
 const S = (p: Partial<SessionSummary>): SessionSummary => ({
-  title: null, lastMessage: null, artifacts: [], updatedAt: "", openQuestions: 0, pendingProposal: null, ...p,
+  title: null, lastMessage: null, artifacts: [], updatedAt: "", openQuestions: 0, pendingProposal: null, pendingNewTickets: [], ...p,
 });
 
 test("running tickets never need the user", () => {
@@ -51,4 +51,11 @@ test("done and backlog tickets never need the user", () => {
     expect(attentionFor(T({ status }), S({ pendingProposal: prop }), false)).toBeNull();
   }
   expect(attentionFor(T({ status: "review" }), S({ openQuestions: 2 }), false)!.kind).toBe("questions");
+});
+
+test("proposed new tickets need attention until each one exists", () => {
+  const s = S({ pendingNewTickets: [{ title: "A", description: "" }, { title: "B", description: "" }] });
+  expect(attentionFor(T({}), s, false)).toEqual({ kind: "proposal", label: "Review proposed tickets" });
+  expect(attentionFor(T({}), s, false, new Set(["A"]))!.kind).toBe("proposal");
+  expect(attentionFor(T({}), s, false, new Set(["A", "B"]))).toBeNull();
 });

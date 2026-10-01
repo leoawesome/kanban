@@ -20,6 +20,11 @@ export const TICKET_FORMAT = `To propose an improved ticket, add ONE block like 
 <ckanban-ticket>{"title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Scope\\n**In:** ...\\n**Out:** ...\\n\\n## Requirements\\n- ...\\n\\n## Acceptance criteria\\n- ...\\n\\n## Open questions\\n- ..."}</ckanban-ticket>
 The board shows it as a card; the user clicks Apply to replace the ticket's title and description.`;
 
+/** How a planner ticket's chat proposes splitting the work into new tickets; the user creates them by clicking. */
+export const TICKETS_FORMAT = `When the user wants to split the work into separate tickets (this ticket as the planner), first call the ckanban \`list_tickets\` tool to avoid duplicates, then add ONE block like this (valid JSON array; description is markdown):
+<ckanban-tickets>[{"title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Acceptance criteria\\n- ..."}]</ckanban-tickets>
+Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket. You cannot create tickets yourself here.`;
+
 function context(note: string, body: string): string {
   return `<ckanban-context note="${note.replace(/"/g, "'")}">\n${body}\n</ckanban-context>`;
 }
@@ -167,7 +172,9 @@ ${bugReportRule(t)}
 
 ${QUESTIONS_FORMAT}
 
-${TICKET_FORMAT}`)}`;
+${TICKET_FORMAT}
+
+${TICKETS_FORMAT}`)}`;
   }
   return `${typed}
 

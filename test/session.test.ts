@@ -179,3 +179,31 @@ test("move marker is hidden from text and exposed as moved", () => {
   expect(s.entries[0].text).toBe("Top 5:\n1. a");
   expect(s.entries[0].moved).toBe("planning");
 });
+
+test("parseSession: <ckanban-tickets> becomes newTickets, stripped from the text", () => {
+  const block = '<ckanban-tickets>[{"title":"A","description":"## Goal\\nDo A"},{"title":"B"},{"description":"no title"}]</ckanban-tickets>';
+  const s = parseSession(asst([{ type: "text", text: `Here is the split.\n\n${block}\n\nApply what you like.` }], "1"));
+  const e = s.entries[0];
+  expect(e.text).toBe("Here is the split.\n\n\n\nApply what you like.");
+  expect(e.newTickets).toEqual([{ title: "A", description: "## Goal\nDo A" }, { title: "B", description: "" }]);
+  expect(e.proposal).toBeUndefined();
+  expect(s.pendingNewTickets).toHaveLength(2);
+  expect(parseSession([asst([{ type: "text", text: block }], "1"), user("thanks", "2")].join("\n")).pendingNewTickets).toEqual([]);
+  // Only the block: the board still has something to show as the last message.
+  expect(parseSession(asst([{ type: "text", text: block }], "1")).lastMessage!.text).toBe("Proposed 2 new tickets");
+});
+
+test("parseSession: invalid <ckanban-tickets> JSON stays visible text", () => {
+  const bad = "<ckanban-tickets>[{title: A}]</ckanban-tickets>";
+  const e = parseSession(asst([{ type: "text", text: `x ${bad}` }], "1")).entries[0];
+  expect(e.newTickets).toBeUndefined();
+  expect(e.text).toContain(bad);
+});
+
+test("parseSession: ticket proposal and new tickets in one reply", () => {
+  const text = '<ckanban-ticket>{"title":"Planner","description":"D"}</ckanban-ticket>\n<ckanban-tickets>[{"title":"Child","description":"C"}]</ckanban-tickets>';
+  const e = parseSession(asst([{ type: "text", text }], "1")).entries[0];
+  expect(e.proposal).toEqual({ title: "Planner", description: "D" });
+  expect(e.newTickets).toEqual([{ title: "Child", description: "C" }]);
+  expect(e.text).toBe("");
+});

@@ -466,10 +466,16 @@ export class Board {
     return planningCommand(s.dir, s.sessionId, localizeImages(planningPrompt(t, this.store.ticketPath(slug, id)), this.store.attachmentsDir), s.existed);
   }
 
-  async createTicket(slug: string, input: { title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string }): Promise<Ticket> {
+  async createTicket(
+    slug: string,
+    input: { title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string; parentId?: string },
+  ): Promise<Ticket> {
     const status = input.status === "in_progress" ? "ready" : input.status;
     const t = this.store.createTicket(slug, { ...input, status });
     this.emitTicket(slug, t);
+    // The planner's "Review proposal" badge depends on which of its proposed tickets exist.
+    const parent = input.parentId ? this.store.getTicket(slug, input.parentId) : null;
+    if (parent) this.emitTicket(slug, parent);
     if (status === "ready") this.dispatch(slug);
     if (status === "planning") this.autoRefine(slug, t.id);
     return this.store.getTicket(slug, t.id)!;

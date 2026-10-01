@@ -137,3 +137,12 @@ test("a scheduled ticket's first run is told its schedule", () => {
   expect(firstRunPrompt(t, { isGit: true, outputDir: "/out", schedule: { id: "s1", name: null, board: "kanban" } })).toContain("since been deleted");
   expect(firstRunPrompt(ticket, { isGit: true, outputDir: "/out" })).not.toContain("schedule");
 });
+
+test("only the planning chat can propose new tickets", () => {
+  const t = { ...ticket, runCount: 1 } as Ticket;
+  const refine = chatPrompt(t, "split it", "refine", "/o");
+  expect(refine).toContain("<ckanban-tickets>");
+  expect(refine).toContain("list_tickets");
+  expect(chatPrompt(t, "hi", "act", "/o")).not.toContain("ckanban-tickets");
+  expect(firstRunPrompt(t, { isGit: true, outputDir: "/o" })).not.toContain("ckanban-tickets");
+});

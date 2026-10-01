@@ -336,3 +336,17 @@ test("schedule edits from a board run are credited to its ticket", async () => {
   const h = (await (await fetch(`${url}/${s.id}/history`)).json()) as any[];
   expect(h.map((e) => [e.action, e.by])).toEqual([["updated", "user"], ["created", { ticketId: "t_20261001_wxyz" }]]);
 });
+
+test("tickets created from a planner keep parentId; unknown parent is rejected", async () => {
+  const path = tempDir("ck-parent-");
+  const p = (await (await fetch(`${base}/api/profiles`, json("POST", { name: "Parent Proj", path }))).json()) as any;
+  const tickets = `${base}/api/profiles/${p.slug}/tickets`;
+  const planner = (await (await fetch(tickets, json("POST", { title: "Plan" }))).json()) as any;
+  let r = await fetch(tickets, json("POST", { title: "Child", body: "b", status: "backlog", parentId: planner.id }));
+  expect(r.status).toBe(201);
+  const child = (await r.json()) as any;
+  expect(child.parentId).toBe(planner.id);
+  expect(child.status).toBe("backlog");
+  r = await fetch(tickets, json("POST", { title: "Orphan", parentId: "t_nope" }));
+  expect(r.status).toBe(400);
+});

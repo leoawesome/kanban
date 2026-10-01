@@ -45,6 +45,8 @@ export interface Ticket {
   notice?: string | null;
   /** Set on tickets created by a schedule (see Schedule). */
   scheduleId?: string | null;
+  /** Planner ticket whose Planning chat proposed this one. Missing on most tickets. */
+  parentId?: string | null;
   /** Chat messages sent while Claude was working that it has not read yet, oldest first. */
   queued?: QueuedMessage[];
   createdAt: string;

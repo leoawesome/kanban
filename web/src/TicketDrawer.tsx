@@ -78,15 +78,20 @@ function usePanelWidth() {
 }
 
 /** Ticket view: details on the left, the chat with Claude filling the right side. */
-export function TicketDrawer({ profile, ticket, onClose }: {
+export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose }: {
   profile: Profile;
   ticket: Ticket;
+  /** The board's tickets, for the planner/child links. */
+  tickets: Ticket[];
+  onOpenTicket: (id: string) => void;
   onClose: () => void;
 }) {
   // Errors from actions in this ticket show here, next to what failed, not in the page's top strip.
   const [panelError, setPanelError] = useState<string | null>(null);
   const onError = (msg: string) => setPanelError(msg);
   const slug = profile.slug;
+  const parent = ticket.parentId ? tickets.find((t) => t.id === ticket.parentId) : undefined;
+  const children = tickets.filter((t) => t.parentId === ticket.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const [title, setTitle] = useState(ticket.title);
   const [body, setBody] = useState(ticket.body);
   const [editing, setEditing] = useState(false);
@@ -272,6 +277,31 @@ export function TicketDrawer({ profile, ticket, onClose }: {
                 onChange={(mode) => act(() => api.updateTicket(slug, ticket.id, { mode }))} />
             </div>
 
+            {ticket.parentId && (
+              <div className="field-row">
+                <span className="field-key" title="The planner ticket whose chat proposed this one">From</span>
+                {parent ? (
+                  <button className="link-btn ticket-link" onClick={() => onOpenTicket(parent.id)}>{parent.title}</button>
+                ) : (
+                  <span className="muted small">Planner ticket was deleted</span>
+                )}
+              </div>
+            )}
+
+            {children.length > 0 && (
+              <section className="detail-section">
+                <h4>Tickets from this plan</h4>
+                <ul className="child-tickets">
+                  {children.map((c) => (
+                    <li key={c.id}>
+                      <button className="link-btn ticket-link" onClick={() => onOpenTicket(c.id)}>{c.title}</button>
+                      <span className="badge">{COLUMNS.find((x) => x.id === c.status)?.label ?? c.status}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
             <section className="detail-section">
               <div className="section-head">
                 <h4>Description</h4>
@@ -371,7 +401,7 @@ export function TicketDrawer({ profile, ticket, onClose }: {
             {tab === "outputs" ? (
               <div className="panel-scroll"><Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} /></div>
             ) : (
-              <Chat slug={slug} ticket={ticket} onError={onError} />
+              <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError} />
             )}
           </div>
         </div>

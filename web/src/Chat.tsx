@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { api, subscribe, type SessionEntry, type Ticket } from "./api";
 import { ArrowDownIcon, CloseIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
+import { NewTicketsCard } from "./NewTicketsCard";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
 import { draftKey, formKey } from "./drafts";
@@ -32,7 +33,9 @@ function liveView(text: string): { text: string; preparing: string | null } {
   const rest = text.slice(cut);
   return {
     text: visible,
-    preparing: rest.startsWith("<ckanban-questions") ? "Preparing questions…" : rest.startsWith("<ckanban-ticket") ? "Preparing ticket proposal…" : null,
+    preparing: rest.startsWith("<ckanban-questions") ? "Preparing questions…"
+      : rest.startsWith("<ckanban-tickets") ? "Preparing tickets…"
+      : rest.startsWith("<ckanban-ticket") ? "Preparing ticket proposal…" : null,
   };
 }
 
@@ -73,7 +76,14 @@ export function useStop(slug: string, ticket: Ticket, working: boolean, onError:
   return { stopping, stop };
 }
 
-export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; onError: (m: string) => void }) {
+export function Chat({ slug, ticket, tickets, onOpenTicket, onError }: {
+  slug: string;
+  ticket: Ticket;
+  /** The board's tickets, to tell which proposed new tickets already exist. */
+  tickets: Ticket[];
+  onOpenTicket: (id: string) => void;
+  onError: (m: string) => void;
+}) {
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Scrolled up: offer a jump back down; "fresh" = something new arrived meanwhile.
@@ -213,6 +223,16 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
 
   const empty = page !== null && !loadError && entries.length === 0 && !pending.length && !queued.length && !running;
 
+  const childFor = (d: { title: string }) => tickets.find((t) => t.parentId === ticket.id && t.title === d.title);
+  const createChild = async (d: { title: string; description: string }) => {
+    try {
+      return await api.createTicket(slug, { title: d.title, body: d.description, status: "backlog", mode: "interview", parentId: ticket.id });
+    } catch (err: any) {
+      onError(err.message);
+      return null;
+    }
+  };
+
   const applyProposal = async (p: { title: string; description: string }) => {
     const before = { title: ticket.title, body: ticket.body };
     try {
@@ -302,6 +322,9 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
               )}
               {e.proposal && (
                 <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)} onApply={() => applyProposal(e.proposal!)} />
+              )}
+              {e.newTickets && (
+                <NewTicketsCard drafts={e.newTickets} created={childFor} onCreate={createChild} onOpen={onOpenTicket} />
               )}
               {e.moved === "planning" && (
                 <div className="chat-moved">

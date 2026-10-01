@@ -110,6 +110,9 @@ export function createServer(deps: ServerDeps) {
     if (!t) throw new HttpError(404, `ticket ${id} not found`);
     return t;
   };
+  // Only read when a planner has proposed tickets, so listing the board stays cheap.
+  const childTitles = (slug: string, id: string) =>
+    new Set(store.listTickets(slug).filter((c) => c.parentId === id).map((c) => c.title));
   const view = (p: Profile, t: Ticket) => {
     const running = board.isRunning(p.slug, t.id);
     const session = t.sessionId ? sessions.summary(t.sessionId) : null;
@@ -120,7 +123,7 @@ export function createServer(deps: ServerDeps) {
       session,
       /** Linked session is open in a terminal right now (board chat still works, UI warns). */
       terminalOpen: deps.terminals?.isOpen(p.slug, t.id) ?? false,
-      attention: attentionFor(t, session, running),
+      attention: attentionFor(t, session, running, session?.pendingNewTickets.length ? childTitles(p.slug, t.id) : undefined),
     };
   };
 
@@ -422,7 +425,9 @@ export function createServer(deps: ServerDeps) {
         if (!title) throw new HttpError(400, "title is required");
         const status: Status = STATUSES.includes(b.status) ? b.status : "backlog";
         const mode = b.mode === "auto" ? "auto" : "interview";
-        let t = await board.createTicket(slug, { title, body: String(b.body ?? ""), status: b.sessionId ? "backlog" : status, mode });
+        const parentId = typeof b.parentId === "string" && b.parentId ? b.parentId : undefined;
+        if (parentId && !store.getTicket(slug, parentId)) throw new HttpError(400, `parent ticket ${parentId} not found`);
+        let t = await board.createTicket(slug, { title, body: String(b.body ?? ""), status: b.sessionId ? "backlog" : status, mode, parentId });
         if (b.sessionId) {
           try {
             await board.linkSession(slug, t.id, String(b.sessionId));

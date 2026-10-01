@@ -94,3 +94,11 @@ test("corrupt ticket listed with error", () => {
   const bad = list.find((t) => t.id === "t_bad")!;
   expect(bad.error).toStartWith("corrupt");
 });
+
+test("parentId round-trips; tickets without it still load", () => {
+  const planner = store.createTicket("demo", { title: "plan", body: "", status: "planning" });
+  const child = store.createTicket("demo", { title: "child", body: "b", status: "backlog", parentId: planner.id });
+  expect(store.getTicket("demo", child.id)!.parentId).toBe(planner.id);
+  expect(store.getTicket("demo", planner.id)!.parentId).toBeUndefined();
+  expect(readFileSync(store.ticketPath("demo", planner.id), "utf8")).not.toContain("parentId");
+});

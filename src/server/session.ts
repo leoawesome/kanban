@@ -33,6 +33,8 @@ export interface SessionEntry {
   questions?: Question[];
   /** Improved title/description Claude proposed (rendered with an Apply button). */
   proposal?: TicketProposal;
+  /** New tickets Claude proposed splitting the work into (rendered with Create buttons). */
+  newTickets?: TicketProposal[];
   /** Claude asked the board to move the ticket (a planning-only request arrived in Review). */
   moved?: "planning";
 }
@@ -43,6 +45,7 @@ export const MOVE_TO_PLANNING_RE = /<ckanban-move\s+to="planning"\s*\/?>(?:\s*<\
 const CONTEXT_TAG = "<ckanban-context";
 const QUESTIONS_RE = /<ckanban-questions>([\s\S]*?)<\/ckanban-questions>/;
 const TICKET_RE = /<ckanban-ticket>([\s\S]*?)<\/ckanban-ticket>/;
+const TICKETS_RE = /<ckanban-tickets>([\s\S]*?)<\/ckanban-tickets>/;
 
 function parseQuestions(json: string): Question[] | null {
   try {
@@ -74,8 +77,22 @@ function parseProposal(json: string): TicketProposal | null {
   }
 }
 
-/** Split an assistant text block into visible text + structured questions/proposal. */
-function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" | "proposal" | "moved"> {
+function parseNewTickets(json: string): TicketProposal[] | null {
+  try {
+    const v = JSON.parse(json);
+    if (!Array.isArray(v)) return null;
+    const ts = v.map((x: any) => ({
+      title: typeof x?.title === "string" ? x.title.trim() : "",
+      description: typeof x?.description === "string" ? x.description.trim() : "",
+    })).filter((x) => x.title);
+    return ts.length ? ts : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Split an assistant text block into visible text + structured questions/proposal/new tickets. */
+function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" | "proposal" | "newTickets" | "moved"> {
   let out = text;
   let moved: "planning" | undefined;
   if (MOVE_TO_PLANNING_RE.test(out)) {
@@ -96,7 +113,16 @@ function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" |
     proposal = parsedT;
     out = out.replace(t[0], "");
   }
-  return { text: out.trim(), ...(questions ? { questions } : {}), ...(proposal ? { proposal } : {}), ...(moved ? { moved } : {}) };
+  const n = out.match(TICKETS_RE);
+  const newTickets = n ? parseNewTickets(n[1].trim()) : null;
+  if (n && newTickets) out = out.replace(n[0], "");
+  return {
+    text: out.trim(),
+    ...(questions ? { questions } : {}),
+    ...(proposal ? { proposal } : {}),
+    ...(newTickets ? { newTickets } : {}),
+    ...(moved ? { moved } : {}),
+  };
 }
 
 export interface SessionArtifact {
@@ -120,6 +146,8 @@ export interface ParsedSession {
   openQuestions: number;
   /** Latest ticket proposal since the user's last message. */
   pendingProposal: TicketProposal | null;
+  /** Latest proposed new tickets since the user's last message (some may already be created). */
+  pendingNewTickets: TicketProposal[];
 }
 
 /** What the board card and ticket header need; sent over SSE. */
@@ -130,6 +158,7 @@ export interface SessionSummary {
   updatedAt: string;
   openQuestions: number;
   pendingProposal: TicketProposal | null;
+  pendingNewTickets: TicketProposal[];
 }
 
 interface Dirs {
@@ -256,9 +285,10 @@ export function parseSession(raw: string): ParsedSession {
     });
   }
 
-  const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal));
+  const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal || e.newTickets));
   const lastText = !last ? "" : last.text
-    || (last.questions ? `Asked ${last.questions.length} question${last.questions.length > 1 ? "s" : ""}` : "Proposed an updated ticket");
+    || (last.questions ? `Asked ${last.questions.length} question${last.questions.length > 1 ? "s" : ""}`
+      : last.newTickets ? `Proposed ${last.newTickets.length} new ticket${last.newTickets.length > 1 ? "s" : ""}` : "Proposed an updated ticket");
   return {
     title: customTitle ?? aiTitle,
     entries,
@@ -268,7 +298,7 @@ export function parseSession(raw: string): ParsedSession {
   };
 }
 
-function pendingSince(entries: SessionEntry[]): Pick<ParsedSession, "openQuestions" | "pendingProposal"> {
+function pendingSince(entries: SessionEntry[]): Pick<ParsedSession, "openQuestions" | "pendingProposal" | "pendingNewTickets"> {
   let lastUser = -1;
   entries.forEach((e, i) => {
     if (e.role === "user" && e.kind === "text") lastUser = i;
@@ -277,6 +307,7 @@ function pendingSince(entries: SessionEntry[]): Pick<ParsedSession, "openQuestio
   return {
     openQuestions: after.reduce((n, e) => n + (e.questions?.length ?? 0), 0),
     pendingProposal: after.findLast((e) => e.proposal)?.proposal ?? null,
+    pendingNewTickets: after.findLast((e) => e.newTickets)?.newTickets ?? [],
   };
 }
 
@@ -345,7 +376,7 @@ export class SessionCache {
     } catch {}
     return {
       title: p.title, lastMessage: p.lastMessage, artifacts: p.artifacts, updatedAt,
-      openQuestions: p.openQuestions, pendingProposal: p.pendingProposal,
+      openQuestions: p.openQuestions, pendingProposal: p.pendingProposal, pendingNewTickets: p.pendingNewTickets,
     };
   }
 }

@@ -513,6 +513,13 @@ textarea { resize: vertical; font-size: 13.5px; }
 .proposal-title { font-size: 15px; font-weight: 650; }
 .proposal-body { font-size: 13px; border-top: 1px solid var(--border); padding-top: 6px; }
 .proposal-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.new-ticket { border-top: 1px solid var(--border); padding-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.new-ticket-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.new-ticket-title { font-weight: 600; text-align: left; color: var(--text); }
+.new-ticket.applied .new-ticket-title { color: var(--muted); }
+.child-tickets { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.child-tickets li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ticket-link { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 .body-view.clamped { max-height: 180px; overflow: hidden; position: relative; }
 .body-view.clamped::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 60px; background: linear-gradient(transparent, var(--surface)); pointer-events: none; }
