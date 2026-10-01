@@ -217,9 +217,15 @@ export function parseSession(raw: string): ParsedSession {
     }
     if (ev.type === "custom-title" && typeof ev.customTitle === "string") customTitle = ev.customTitle;
     else if (ev.type === "ai-title" && typeof ev.aiTitle === "string") aiTitle = ev.aiTitle;
-    if ((ev.type !== "user" && ev.type !== "assistant") || ev.isSidechain) continue;
     const at = typeof ev.timestamp === "string" ? ev.timestamp : "";
     const uuid = typeof ev.uuid === "string" ? ev.uuid : `${entries.length}`;
+    // A message sent while Claude was working is saved as an attachment to the running turn, not a user message.
+    if (ev.type === "attachment" && ev.attachment?.type === "queued_command" && ev.attachment.commandMode === "prompt" && !ev.isSidechain) {
+      const u = userText(ev.attachment.prompt);
+      if (u) entries.push({ uuid, at, role: "user", kind: u.kind, text: u.text });
+      continue;
+    }
+    if ((ev.type !== "user" && ev.type !== "assistant") || ev.isSidechain) continue;
     const content = ev.message?.content;
 
     if (ev.type === "user") {

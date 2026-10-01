@@ -133,6 +133,24 @@ test("parseSession hides board instructions and extracts questions + proposals",
   expect(s.lastMessage!.text).toBe("<ckanban-questions>not json</ckanban-questions>");
 });
 
+test("parseSession shows messages sent mid-turn (queued_command attachments) as user messages", () => {
+  const queued = (prompt: unknown, at: string, commandMode = "prompt") =>
+    L({ type: "attachment", uuid: `q${at}`, timestamp: at, attachment: { type: "queued_command", prompt, commandMode } });
+  const raw = [
+    user("Build it", "2026-10-01T02:00:00Z"),
+    asst([{ type: "tool_use", id: "t1", name: "Bash", input: { command: "sleep 5" } }], "2026-10-01T02:00:01Z"),
+    queued([{ type: "text", text: "Is it cron?\n\n<ckanban-context note=\"\">\n(Sent while you were working.)\n</ckanban-context>" }], "2026-10-01T02:00:02Z"),
+    queued("<task-notification>\n<task-id>x</task-id>\n</task-notification>", "2026-10-01T02:00:03Z", "task-notification"),
+    asst([{ type: "text", text: "Done. Your question: it is the daemon's own timer." }], "2026-10-01T02:00:04Z"),
+  ].join("\n");
+  expect(parseSession(raw).entries.map((e) => [e.role, e.kind, e.text])).toEqual([
+    ["user", "text", "Build it"],
+    ["assistant", "tool", "Bash: sleep 5"],
+    ["user", "text", "Is it cron?"],
+    ["assistant", "text", "Done. Your question: it is the daemon's own timer."],
+  ]);
+});
+
 test("parseSession: open questions and pending proposal reset after the user replies", () => {
   const q = '<ckanban-questions>[{"question":"A?","options":[{"label":"x"}]},{"question":"B?","options":[{"label":"y"}]}]</ckanban-questions>';
   const p = '<ckanban-ticket>{"title":"T2","description":"D2"}</ckanban-ticket>';

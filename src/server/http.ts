@@ -417,6 +417,16 @@ export function createServer(deps: ServerDeps) {
       const t = await board.chat(slug, id, text);
       return json(view(profile, t), 202);
     }
+    // A message Stop left unsent: POST .../queued/<msgId> sends it, DELETE discards it.
+    if (action === "queued" && parts[5] && (m === "POST" || m === "DELETE")) {
+      try {
+        const t = m === "POST" ? await board.sendQueued(slug, id, parts[5]) : board.discardQueued(slug, id, parts[5]);
+        return json(view(profile, t), m === "POST" ? 202 : 200);
+      } catch (e) {
+        if (e instanceof ConflictError) throw e;
+        throw new HttpError(404, (e as Error).message);
+      }
+    }
     if (m === "POST" && action === "link-session") {
       const b = await body(req);
       try {

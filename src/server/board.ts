@@ -12,7 +12,7 @@ import { parseResult } from "./result";
 import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
-import type { Status, Ticket, TicketMode } from "./types";
+import type { QueuedMessage, Status, Ticket, TicketMode } from "./types";
 import { nowIso, slugify } from "./util";
 
 export interface BoardOptions {
@@ -33,8 +33,17 @@ interface ActiveRun {
   stopRequested: boolean;
   /** Set for runs started from the ticket chat (not the Ready queue). */
   chat?: { text: string; mode: ChatMode };
-  /** Chat messages sent while running that Claude has not been handed yet (run still starting, or finishing). */
-  queued: string[];
+  /** Queued messages (ticket.queued) written to this claude process, keyed by id, with the text it was given. */
+  inFlight: Map<string, string>;
+  /** Queued message this chat run was started with; it leaves the queue once Claude reads the prompt. */
+  promptMsgId?: string;
+}
+
+function replayText(ev: any): string | null {
+  if (ev?.type !== "user" || !ev.isReplay) return null;
+  const c = ev.message?.content;
+  if (typeof c === "string") return c;
+  return Array.isArray(c) ? c.map((b: any) => (b?.type === "text" ? b.text : "")).join("") : null;
 }
 
 /** Backlog/Planning chats refine the ticket (read-only); everywhere else Claude acts on the message. */
@@ -124,16 +133,58 @@ export class Board {
     const active = this.runs.get(this.key(slug, id));
     if (active) {
       if (active.stopRequested || this.shuttingDown) throw new ConflictError("Claude is stopping; send your message once it has stopped");
-      if (!this.steer(active, text)) active.queued.push(text);
-      return t;
+      // Saved on the ticket until Claude reads it, so closing the chat, Stop or a restart can't lose it.
+      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued" };
+      this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
+      this.steer(active, msg);
+      return this.store.getTicket(slug, id)!;
     }
     this.start(slug, id, { text, mode: chatModeFor(t.status) });
     return this.store.getTicket(slug, id)!;
   }
 
-  /** Hand a message to the live claude process; false when there is none to take it. */
-  private steer(run: ActiveRun, text: string): boolean {
-    return !!run.handle?.send(localizeImages(steerPrompt(text), this.store.attachmentsDir));
+  /** Send a message that was left unsent by Stop, as if the user typed it now. */
+  async sendQueued(slug: string, id: string, msgId: string): Promise<Ticket> {
+    const msg = this.store.getTicket(slug, id)?.queued?.find((m) => m.id === msgId);
+    if (!msg) throw new Error("message not found");
+    if (msg.state !== "unsent") throw new ConflictError("message is already on its way to Claude");
+    this.dropQueued(slug, id, [msgId]);
+    return this.chat(slug, id, msg.text);
+  }
+
+  discardQueued(slug: string, id: string, msgId: string): Ticket {
+    const msg = this.store.getTicket(slug, id)?.queued?.find((m) => m.id === msgId);
+    if (!msg) throw new Error("message not found");
+    if (msg.state !== "unsent") throw new ConflictError("message is already on its way to Claude");
+    return this.dropQueued(slug, id, [msgId]);
+  }
+
+  private dropQueued(slug: string, id: string, ids: string[]): Ticket {
+    const t = this.store.getTicket(slug, id)!;
+    return this.patch(slug, id, { queued: (t.queued ?? []).filter((m) => !ids.includes(m.id)) });
+  }
+
+  /** Hand a queued message to the live claude process; false when there is none to take it yet. */
+  private steer(run: ActiveRun, msg: QueuedMessage): boolean {
+    if (run.inFlight.has(msg.id) || run.promptMsgId === msg.id) return true;
+    const text = localizeImages(steerPrompt(msg.text), this.store.attachmentsDir);
+    if (!run.handle?.send(text)) return false;
+    run.inFlight.set(msg.id, text);
+    return true;
+  }
+
+  /** Messages Claude has not read yet, waiting to be handed to a run. */
+  private waiting(slug: string, id: string): QueuedMessage[] {
+    return (this.store.getTicket(slug, id)?.queued ?? []).filter((m) => m.state === "queued");
+  }
+
+  /** Claude echoed a user message back: it has read it, so it leaves the queue. */
+  private delivered(run: ActiveRun, text: string) {
+    let msgId = [...run.inFlight].find(([, sent]) => sent === text)?.[0];
+    if (msgId) run.inFlight.delete(msgId);
+    // Anything else echoed back is the run's own prompt.
+    else if (run.promptMsgId) [msgId, run.promptMsgId] = [run.promptMsgId, undefined];
+    if (msgId) this.dropQueued(run.slug, run.id, [msgId]);
   }
 
   /** Entering Planning means "shape this with Claude": start the interview once, without a click. */
@@ -146,8 +197,10 @@ export class Board {
     this.start(slug, id, { text: "", mode: "refine" });
   }
 
-  private start(slug: string, id: string, chat?: ActiveRun["chat"]) {
-    const run: ActiveRun = { slug, id, handle: null, promise: Promise.resolve(), targetStatus: null, stopRequested: false, chat, queued: [] };
+  private start(slug: string, id: string, chat?: ActiveRun["chat"], promptMsgId?: string) {
+    const run: ActiveRun = {
+      slug, id, handle: null, promise: Promise.resolve(), targetStatus: null, stopRequested: false, chat, inFlight: new Map(), promptMsgId,
+    };
     this.runs.set(this.key(slug, id), run);
     this.begin(run);
     run.promise = this.execute(run)
@@ -176,10 +229,20 @@ export class Board {
   /** One claude run, then a chat reply for each message that came in too late for it. */
   private async execute(run: ActiveRun): Promise<void> {
     await this.executeOnce(run);
-    while (run.queued.length && !run.stopRequested && !this.shuttingDown) {
+    for (;;) {
+      if (this.shuttingDown) return; // queue stays on the ticket; recover() delivers it
       const t = this.store.getTicket(run.slug, run.id);
       if (!t) return;
-      run.chat = { text: run.queued.shift()!, mode: chatModeFor(t.status) };
+      const next = this.waiting(run.slug, run.id)[0];
+      if (!next) return;
+      // Stopped, or the last reply could not even start: keep them for the user to send or discard.
+      if (run.stopRequested || run.promptMsgId === next.id) {
+        this.patch(run.slug, run.id, { queued: (t.queued ?? []).map((m) => (m.state === "queued" ? { ...m, state: "unsent" } : m)) });
+        return;
+      }
+      run.chat = { text: next.text, mode: chatModeFor(t.status) };
+      run.promptMsgId = next.id;
+      run.inFlight = new Map();
       run.handle = null;
       this.begin(run);
       await this.executeOnce(run);
@@ -258,6 +321,8 @@ export class Board {
           } else if (!draftTimer) draftTimer = setTimeout(emitDraft, DRAFT_THROTTLE_MS);
         }
         if (ev?.type === "stream_event") return;
+        const read = replayText(ev);
+        if (read !== null) this.delivered(run, read);
         this.store.appendActivity(slug, id, runNo, ev);
         this.bus.emit({ type: "activity", profile: slug, id, run: runNo, event: ev });
         const s = summarizeEvent(ev);
@@ -273,8 +338,8 @@ export class Board {
       },
     });
 
-    // Messages sent while the run was starting up.
-    for (const text of run.queued.splice(0)) if (!this.steer(run, text)) run.queued.push(text);
+    // Messages sent while the run was starting up, or left over from a run the daemon restarted.
+    for (const msg of this.waiting(slug, id)) this.steer(run, msg);
 
     const out = await run.handle.done;
     if (draftTimer) clearTimeout(draftTimer);
@@ -447,7 +512,7 @@ export class Board {
 
   /** Images pasted into the ticket: its description, comments and chat (the Claude session transcript). */
   private attachmentsOf(slug: string, t: Ticket): string[] {
-    const texts = [t.body, ...this.store.listComments(slug, t.id).map((c) => c.text)];
+    const texts = [t.body, ...this.store.listComments(slug, t.id).map((c) => c.text), ...(t.queued ?? []).map((m) => m.text)];
     const file = t.sessionId ? claudeSessionFile(t.sessionId) : null;
     if (file) {
       try {
@@ -523,6 +588,12 @@ export class Board {
         this.patch(p.slug, t.id, { status: "ready" });
       }
       this.dispatch(p.slug);
+      // Messages a restarted chat run never got to: answer them in a chat reply now.
+      for (const t of this.store.listTickets(p.slug)) {
+        const next = this.waiting(p.slug, t.id)[0];
+        if (!next || this.isRunning(p.slug, t.id) || t.status === "ready" || t.error?.startsWith("corrupt")) continue;
+        this.start(p.slug, t.id, { text: next.text, mode: chatModeFor(t.status) }, next.id);
+      }
     }
   }
 

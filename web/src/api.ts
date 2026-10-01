@@ -79,6 +79,8 @@ export interface Ticket {
   error: string | null;
   /** Created by this schedule. */
   scheduleId?: string | null;
+  /** Messages sent while Claude was working that it has not read yet; "unsent" ones were cut off by Stop. */
+  queued?: QueuedMessage[];
   createdAt: string;
   updatedAt: string;
   body: string;
@@ -89,6 +91,13 @@ export interface Ticket {
   session?: SessionSummary | null;
   /** Why the ticket is waiting on you ("Your turn"), computed by the server. */
   attention?: { kind: AttentionKind; label: string } | null;
+}
+
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  at: string;
+  state: "queued" | "unsent";
 }
 
 export interface SessionMessage {
@@ -305,6 +314,8 @@ export const api = {
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),
   addComment: (slug: string, id: string, text: string) => req<Comment>("POST", `${t(slug, id)}/comments`, { text }),
   chat: (slug: string, id: string, text: string) => req<Ticket>("POST", `${t(slug, id)}/chat`, { text }),
+  sendQueued: (slug: string, id: string, msgId: string) => req<Ticket>("POST", `${t(slug, id)}/queued/${msgId}`),
+  discardQueued: (slug: string, id: string, msgId: string) => req<Ticket>("DELETE", `${t(slug, id)}/queued/${msgId}`),
   conversation: (slug: string, id: string, before?: number) =>
     req<{ entries: SessionEntry[]; start: number; total: number; title: string | null }>(
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),

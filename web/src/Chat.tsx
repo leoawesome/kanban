@@ -62,10 +62,9 @@ export function useStop(slug: string, ticket: Ticket, working: boolean, onError:
 
 export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; onError: (m: string) => void }) {
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
-  // Sent messages not yet in the session file; while Claude works they wait for its next step.
+  // Sent messages not yet in the session file (the server's queue covers ones Claude hasn't read).
   const [pending, setPending] = useState<string[]>([]);
-  const pendingRef = useRef(pending);
-  pendingRef.current = pending;
+  const queued = ticket.queued ?? [];
   const [draft, setDraft] = useState("");
   const images = useImagePaste(setDraft);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -79,18 +78,14 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const { stopping, stop } = useStop(slug, ticket, running, onError);
   const refine = REFINE(ticket.status);
 
-  const loadTail = useCallback(async (): Promise<SessionEntry[]> => {
-    if (!ticket.sessionId) {
-      setPage({ entries: [], start: 0 });
-      return [];
-    }
+  const loadTail = useCallback(async () => {
+    if (!ticket.sessionId) return setPage({ entries: [], start: 0 });
     const r = await api.conversation(slug, ticket.id);
     setPage((prev) => {
       if (!prev || r.start <= prev.start) return { entries: r.entries, start: r.start };
       const idx = prev.entries.findIndex((e) => e.uuid === r.entries[0]?.uuid);
       return idx >= 0 ? { entries: [...prev.entries.slice(0, idx), ...r.entries], start: prev.start } : { entries: r.entries, start: r.start };
     });
-    return r.entries;
   }, [slug, ticket.id, ticket.sessionId]);
 
   useEffect(() => {
@@ -115,20 +110,17 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   }), [slug, ticket.id, loadTail]);
 
   // A run just finished: pick up the final message even if no more events arrive.
-  // Stopped with messages Claude never got to: put them back in the box instead of losing them.
-  const stopped = ticket.outcome === "stopped";
   useEffect(() => {
-    if (running) return;
-    loadTail()
-      .then((tail) => {
-        if (!stopped) return;
-        const undelivered = pendingRef.current.filter((p) => !delivered(tail, p));
-        setPending([]);
-        if (undelivered.length) setDraft((d) => [...undelivered, d].filter((x) => x.trim()).join("\n\n"));
-      })
-      .catch(() => {})
-      .finally(() => setLive(""));
+    if (!running) loadTail().catch(() => {}).finally(() => setLive(""));
   }, [running]);
+
+  // Claude read a queued message: keep its bubble until the session file shows it, so it doesn't blink out.
+  const prevQueued = useRef(queued);
+  useEffect(() => {
+    const read = prevQueued.current.filter((q) => q.state === "queued" && !queued.some((n) => n.id === q.id)).map((q) => q.text);
+    prevQueued.current = queued;
+    if (read.length) setPending((ps) => [...ps, ...read]);
+  }, [ticket.queued]);
 
   const entries = page?.entries ?? [];
   // Drop optimistic bubbles once the session file contains the message.
@@ -153,7 +145,9 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
     setPending((ps) => [...ps, t]);
     setDraft("");
     try {
-      await api.chat(slug, ticket.id, t);
+      const r = await api.chat(slug, ticket.id, t);
+      // Steering: the server queue now shows it.
+      if (r.queued?.some((q) => q.text === t)) setPending((ps) => ps.filter((p) => p !== t));
     } catch (e: any) {
       setPending((ps) => ps.filter((p) => p !== t));
       setDraft(t);
@@ -177,7 +171,7 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const isApplied = (p: { title: string; description: string }) =>
     (!p.title || p.title === ticket.title) && (!p.description || p.description.trim() === ticket.body.trim());
 
-  const empty = page !== null && entries.length === 0 && !pending.length && !running;
+  const empty = page !== null && entries.length === 0 && !pending.length && !queued.length && !running;
 
   return (
     <div className="chat">
@@ -269,10 +263,27 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
         {running && !live && (
           <div className="chat-typing"><span className="spinner" /> {ticket.lastActivity && ticket.lastActivity !== "Starting…" ? ticket.lastActivity : "Claude is working…"}</div>
         )}
-        {pending.map((p, i) => (
+        {pending.filter((p) => !queued.some((q) => q.text === p)).map((p, i) => (
           <div key={i} className="conv-msg user pending">
-            <div className="conv-head"><b>You</b><span className="muted small">{running ? "queued · Claude reads this at its next step" : "sending…"}</span></div>
+            <div className="conv-head"><b>You</b><span className="muted small">sending…</span></div>
             <Markdown text={p} />
+          </div>
+        ))}
+        {queued.map((q) => (
+          <div key={q.id} className={`conv-msg user pending${q.state === "unsent" ? " unsent" : ""}`}>
+            <div className="conv-head">
+              <b>You</b>
+              <span className="muted small">{q.state === "queued" ? "queued · Claude reads this at its next step" : "not sent · Claude was stopped before reading it"}</span>
+            </div>
+            <Markdown text={q.text} />
+            {q.state === "unsent" && (
+              <div className="queued-actions">
+                <button className="btn primary small" disabled={stopping}
+                  onClick={() => api.sendQueued(slug, ticket.id, q.id).catch((e) => onError(e.message))}>Send</button>
+                <button className="btn ghost small"
+                  onClick={() => api.discardQueued(slug, ticket.id, q.id).catch((e) => onError(e.message))}>Discard</button>
+              </div>
+            )}
           </div>
         ))}
         {!running && ticket.error && !ticket.error.startsWith("corrupt") && (

@@ -41,6 +41,8 @@ export interface Ticket {
   error: string | null;
   /** Set on tickets created by a schedule (see Schedule). */
   scheduleId?: string | null;
+  /** Chat messages sent while Claude was working that it has not read yet, oldest first. */
+  queued?: QueuedMessage[];
   createdAt: string;
   updatedAt: string;
   body: string;
@@ -74,6 +76,14 @@ export type ScheduleHistoryEntry =
   | { at: string; kind: "fired"; trigger: ScheduleTrigger; ticketId: string }
   | { at: string; kind: "skipped"; trigger: ScheduleTrigger; ticketId: string | null }
   | { at: string; kind: "error"; trigger: ScheduleTrigger; message: string };
+
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  at: string;
+  /** queued: Claude reads it at its next step. unsent: the run was stopped first; the user sends or discards it. */
+  state: "queued" | "unsent";
+}
 
 export interface Comment {
   id: string;

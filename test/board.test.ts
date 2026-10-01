@@ -470,6 +470,69 @@ test("chat is rejected while Claude is stopping", async () => {
   await expect(board.chat("p", t.id, "again")).rejects.toThrow(/stopping/);
 }, 15000);
 
+test("steering messages are saved on the ticket until Claude reads them", async () => {
+  await setup();
+  process.env.FAKE_STEP_MS = "300";
+  try {
+    const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+    await Bun.sleep(400);
+    const after = await board.chat("p", t.id, "also X");
+    expect(after.queued).toMatchObject([{ text: "also X", state: "queued" }]);
+    expect(store.getTicket("p", t.id)!.queued).toHaveLength(1);
+    await board.whenIdle();
+    expect(store.getTicket("p", t.id)!.queued).toEqual([]);
+    expect(replays(t.id).slice(1).map((m) => m.split("\n")[0])).toEqual(["also X"]);
+  } finally {
+    delete process.env.FAKE_STEP_MS;
+  }
+}, 15000);
+
+test("Stop keeps unread messages as unsent; send or discard them later", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await Bun.sleep(400);
+  await board.chat("p", t.id, "first");
+  await board.chat("p", t.id, "second");
+  board.stop("p", t.id);
+  await board.whenIdle();
+  const q = store.getTicket("p", t.id)!.queued!;
+  expect(q.map((m) => [m.text, m.state])).toEqual([["first", "unsent"], ["second", "unsent"]]);
+
+  board.discardQueued("p", t.id, q[1].id);
+  expect(store.getTicket("p", t.id)!.queued!.map((m) => m.text)).toEqual(["first"]);
+
+  process.env.FAKE_MODE = "ok";
+  await board.sendQueued("p", t.id, q[0].id);
+  await board.whenIdle();
+  expect(store.getTicket("p", t.id)!.queued).toEqual([]);
+  const calls = readArgs();
+  expect(calls.at(-1)!.prompt.startsWith("first")).toBe(true);
+  expect(() => board.discardQueued("p", t.id, q[0].id)).toThrow(/not found/);
+}, 15000);
+
+test("daemon restart keeps unread messages and delivers them after recovery", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  const work = await board.createTicket("p", { title: "work", body: "", status: "ready" });
+  await Bun.sleep(400);
+  await board.chat("p", work.id, "keep going with Y");
+  await board.shutdown();
+  expect(store.getTicket("p", work.id)!.queued).toMatchObject([{ text: "keep going with Y", state: "queued" }]);
+  // A chat reply that was cut off too, on a ticket recover() does not resume.
+  const chatTicket = await board.createTicket("p", { title: "chat", body: "", status: "review" });
+  store.updateTicket("p", chatTicket.id, { queued: [{ id: "m1", text: "what about Z?", at: new Date().toISOString(), state: "queued" }] });
+
+  process.env.FAKE_MODE = "ok";
+  board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async () => false });
+  board.recover();
+  await board.whenIdle();
+  expect(store.getTicket("p", work.id)!.queued).toEqual([]);
+  expect(replays(work.id).some((m) => m.startsWith("keep going with Y"))).toBe(true);
+  expect(store.getTicket("p", chatTicket.id)!.queued).toEqual([]);
+  expect(readArgs().some((c) => c.prompt?.startsWith("what about Z?"))).toBe(true);
+}, 20000);
+
 test("refine chat does not take a queue slot", async () => {
   await setup({ maxParallel: 1 });
   process.env.FAKE_MODE = "slow";
