@@ -97,6 +97,8 @@ export function App() {
   const [openId, setOpenId] = useState<string | null>(parseHash().ticket);
   // True when the open ticket was pushed onto browser history by us, so closing can go Back.
   const pushedOpen = useRef(false);
+  // Board shown before that push: going Back to a different board would leave the ticket's board.
+  const pushedFrom = useRef<string | null>(null);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -184,12 +186,14 @@ export function App() {
   const openTicket = useCallback((id: string, board = slug) => {
     if (!board) return;
     pushedOpen.current = true;
+    pushedFrom.current = slug;
     location.hash = hashFor(board, id);
   }, [slug]);
 
   const closeTicket = useCallback(() => {
-    if (pushedOpen.current) history.back();
+    if (pushedOpen.current && pushedFrom.current === slug) history.back();
     else {
+      pushedOpen.current = false;
       history.replaceState(null, "", hashFor(slug));
       setOpenId(null);
     }

@@ -82,7 +82,8 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   const composer = useRef<HTMLTextAreaElement>(null);
   useNow();
   // Sent messages not yet in the session file (the server's queue covers ones Claude hasn't read).
-  const [pending, setPending] = useState<string[]>([]);
+  // steer: sent while Claude was working, so it waits for the server queue instead of joining the timeline.
+  const [pending, setPending] = useState<{ text: string; steer: boolean }[]>([]);
   const queued = ticket.queued ?? [];
   // Unsent text survives closing the drawer, switching tickets and reloads.
   const [draft, setDraft] = usePersistentState(draftKey(slug, ticket.id), () => "", (v) => !v.trim(), (v) => typeof v === "string");
@@ -147,13 +148,13 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
   useEffect(() => {
     const read = prevQueued.current.filter((q) => q.state === "queued" && !queued.some((n) => n.id === q.id)).map((q) => q.text);
     prevQueued.current = queued;
-    if (read.length) setPending((ps) => [...ps, ...read]);
+    if (read.length) setPending((ps) => [...ps, ...read.map((text) => ({ text, steer: false }))]);
   }, [ticket.queued]);
 
   const entries = page?.entries ?? [];
   // Drop optimistic bubbles once the session file contains the message.
   useEffect(() => {
-    if (pending.some((p) => delivered(entries, p))) setPending((ps) => ps.filter((p) => !delivered(entries, p)));
+    if (pending.some((p) => delivered(entries, p.text))) setPending((ps) => ps.filter((p) => !delivered(entries, p.text)));
   }, [entries, pending]);
 
   useLayoutEffect(() => {
@@ -179,14 +180,14 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
     if (!t || stopping || images.uploading) return;
     images.clearError();
     stickToBottom.current = true;
-    setPending((ps) => [...ps, t]);
+    setPending((ps) => [...ps, { text: t, steer: running }]);
     setDraft("");
     try {
       const r = await api.chat(slug, ticket.id, t);
       // Steering: the server queue now shows it.
-      if (r.queued?.some((q) => q.text === t)) setPending((ps) => ps.filter((p) => p !== t));
+      if (r.queued?.some((q) => q.text === t)) setPending((ps) => ps.filter((p) => p.text !== t));
     } catch (e: any) {
-      setPending((ps) => ps.filter((p) => p !== t));
+      setPending((ps) => ps.filter((p) => p.text !== t));
       setDraft(t);
       onError(e.message);
     }
@@ -204,7 +205,9 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
     }
   };
 
-  const answeredAfter = (index: number) => entries.slice(index + 1).some((e) => e.role === "user" && e.kind === "text");
+  // A reply still on its way to the session file counts too, so the form doesn't offer "Send answers" again.
+  const replying = pending.some((p) => !p.steer);
+  const answeredAfter = (index: number) => replying || entries.slice(index + 1).some((e) => e.role === "user" && e.kind === "text");
   const isApplied = (p: { title: string; description: string }) =>
     (!p.title || p.title === ticket.title) && (!p.description || p.description.trim() === ticket.body.trim());
 
@@ -309,6 +312,12 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
             </div>
           );
         })}
+        {/* Replies sent while Claude wasn't working are part of the timeline: plain bubbles, before Claude's reply. */}
+        {pending.filter((p) => !p.steer).map((p, i) => (
+          <div key={i} className="conv-msg user">
+            <Markdown text={p.text} />
+          </div>
+        ))}
         {live && (
           <div className="conv-msg assistant live" aria-live="polite">
             <div className="conv-head"><b>Claude</b><span className="muted small">writing…</span></div>
@@ -319,10 +328,10 @@ export function Chat({ slug, ticket, onError }: { slug: string; ticket: Ticket; 
         {running && !live && (
           <div className="chat-typing"><span className="spinner" /> {ticket.lastActivity && ticket.lastActivity !== "Starting…" ? ticket.lastActivity : "Claude is working…"}</div>
         )}
-        {pending.filter((p) => !queued.some((q) => q.text === p)).map((p, i) => (
+        {pending.filter((p) => p.steer && !queued.some((q) => q.text === p.text)).map((p, i) => (
           <div key={i} className="conv-msg user pending">
             <div className="conv-head"><b>You</b><span className="muted small">sending…</span></div>
-            <Markdown text={p} />
+            <Markdown text={p.text} />
           </div>
         ))}
         {queued.map((q) => (
