@@ -25,6 +25,7 @@ export const FolderIcon = (p: IconProps) => svg(<path d="M2.5 4.3c0-.7.6-1.3 1.3
 export const FolderOpenIcon = (p: IconProps) => svg(<path d="M2.5 11.7V4.3c0-.7.6-1.3 1.3-1.3h2.6l1.4 1.5h4c.7 0 1.3.6 1.3 1.3V7M2.5 11.7L4.3 7.6c.2-.4.6-.6 1-.6h8.4c.5 0 .8.5.6.9L12.5 12c-.2.4-.6.6-1 .6H3.4c-.6 0-1-.5-.9-.9z" />, p);
 export const ChevronRightIcon = (p: IconProps) => svg(<path d="M6 3.5L10.5 8 6 12.5" />, p);
 export const ChevronDownIcon = (p: IconProps) => svg(<path d="M3.5 6L8 10.5 12.5 6" />, p);
+export const ChevronUpIcon = (p: IconProps) => svg(<path d="M3.5 10L8 5.5 12.5 10" />, p);
 export const ChevronLeftIcon = (p: IconProps) => svg(<path d="M10 3.5L5.5 8l4.5 4.5" />, p);
 export const ArrowDownIcon = (p: IconProps) => svg(<path d="M8 3v10M4 9l4 4 4-4" />, p);
 export const MoreIcon = (p: IconProps) => svg(<><circle cx="3.5" cy="8" r=".9" fill="currentColor" /><circle cx="8" cy="8" r=".9" fill="currentColor" /><circle cx="12.5" cy="8" r=".9" fill="currentColor" /></>, p);

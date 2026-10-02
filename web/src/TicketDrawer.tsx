@@ -4,7 +4,7 @@ import { outcomeBadge } from "./Card";
 import { BugReportDialog } from "./BugReportDialog";
 import { Chat, useStop } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { BugIcon, CheckIcon, CloseIcon, CopyIcon, ExternalIcon, FileTextIcon, SparkIcon } from "./icons";
+import { BugIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, CopyIcon, ExternalIcon, FileTextIcon, SparkIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { useFocusTrap, useLayer } from "./layers";
 import { ModeToggle } from "./ModeToggle";
@@ -79,13 +79,17 @@ function usePanelWidth() {
 }
 
 /** Ticket view: details on the left, the chat with Claude filling the right side. */
-export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose }: {
+export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, nav, slideIn = true }: {
   profile: Profile;
   ticket: Ticket;
   /** The board's tickets, for the planner/child links. */
   tickets: Ticket[];
   onOpenTicket: (id: string) => void;
   onClose: () => void;
+  /** The previous/next visible ticket in board order (null at the ends or when this one isn't on the board view). */
+  nav?: { prev: string | null; next: string | null; go: (id: string) => void };
+  /** Slide in when opened; off when stepping from the neighbouring ticket. */
+  slideIn?: boolean;
 }) {
   // Errors from actions in this ticket show here, next to what failed, not in the page's top strip.
   const [panelError, setPanelError] = useState<string | null>(null);
@@ -139,6 +143,25 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose }
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   const titleRef = useRef<HTMLInputElement>(null);
+  // Leaving for the neighbouring ticket: keep a title edit, and don't drop an unsaved description edit.
+  const step = (id: string | null | undefined) => {
+    if (!id || !nav || editing || confirmDelete || confirmStart || picking || reportingBug) return;
+    if (title !== ticket.title) saveTitle();
+    nav.go(id);
+  };
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  useEffect(() => {
+    // Alt+↑ / Alt+↓ open the previous / next ticket, also while typing.
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || e.isComposing) return;
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault();
+      stepRef.current(e.key === "ArrowUp" ? nav?.prev : nav?.next);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const working = ticket.status === "in_progress" || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
   const { stopping, stop } = useStop(slug, ticket, working, (m) => setPanelError(m));
@@ -217,7 +240,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose }
 
   return (
     <div className="drawer-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside ref={panelRef} className={`panel ${dragging ? "resizing" : ""}`} role="dialog" aria-modal="true" aria-label={ticket.title} style={{ width }} tabIndex={-1}>
+      <aside ref={panelRef} className={`panel ${dragging ? "resizing" : ""} ${slideIn ? "" : "no-slide"}`} role="dialog" aria-modal="true" aria-label={ticket.title} style={{ width }} tabIndex={-1}>
         <div className="drawer-resize" role="separator" aria-orientation="vertical" aria-label="Resize panel" tabIndex={0}
           title="Drag to resize · double-click to reset" {...handle} />
 
@@ -246,6 +269,14 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose }
             </span>
           )}
           {!att && outcomeBadge(ticket)}
+          {nav && (
+            <span className="ticket-nav">
+              <button className="icon-btn" disabled={!nav.prev || editing} onClick={() => step(nav.prev)} aria-label="Previous ticket"
+                title={editing ? "Save or cancel the description first" : "Previous ticket (Alt+↑)"}><ChevronUpIcon size={16} /></button>
+              <button className="icon-btn" disabled={!nav.next || editing} onClick={() => step(nav.next)} aria-label="Next ticket"
+                title={editing ? "Save or cancel the description first" : "Next ticket (Alt+↓)"}><ChevronDownIcon size={16} /></button>
+            </span>
+          )}
           <button className="icon-btn" onClick={onClose} aria-label="Close" title="Close (Esc)"><CloseIcon /></button>
         </header>
 
@@ -402,7 +433,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose }
               </button>
             </nav>
             {tab === "outputs" ? (
-              <div className="panel-scroll"><Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} /></div>
+              <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} /></div>
             ) : (
               <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError} />
             )}

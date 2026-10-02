@@ -215,3 +215,41 @@ test("parseSession: proposed tickets keep key and dependsOn", () => {
     { key: "ui", title: "UI", description: "", dependsOn: ["api"] },
   ]);
 });
+
+test("parseSession: chat blocks survive wrong, missing or quoted closing tags", () => {
+  const entry = (text: string) => parseSession(asst([{ type: "text", text }], "1")).entries[0];
+  const json = '{"title":"T","description":"D"}';
+  for (const text of [
+    `Here:\n<ckanban-ticket>${json}</ckanban-ticket>`,
+    `Here:\n<ckanban-ticket>${json}</parameter>`,
+    `Here:\n<ckanban-ticket>${json}`,
+    "Here:\n<ckanban-ticket>\n```json\n" + json + "\n```\n</ckanban-ticket>",
+  ]) {
+    const e = entry(text);
+    expect(e.proposal).toEqual({ title: "T", description: "D" });
+    expect(e.text).toBe("Here:");
+    expect(e.unreadable).toBeUndefined();
+  }
+  expect(entry(`<ckanban-ticket>${json}</ckanban-ticket>\n\nApply it, then move it to Ready.`).text).toBe("Apply it, then move it to Ready.");
+  // A closing tag and braces quoted inside the description don't end the block early.
+  const quoted = '{"title":"Parser","description":"Stop at </ckanban-ticket> {not here} or \\"]\\" either"}';
+  const q = entry(`<ckanban-ticket>${quoted}</ckanban-ticket> after`);
+  expect(q.proposal).toEqual({ title: "Parser", description: 'Stop at </ckanban-ticket> {not here} or "]" either' });
+  expect(q.text).toBe("after");
+  // ckanban-ticket never grabs a ckanban-tickets block.
+  const t = entry('<ckanban-tickets>[{"title":"A"}]</parameter>');
+  expect(t.newTickets).toEqual([{ title: "A", description: "" }]);
+  expect(t.proposal).toBeUndefined();
+});
+
+test("parseSession: unreadable chat blocks stay visible and are flagged", () => {
+  const entry = (text: string) => parseSession(asst([{ type: "text", text }], "1")).entries[0];
+  const bad = entry('<ckanban-ticket>{"title": "T", oops}</ckanban-ticket>');
+  expect(bad.proposal).toBeUndefined();
+  expect(bad.unreadable).toBe("proposal");
+  expect(bad.text).toContain("oops");
+  const cut = entry('<ckanban-questions>[{"question":"A?"');
+  expect(cut.unreadable).toBe("questions");
+  expect(entry("<ckanban-tickets>[{title: A}]</ckanban-tickets>").unreadable).toBe("tickets");
+  expect(entry("plain reply").unreadable).toBeUndefined();
+});

@@ -176,6 +176,8 @@ export interface SessionEntry {
   proposal?: { title: string; description: string };
   newTickets?: NewTicketDraft[];
   moved?: "planning";
+  /** A board block whose JSON couldn't be read (left visible as text). */
+  unreadable?: "questions" | "proposal" | "tickets";
 }
 
 export interface Comment {

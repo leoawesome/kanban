@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, subscribe, type NewTicketDraft, type SessionEntry, type Ticket } from "./api";
+import { autoGrow } from "./autoGrow";
 import { ArrowDownIcon, CloseIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { NewTicketsCard } from "./NewTicketsCard";
@@ -39,16 +40,9 @@ function liveView(text: string): { text: string; preparing: string | null } {
   };
 }
 
-const REFINE = (s: Ticket["status"]) => s === "backlog" || s === "planning";
+const UNREADABLE = { questions: "questions", proposal: "ticket proposal", tickets: "proposed tickets" } as const;
 
-/** Grows the textarea with its text (about 8 lines), then it scrolls. */
-function autoGrow(el: HTMLTextAreaElement | null) {
-  if (!el) return;
-  el.style.height = "auto";
-  const max = Math.min(window.innerHeight * 0.3, 8 * 22 + 8);
-  el.style.height = `${Math.min(el.scrollHeight, max)}px`;
-  el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
-}
+const REFINE = (s: Ticket["status"]) => s === "backlog" || s === "planning";
 
 // Image links reach the session as local file paths, so compare by file name.
 const norm = (s: string) => s.trim().replace(/\S*\/attachments\/([0-9a-f]{32}\.\w+)/g, "$1");
@@ -328,6 +322,11 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onError }: {
               )}
               {e.newTickets && (
                 <NewTicketsCard drafts={e.newTickets} created={childFor} onCreate={createChild} onOpen={onOpenTicket} />
+              )}
+              {e.unreadable && (
+                <div className="chat-unreadable" role="status">
+                  Couldn't read Claude's {UNREADABLE[e.unreadable]}. Ask it to resend.
+                </div>
               )}
               {e.moved === "planning" && (
                 <div className="chat-moved">

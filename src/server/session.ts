@@ -43,98 +43,123 @@ export interface SessionEntry {
   newTickets?: NewTicketDraft[];
   /** Claude asked the board to move the ticket (a planning-only request arrived in Review). */
   moved?: "planning";
+  /** A board block whose JSON couldn't be read (left visible as text; the chat says so). */
+  unreadable?: BlockKind;
 }
+
+export type BlockKind = "questions" | "proposal" | "tickets";
 
 /** Marker Claude adds when a Review message only asked for planning; the board moves the card. */
 export const MOVE_TO_PLANNING_RE = /<ckanban-move\s+to="planning"\s*\/?>(?:\s*<\/ckanban-move>)?/;
 
 const CONTEXT_TAG = "<ckanban-context";
-const QUESTIONS_RE = /<ckanban-questions>([\s\S]*?)<\/ckanban-questions>/;
-const TICKET_RE = /<ckanban-ticket>([\s\S]*?)<\/ckanban-ticket>/;
-const TICKETS_RE = /<ckanban-tickets>([\s\S]*?)<\/ckanban-tickets>/;
 
-function parseQuestions(json: string): Question[] | null {
-  try {
-    const v = JSON.parse(json);
-    if (!Array.isArray(v) || !v.length) return null;
-    const qs = v.map((q: any) => ({
-      question: String(q?.question ?? "").trim(),
-      multiSelect: !!q?.multiSelect,
-      options: (Array.isArray(q?.options) ? q.options : []).map((o: any) => ({
-        label: String(o?.label ?? "").trim(),
-        description: typeof o?.description === "string" && o.description ? o.description : undefined,
-        recommended: !!o?.recommended,
-      })).filter((o: QuestionOption) => o.label),
-    }));
-    return qs.every((q) => q.question) ? qs : null;
-  } catch {
-    return null;
+/** End index (exclusive) of the JSON object/array starting at `from`, or -1 when it never closes. */
+function jsonEnd(text: string, from: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === "\\") i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") {
+      if (--depth === 0) return i + 1;
+    }
   }
+  return -1;
 }
 
-function parseProposal(json: string): TicketProposal | null {
+/**
+ * Find a `<tag>` block and parse its JSON. The JSON's own end decides where the block stops, so a wrong or
+ * missing closing tag, or a closing tag quoted inside the JSON text, doesn't break it. A ```json fence around
+ * the JSON is fine. `raw` is the block's text (to remove it), `value` undefined when the JSON can't be read.
+ */
+function findBlock(text: string, tag: string): { raw: string; value: unknown } | null {
+  const open = `<${tag}>`;
+  const start = text.indexOf(open);
+  if (start < 0) return null;
+  const head = /^\s*(?:```(?:json)?\s*)?/.exec(text.slice(start + open.length))![0];
+  const from = start + open.length + head.length;
+  const end = text[from] === "{" || text[from] === "[" ? jsonEnd(text, from) : -1;
+  if (end < 0) return { raw: text.slice(start), value: undefined };
+  const tail = /^(?:\s*```)?(?:\s*<\/[\w-]+>)?/.exec(text.slice(end))![0];
+  let value: unknown;
   try {
-    const v = JSON.parse(json);
-    const title = typeof v?.title === "string" ? v.title.trim() : "";
-    const description = typeof v?.description === "string" ? v.description.trim() : "";
-    return title || description ? { title, description } : null;
-  } catch {
-    return null;
-  }
+    value = JSON.parse(text.slice(from, end));
+  } catch {}
+  return { raw: text.slice(start, end + tail.length), value };
 }
 
-function parseNewTickets(json: string): NewTicketDraft[] | null {
-  try {
-    const v = JSON.parse(json);
-    if (!Array.isArray(v)) return null;
-    const ts = v.map((x: any) => {
-      const d: NewTicketDraft = {
-        title: typeof x?.title === "string" ? x.title.trim() : "",
-        description: typeof x?.description === "string" ? x.description.trim() : "",
-      };
-      const key = typeof x?.key === "string" ? x.key.trim() : "";
-      if (key) d.key = key;
-      const deps = Array.isArray(x?.dependsOn) ? x.dependsOn.filter((k: unknown) => typeof k === "string" && k.trim()).map((k: string) => k.trim()) : [];
-      if (deps.length) d.dependsOn = deps;
-      return d;
-    }).filter((x) => x.title);
-    return ts.length ? ts : null;
-  } catch {
-    return null;
-  }
+function parseQuestions(v: any): Question[] | null {
+  if (!Array.isArray(v) || !v.length) return null;
+  const qs = v.map((q: any) => ({
+    question: String(q?.question ?? "").trim(),
+    multiSelect: !!q?.multiSelect,
+    options: (Array.isArray(q?.options) ? q.options : []).map((o: any) => ({
+      label: String(o?.label ?? "").trim(),
+      description: typeof o?.description === "string" && o.description ? o.description : undefined,
+      recommended: !!o?.recommended,
+    })).filter((o: QuestionOption) => o.label),
+  }));
+  return qs.every((q) => q.question) ? qs : null;
+}
+
+function parseProposal(v: any): TicketProposal | null {
+  const title = typeof v?.title === "string" ? v.title.trim() : "";
+  const description = typeof v?.description === "string" ? v.description.trim() : "";
+  return title || description ? { title, description } : null;
+}
+
+function parseNewTickets(v: any): NewTicketDraft[] | null {
+  if (!Array.isArray(v)) return null;
+  const ts = v.map((x: any) => {
+    const d: NewTicketDraft = {
+      title: typeof x?.title === "string" ? x.title.trim() : "",
+      description: typeof x?.description === "string" ? x.description.trim() : "",
+    };
+    const key = typeof x?.key === "string" ? x.key.trim() : "";
+    if (key) d.key = key;
+    const deps = Array.isArray(x?.dependsOn) ? x.dependsOn.filter((k: unknown) => typeof k === "string" && k.trim()).map((k: string) => k.trim()) : [];
+    if (deps.length) d.dependsOn = deps;
+    return d;
+  }).filter((x) => x.title);
+  return ts.length ? ts : null;
 }
 
 /** Split an assistant text block into visible text + structured questions/proposal/new tickets. */
-function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" | "proposal" | "newTickets" | "moved"> {
+function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" | "proposal" | "newTickets" | "moved" | "unreadable"> {
   let out = text;
   let moved: "planning" | undefined;
   if (MOVE_TO_PLANNING_RE.test(out)) {
     moved = "planning";
     out = out.replace(MOVE_TO_PLANNING_RE, "");
   }
-  let questions: Question[] | undefined;
-  let proposal: TicketProposal | undefined;
-  const q = out.match(QUESTIONS_RE);
-  const parsedQ = q ? parseQuestions(q[1].trim()) : null;
-  if (q && parsedQ) {
-    questions = parsedQ;
-    out = out.replace(q[0], "");
-  }
-  const t = out.match(TICKET_RE);
-  const parsedT = t ? parseProposal(t[1].trim()) : null;
-  if (t && parsedT) {
-    proposal = parsedT;
-    out = out.replace(t[0], "");
-  }
-  const n = out.match(TICKETS_RE);
-  const newTickets = n ? parseNewTickets(n[1].trim()) : null;
-  if (n && newTickets) out = out.replace(n[0], "");
+  let unreadable: BlockKind | undefined;
+  /** Parse one block and cut it from the text; an unreadable block stays visible and is flagged. */
+  const take = <T>(tag: string, kind: BlockKind, parse: (v: unknown) => T | null): T | undefined => {
+    const b = findBlock(out, tag);
+    if (!b) return undefined;
+    const parsed = b.value === undefined ? null : parse(b.value);
+    if (!parsed) {
+      unreadable ??= kind;
+      return undefined;
+    }
+    out = out.replace(b.raw, "");
+    return parsed;
+  };
+  const questions = take("ckanban-questions", "questions", parseQuestions);
+  const proposal = take("ckanban-ticket", "proposal", parseProposal);
+  const newTickets = take("ckanban-tickets", "tickets", parseNewTickets);
   return {
     text: out.trim(),
     ...(questions ? { questions } : {}),
     ...(proposal ? { proposal } : {}),
     ...(newTickets ? { newTickets } : {}),
     ...(moved ? { moved } : {}),
+    ...(unreadable ? { unreadable } : {}),
   };
 }
 

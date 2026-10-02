@@ -11,6 +11,17 @@ import { CollapseIcon, PlusIcon, SparkIcon } from "./icons";
 
 const COLLAPSED_KEY = "ckanban.collapsedColumns";
 
+/** Tickets per column (in `COLUMNS` order), each column sorted the way the board shows it. */
+export function groupByColumn(tickets: Ticket[]): Map<Status, Ticket[]> {
+  const m = new Map<Status, Ticket[]>(COLUMNS.map((c) => [c.id, []]));
+  for (const t of tickets) m.get(t.status)?.push(t);
+  for (const list of m.values()) list.sort((a, b) => a.order - b.order);
+  return m;
+}
+
+/** Tickets in board reading order: top to bottom in each column, columns left to right. */
+export const boardOrder = (tickets: Ticket[]): Ticket[] => [...groupByColumn(tickets).values()].flat();
+
 function readCollapsed(): Set<Status> {
   try {
     return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]"));
@@ -181,12 +192,7 @@ export function Board({ tickets, onOpen, onMove, onAdd, filtered = false }: Prop
     return next;
   });
 
-  const byColumn = useMemo(() => {
-    const m = new Map<Status, Ticket[]>(COLUMNS.map((c) => [c.id, []]));
-    for (const t of tickets) m.get(t.status)?.push(t);
-    for (const list of m.values()) list.sort((a, b) => a.order - b.order);
-    return m;
-  }, [tickets]);
+  const byColumn = useMemo(() => groupByColumn(tickets), [tickets]);
 
   const onDragStart = (e: DragStartEvent) => setDragId(String(e.active.id));
 

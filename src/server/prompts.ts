@@ -9,22 +9,25 @@ CKANBAN_RESULT: {"status":"done"|"blocked"|"questions","prUrl":<string or null>,
 - "blocked": you cannot continue without something from the user (explain what in summary).
 - "done": the task is complete.`;
 
+/** Keeps board blocks readable: the board parses the JSON right after the opening tag. */
+const BLOCK_RULE = "End the block with its own closing tag exactly as shown, and never write a board tag (like the closing tag) inside the JSON text.";
+
 /** How Claude asks questions so the board can render them as a clickable form. */
 export const QUESTIONS_FORMAT = `To ask the user questions, put them in ONE block like this in your message (valid JSON array):
 <ckanban-questions>
 [{"question":"Who will read the result?","options":[{"label":"My manager","description":"decision-oriented, 1 page","recommended":true},{"label":"Engineering team","description":"technical depth"}],"multiSelect":false}]
 </ckanban-questions>
-The board shows it as a form (the user can also add free text) and sends the answers back as the user's next message. Rules: at most 5 questions per round, 2-4 options each, mark exactly one option "recommended", set "multiSelect": true only when several options can apply. Put a one-line intro before the block; don't repeat the questions as plain text.`;
+The board shows it as a form (the user can also add free text) and sends the answers back as the user's next message. Rules: at most 5 questions per round, 2-4 options each, mark exactly one option "recommended", set "multiSelect": true only when several options can apply. Put a one-line intro before the block; don't repeat the questions as plain text. ${BLOCK_RULE}`;
 
 /** How Claude proposes an improved ticket so the board can show an Apply button. */
 export const TICKET_FORMAT = `To propose an improved ticket, add ONE block like this (valid JSON; description is markdown):
 <ckanban-ticket>{"title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Scope\\n**In:** ...\\n**Out:** ...\\n\\n## Requirements\\n- ...\\n\\n## Acceptance criteria\\n- ...\\n\\n## Open questions\\n- ..."}</ckanban-ticket>
-The board shows it as a card; the user clicks Apply to replace the ticket's title and description.`;
+The board shows it as a card; the user clicks Apply to replace the ticket's title and description. ${BLOCK_RULE}`;
 
 /** How a planner ticket's chat proposes splitting the work into new tickets; the user creates them by clicking. */
 export const TICKETS_FORMAT = `When the user wants to split the work into separate tickets (this ticket as the planner), first call the ckanban \`list_tickets\` tool to avoid duplicates, then add ONE block like this (valid JSON array; description is markdown):
 <ckanban-tickets>[{"key":"api","title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Acceptance criteria\\n- ..."},{"key":"ui","title":"...","description":"...","dependsOn":["api"]}]</ckanban-tickets>
-Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. "key" is a short unique name; "dependsOn" lists the keys that must be finished first. Give a dependency to tickets that build on each other or likely edit the same files, so they don't run at the same time and conflict. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket, and can then press Start plan: the board runs the tickets in dependency order and wakes you only when one needs a decision. You cannot create tickets yourself here.`;
+Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. "key" is a short unique name; "dependsOn" lists the keys that must be finished first. Give a dependency to tickets that build on each other or likely edit the same files, so they don't run at the same time and conflict. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket, and can then press Start plan: the board runs the tickets in dependency order and wakes you only when one needs a decision. You cannot create tickets yourself here. ${BLOCK_RULE}`;
 
 function context(note: string, body: string): string {
   return `<ckanban-context note="${note.replace(/"/g, "'")}">\n${body}\n</ckanban-context>`;

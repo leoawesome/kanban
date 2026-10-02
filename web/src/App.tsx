@@ -6,7 +6,7 @@ import { HeaderMenu } from "./HeaderMenu";
 import { BugIcon, ChatIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
 import { Inbox } from "./Inbox";
 import { anyLayerOpen } from "./layers";
-import { Board } from "./Board";
+import { Board, boardOrder } from "./Board";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { ProfileDialog } from "./ProfileDialog";
 import { SchedulesDialog } from "./SchedulesDialog";
@@ -100,6 +100,8 @@ export function App() {
   const pushedOpen = useRef(false);
   // Board shown before that push: going Back to a different board would leave the ticket's board.
   const pushedFrom = useRef<string | null>(null);
+  // The open ticket was reached with prev/next: the drawer stays put instead of sliding in again.
+  const stepped = useRef(false);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -174,6 +176,7 @@ export function App() {
       const h = parseHash();
       if (h.slug) setSlug(h.slug);
       setOpenId(h.ticket);
+      stepped.current = false;
       if (!h.ticket) pushedOpen.current = false;
     };
     window.addEventListener("hashchange", onHash);
@@ -190,6 +193,13 @@ export function App() {
     pushedOpen.current = true;
     pushedFrom.current = slug;
     location.hash = hashFor(board, id);
+  }, [slug]);
+
+  // Prev/next in the drawer: replace the history entry, so one Close or Back still returns to the board.
+  const stepTicket = useCallback((id: string) => {
+    stepped.current = true;
+    history.replaceState(null, "", hashFor(slug, id));
+    setOpenId(id);
   }, [slug]);
 
   const closeTicket = useCallback(() => {
@@ -328,6 +338,11 @@ export function App() {
   const shownTickets = tickets.filter((t) =>
     (!q || `${t.title}\n${t.body}`.toLowerCase().includes(q)) && (!activeFilters.length || activeFilters.some((f) => f.test(t))));
   const filtering = !!q || activeFilters.length > 0;
+  // Neighbours of the open ticket among the visible ones, in board order (none if it's filtered out).
+  const visibleOrder = open ? boardOrder(shownTickets) : [];
+  const at = open ? visibleOrder.findIndex((t) => t.id === open.id) : -1;
+  const prevId = at > 0 ? visibleOrder[at - 1].id : null;
+  const nextId = at >= 0 && at < visibleOrder.length - 1 ? visibleOrder[at + 1].id : null;
   const perBoard = useMemo(() => {
     const m = new Map<string, number>();
     for (const i of inbox) m.set(i.profile, (m.get(i.profile) ?? 0) + 1);
@@ -543,7 +558,8 @@ export function App() {
         <SchedulesDialog profile={profile} schedules={schedules} tickets={tickets} onClose={() => setSchedulesOpen(false)}
           onOpenTicket={(id) => { setSchedulesOpen(false); openTicket(id); }} />
       )}
-      {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} tickets={tickets} onOpenTicket={openTicket} onClose={closeTicket} />}
+      {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} tickets={tickets} onOpenTicket={openTicket} onClose={closeTicket}
+        nav={{ prev: prevId, next: nextId, go: stepTicket }} slideIn={!stepped.current} />}
       {profileDialog && (
         <ProfileDialog
           profile={profileDialog === "edit" ? profile : null}

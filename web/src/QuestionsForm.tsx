@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { Question } from "./api";
+import { autoGrow } from "./autoGrow";
 import { browserStore, forget } from "./drafts";
 import { CheckIcon } from "./icons";
 import { usePersistentState } from "./usePersistentState";
@@ -29,9 +30,36 @@ function fresh(questions: Question[]): Progress {
   return { sig: signature(questions), answers: questions.map(initial), step: 0, note: "" };
 }
 
+/**
+ * A free-text answer box: grows to about 6 lines, then scrolls. Enter runs `onEnter`, Shift+Enter adds a new
+ * line, and nothing fires while an IME is composing.
+ */
+function AnswerBox({ value, onChange, onEnter, autoFocus, disabled, placeholder }: {
+  value: string;
+  onChange: (v: string) => void;
+  onEnter: () => void;
+  autoFocus?: boolean;
+  disabled?: boolean;
+  placeholder: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => autoGrow(ref.current, 6), [value]);
+  return (
+    <textarea ref={ref} rows={1} autoFocus={autoFocus} disabled={disabled} className="qother" value={value} placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+          e.preventDefault();
+          onEnter();
+        }
+      }} />
+  );
+}
+
 function answerText(a: Answer): string {
   const parts = [...a.picked, ...(a.otherOn && a.other.trim() ? [a.other.trim()] : [])];
-  return parts.length ? parts.join("; ") : "(no preference)";
+  // Indent extra lines so a multi-line answer stays inside its list item.
+  return parts.length ? parts.join("; ").replace(/\n/g, "\n  ") : "(no preference)";
 }
 
 /**
@@ -155,9 +183,8 @@ export function QuestionsForm({ questions, answered, disabled, onSubmit, storage
               <kbd className="qkey">{q.options.length + 1}</kbd>
             </button>
             {a.otherOn && (
-              <input autoFocus className="qother" value={a.other} placeholder="Your answer"
-                onChange={(e) => update(step, (x) => ({ ...x, other: e.target.value }))}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); next(); } }} />
+              <AnswerBox autoFocus value={a.other} placeholder="Your answer (Shift+Enter for a new line)"
+                onChange={(v) => update(step, (x) => ({ ...x, other: v }))} onEnter={next} />
             )}
           </div>
         </div>
@@ -171,9 +198,8 @@ export function QuestionsForm({ questions, answered, disabled, onSubmit, storage
               </li>
             ))}
           </ol>
-          <input className="qother" value={note} onChange={(e) => setNote(e.target.value)} disabled={disabled}
-            placeholder="Anything else Claude should know? (optional)"
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); send(); } }} />
+          <AnswerBox value={note} onChange={setNote} onEnter={send} disabled={disabled}
+            placeholder="Anything else Claude should know? (optional)" />
         </div>
       )}
 
