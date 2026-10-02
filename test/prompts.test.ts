@@ -166,3 +166,8 @@ test("a plan's child is told to rebase onto the remote base branch first", () =>
   expect(firstRunPrompt(t, { isGit: true, outputDir: "/o" })).toContain("part of a plan (planner ticket t_plan)");
   expect(firstRunPrompt({ ...t, parentId: null } as Ticket, { isGit: true, outputDir: "/o" })).not.toContain("part of a plan");
 });
+
+test("API connection retries show on the card instead of looking frozen", () => {
+  expect(summarizeEvent({ type: "system", subtype: "api_retry", attempt: 1, max_retries: 10 })).toBeNull();
+  expect(summarizeEvent({ type: "system", subtype: "api_retry", attempt: 4, max_retries: 10 })).toBe("Can't reach Claude's API, retrying (4/10)…");
+});

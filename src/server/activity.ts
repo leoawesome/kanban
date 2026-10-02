@@ -86,6 +86,10 @@ function rawTool(name: string, input: any): string {
 export function summarizeEvent(ev: any, opts: { raw?: boolean } = {}): string | null {
   if (!ev || typeof ev !== "object") return null;
   if (ev.type === "result") return "Finished";
+  // Claude Code retries a failing API connection for minutes; say so instead of looking frozen.
+  if (ev.type === "system" && ev.subtype === "api_retry" && Number(ev.attempt) >= 2) {
+    return `Can't reach Claude's API, retrying (${ev.attempt}/${ev.max_retries ?? "?"})…`;
+  }
   if (ev.type !== "assistant") return null;
   const blocks = contentBlocks(ev);
   const tool = blocks.findLast((b) => b.type === "tool_use");
