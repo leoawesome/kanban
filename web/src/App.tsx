@@ -349,7 +349,8 @@ export function App() {
     if (!openId) setNavOrder(null);
     else if (!stepped.current || orderMissing) setNavOrder(liveOrder);
   }, [openId, orderMissing, tickets.length > 0]);
-  const order = (orderMissing ? liveOrder : navOrder!).filter((id) => id === openId || tickets.some((t) => t.id === id));
+  // navOrder is null until the effect above runs (and whenever no ticket is open): fall back to the live order.
+  const order = (orderMissing ? liveOrder : navOrder ?? liveOrder).filter((id) => id === openId || tickets.some((t) => t.id === id));
   const at = open ? order.indexOf(open.id) : -1;
   const prevId = at > 0 ? order[at - 1] : null;
   const nextId = at >= 0 && at < order.length - 1 ? order[at + 1] : null;
