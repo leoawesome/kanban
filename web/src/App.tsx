@@ -102,6 +102,8 @@ export function App() {
   const pushedFrom = useRef<string | null>(null);
   // The open ticket was reached with prev/next: the drawer stays put instead of sliding in again.
   const stepped = useRef(false);
+  // Ticket order prev/next follows, frozen when the drawer opens (see below).
+  const [navOrder, setNavOrder] = useState<string[] | null>(null);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -338,11 +340,19 @@ export function App() {
   const shownTickets = tickets.filter((t) =>
     (!q || `${t.title}\n${t.body}`.toLowerCase().includes(q)) && (!activeFilters.length || activeFilters.some((f) => f.test(t))));
   const filtering = !!q || activeFilters.length > 0;
-  // Neighbours of the open ticket among the visible ones, in board order (none if it's filtered out).
-  const visibleOrder = open ? boardOrder(shownTickets) : [];
-  const at = open ? visibleOrder.findIndex((t) => t.id === open.id) : -1;
-  const prevId = at > 0 ? visibleOrder[at - 1].id : null;
-  const nextId = at >= 0 && at < visibleOrder.length - 1 ? visibleOrder[at + 1].id : null;
+  // Prev/next walk the visible tickets in board order as it was when the drawer opened, so moving the open
+  // ticket (e.g. Backlog to Done) doesn't send Next into its new column. Stepping keeps that order;
+  // deleted tickets are skipped.
+  const liveOrder = open ? boardOrder(shownTickets).map((t) => t.id) : [];
+  const orderMissing = !!openId && !navOrder?.includes(openId);
+  useEffect(() => {
+    if (!openId) setNavOrder(null);
+    else if (!stepped.current || orderMissing) setNavOrder(liveOrder);
+  }, [openId, orderMissing, tickets.length > 0]);
+  const order = (orderMissing ? liveOrder : navOrder!).filter((id) => id === openId || tickets.some((t) => t.id === id));
+  const at = open ? order.indexOf(open.id) : -1;
+  const prevId = at > 0 ? order[at - 1] : null;
+  const nextId = at >= 0 && at < order.length - 1 ? order[at + 1] : null;
   const perBoard = useMemo(() => {
     const m = new Map<string, number>();
     for (const i of inbox) m.set(i.profile, (m.get(i.profile) ?? 0) + 1);
