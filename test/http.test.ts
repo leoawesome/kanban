@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Board } from "../src/server/board";
 import { Bus } from "../src/server/events";
@@ -147,6 +148,18 @@ test("new tickets default to interview mode; outputs are served as sandboxed tex
   expect(await (await fetch(`${base}/api/profiles/modes/tickets/${t.id}/outputs`)).json()).toEqual([]);
   const r = await fetch(`${base}/api/profiles/modes/tickets/${t.id}/outputs/..%2Fticket.md`);
   expect(r.status).toBe(404);
+  const dir = store.outputsDir("modes", t.id);
+  mkdirSync(join(dir, "art"), { recursive: true });
+  writeFileSync(join(dir, "art", "a.PNG"), "png");
+  writeFileSync(join(dir, "b.jpeg"), "jpg");
+  writeFileSync(join(dir, "x.svg"), "<svg><script>alert(1)</script></svg>");
+  writeFileSync(join(dir, "page.html"), "<script>alert(1)</script>");
+  for (const [name, type] of [["art/a.PNG", "image/png"], ["b.jpeg", "image/jpeg"], ["x.svg", "text/plain; charset=utf-8"], ["page.html", "text/plain; charset=utf-8"]]) {
+    const res = await fetch(`${base}/api/profiles/modes/tickets/${t.id}/outputs/${name}`);
+    expect(res.headers.get("content-type")).toBe(type);
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+  }
 });
 
 test("chat endpoint validates and conflicts", async () => {

@@ -63,6 +63,11 @@ class HttpError extends Error {
 const LOCAL_HOSTS = ["localhost", "127.0.0.1"];
 const DEFAULT_MAX_PARALLEL = 5;
 const INBOX_KINDS = new Set(["questions", "proposal", "reply", "blocked", "failed"]);
+/** Output extensions served with their image type (raster only) so the Outputs tab can preview them. */
+const OUTPUT_IMAGE_TYPES: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(IMAGE_TYPES).map(([t, e]) => [e, t])),
+  jpeg: "image/jpeg",
+};
 
 export function isAllowedRequest(req: Request, port: number): boolean {
   const host = req.headers.get("host") ?? new URL(req.url).host;
@@ -537,10 +542,12 @@ export function createServer(deps: ServerDeps) {
       if (parts.length === 5) return json(store.listOutputs(slug, id));
       const file = store.outputPath(slug, id, parts.slice(5).join("/"));
       if (!file) throw new HttpError(404, "output not found");
-      // Always plain text + sandbox: files are written by Claude and must never run as HTML on this origin.
+      // Plain text + sandbox: files are written by Claude and must never run as HTML on this origin.
+      // Only raster images get their real type so the viewer can preview them; SVG stays text (it can carry scripts).
+      const image = OUTPUT_IMAGE_TYPES[file.slice(file.lastIndexOf(".") + 1).toLowerCase()];
       return new Response(Bun.file(file), {
         headers: {
-          "content-type": "text/plain; charset=utf-8",
+          "content-type": image ?? "text/plain; charset=utf-8",
           "x-content-type-options": "nosniff",
           "content-security-policy": "sandbox",
         },

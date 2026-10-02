@@ -388,8 +388,9 @@ export const api = {
   linkSession: (slug: string, id: string, sessionId: string | null) =>
     req<Ticket>("POST", `${t(slug, id)}/link-session`, { sessionId }),
   outputs: (slug: string, id: string) => req<OutputFile[]>("GET", `${t(slug, id)}/outputs`),
+  outputUrl: (slug: string, id: string, name: string) => `${t(slug, id)}/outputs/${name.split("/").map(encodeURIComponent).join("/")}`,
   outputText: async (slug: string, id: string, name: string) => {
-    const r = await fetch(`${t(slug, id)}/outputs/${name.split("/").map(encodeURIComponent).join("/")}`);
+    const r = await fetch(api.outputUrl(slug, id, name));
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.text();
   },
