@@ -88,6 +88,84 @@ Results:
 - `claude plugin test`: **1 pass, 0 fail.** Toasts captured: card press on all 4 surfaces, `drop {"from":0,"to":1}` on terminal and desktop.
 - Not done: loading it in a live interactive or desktop session (hot reload could not be enabled from a headless board run). So the actual look on screen is unverified.
 
+## Web UI vs mod: feature by feature
+
+Inventory from `web/src/` (React 18, `@dnd-kit`, `@xterm/xterm`, `marked`, `highlight.js`). Each feature is rated against the mod element set above.
+
+Rating: **Yes** = same or close. **Workaround** = possible but clearly worse, or needs a different design. **No** = cannot be done inside a mod today; link out to the web UI instead.
+
+### Board and cards (`Board.tsx`, `Card.tsx`, `App.tsx`)
+
+| Web UI feature | In a mod | Notes |
+| --- | --- | --- |
+| Columns by status, collapsible columns | Yes | `Box` rows/columns; collapse state in `$.store`. Width limits titles to ~20 chars at 6 columns |
+| Card badges (mode, outcome, working, schedule, plan, linked session), live elapsed timer | Yes | `Text` with colour; timer via `$.clock.every`. No icons, only text/emoji glyphs |
+| Drag a card to another column / reorder within a column (`@dnd-kit`) | Workaround | Terminal + desktop only, built by hand on `Client.onPointer` in cells: no drag preview, no smooth animation, no auto-scroll. VS Code / mobile: "Move to..." `Select` or buttons instead |
+| Profile (project) switcher | Yes | `Select` |
+| Hover tooltips (`title=`) | Workaround | `Box` hover styles exist; no native tooltip. Put the text on the card or in detail view |
+| Live updates (SSE) | Workaround | Polling `$.http.fetch` every few seconds; true SSE only through a spawned process (untested) |
+| URL / hash deep links, browser back, open in new tab | No | Pane has no URL. `/board <ticket-id>` command can do the "jump to" part |
+
+### Ticket drawer and chat (`TicketDrawer.tsx`, `Chat.tsx`, `Transcript.tsx`, `QuestionsForm.tsx`, `ProposalCard.tsx`, `NewTicketsCard.tsx`, `PlanPanel.tsx`)
+
+| Web UI feature | In a mod | Notes |
+| --- | --- | --- |
+| Ticket details, start / stop / move / delete, confirm dialogs | Yes | `Button`, confirm via second pane opened with `closeOnEscape` |
+| Copy ticket ID / branch | Yes | `$.ui.copy` |
+| Resizable side drawer | Workaround | The person can resize the pane (dock width / inline rows); the mod can't draw a drag handle of its own except inside a `Client` |
+| Transcript with markdown and code highlighting | Yes | `Markdown` and `Code` elements draw with the engine's own renderer. Long transcripts need paging (tree limit: 20,000 nodes / 100,000 characters) |
+| Image thumbnails in the transcript | Workaround / No | Terminal has `Image` (PNG bytes, kitty/iTerm-style terminals). **Desktop has no `Image` element**; maybe an SVG wrapping a data URI (untested, 131,072-char cap = only tiny images). VS Code / mobile: no |
+| Chat composer: send message to the ticket | Yes | `Input` + `onSubmit` (not on mobile). Single-line feel; no multi-line textarea |
+| Paste or drop images into chat / new ticket (`useImagePaste`) | **No** | `Input` is text only; no clipboard image, no file drop. Workaround: type a file path |
+| Questions form (radio / multi-select / free text) | Yes | `Select`, `Button`, `Input` |
+| Proposal card "Apply", new tickets card "Create", plan panel "Start plan" | Yes | Buttons calling the same API |
+| Live "working" view while a run streams | Workaround | Polling; feels laggier than SSE |
+
+### Outputs and files (`Outputs.tsx`, `FilesView.tsx`)
+
+| Web UI feature | In a mod | Notes |
+| --- | --- | --- |
+| Folder tree sidebar, filter | Yes | `Box` + `Button` list, `Input` filter |
+| Markdown / text / code file preview with highlighting | Yes | `Markdown`, `Code` |
+| Image preview | Workaround / No | Terminal `Image` only (see above). Desktop, VS Code, mobile: no |
+| **HTML mockup preview in a sandboxed iframe with scripts** | **No** | No iframe, no HTML. `Svg` frames block scripts. Only a `Link` to open it in the browser |
+| PDF / video / binary files | No | Link out / "open in default app" via `$.process.run(["open", path])` (works) |
+| Open file in its default app, copy path | Yes | `$.process.run`, `$.ui.copy` |
+
+### Dock: embedded terminal and chat (`Dock.tsx`, `TerminalView.tsx`)
+
+| Web UI feature | In a mod | Notes |
+| --- | --- | --- |
+| Embedded shell (xterm over WebSocket PTY) | **No** | No terminal emulator element. `Raster` could in theory paint one cell by cell, but that is a project of its own. Inside Claude Code you already have `!` bash and Claude itself, so this is mostly moot |
+| Embedded Claude chat in the Dock | Not needed | The mod lives inside Claude Code, so the host session *is* the chat |
+
+### Dialogs and app chrome (`NewTicketDialog`, `ProfileDialog`, `SchedulesDialog`, `ConnectionsDialog`, `BugReportDialog`, `Shortcuts`, `Inbox`, `toast`, `HeaderMenu`, `SessionPicker`)
+
+| Web UI feature | In a mod | Notes |
+| --- | --- | --- |
+| New ticket form (title, markdown body, mode toggle, profile) | Yes, minus images | `Input`, `Select`. No multi-line editor, no image paste |
+| Profile settings form, schedules form + history, connections (MCP servers, agents), session picker | Yes | Forms of `Input` / `Select` / `Button`; just a lot of UI to rebuild |
+| Bug report with screenshots | Workaround | Text yes; screenshots no (no image paste) |
+| Inbox of tickets needing attention | Yes | List + toasts + status line (better than web: visible while you work) |
+| Toasts | Yes | `$.ui.toast` |
+| Keyboard shortcuts + quick switcher (fuzzy jump) | Workaround | No global key bindings for a mod's pane beyond `Button` hotkeys and `Client.onKey` after focus. Slash commands (`/board`, `/ticket <query>`) cover it |
+| Theme, CSS styling, icons, animations | No | Engine draws in its own style; colour and bold only. No custom fonts, icons, transitions |
+| Works with Claude Code closed | No | Mod only exists inside a running Claude Code session; web UI works any time the daemon runs |
+
+### Cannot be done inside a mod (summary)
+
+1. **HTML mockup preview** (iframe with scripts): no HTML or iframe at all.
+2. **Paste / drop images** into chat, new tickets or bug reports.
+3. **Images on desktop, VS Code and mobile** (thumbnails, image outputs). Terminal only, via `Image`.
+4. **Embedded shell** (xterm PTY).
+5. **Smooth drag and drop** with previews and animation; on VS Code and mobile no drag at all.
+6. **Custom look**: CSS, icons, fonts, animation, real tooltips.
+7. **URLs**: deep links, back button, open ticket in a new tab, sharing a link.
+8. **Use without Claude Code open**, and from other devices' browsers.
+9. **True live streaming (SSE)** without a spawned helper process.
+
+Everything else (board, cards, actions, transcript, questions, forms, outputs as text/markdown/code, toasts) can be rebuilt, at a cost: it is a second UI to write and keep in sync with the web one.
+
 ## Options
 
 Criteria: value to Leo (use board without the browser), effort, risk (early-access API churn, parity drift with web UI).
