@@ -49,8 +49,9 @@ interface ActiveRun {
   /**
    * Set for runs started from the ticket chat (not the Ready queue). raw: text is the full prompt (planner wake-ups);
    * returnTo: the column such a run goes back to, since a wake-up is housekeeping, not new work to review.
+   * quiet: a reply to another ticket's Claude; the card, outcome and run count stay as they were.
    */
-  chat?: { text: string; mode: ChatMode; raw?: boolean; returnTo?: Status };
+  chat?: { text: string; mode: ChatMode; raw?: boolean; returnTo?: Status; quiet?: boolean };
   /** Queued messages (ticket.queued) written to this claude process, keyed by id, with the text it was given. */
   inFlight: Map<string, string>;
   /** Queued message this chat run was started with; it leaves the queue once Claude reads the prompt. */
@@ -67,6 +68,11 @@ function replayText(ev: any): string | null {
 /** Backlog/Planning chats refine the ticket (read-only); everywhere else Claude acts on the message. */
 export function chatModeFor(status: Status): ChatMode {
   return status === "backlog" || status === "planning" ? "refine" : "act";
+}
+
+/** How a chat run handles a queued message: a peer message (from another ticket's Claude) is sent as-is, quietly. */
+function chatFor(status: Status, msg: { text: string; peer?: boolean }): NonNullable<ActiveRun["chat"]> {
+  return msg.peer ? { text: msg.text, mode: chatModeFor(status), raw: true, quiet: true } : { text: msg.text, mode: chatModeFor(status) };
 }
 
 const ACTIVITY_THROTTLE_MS = 1000;
@@ -144,8 +150,9 @@ export class Board {
   /**
    * Send a chat message: resumes the ticket's session right away, like typing in the terminal.
    * While Claude is working the message steers the run instead: Claude reads it at its next step.
+   * peer: the message comes from another ticket's Claude (see questions.ts) and is already a full prompt.
    */
-  async chat(slug: string, id: string, text: string): Promise<Ticket> {
+  async chat(slug: string, id: string, text: string, opts: { peer?: boolean } = {}): Promise<Ticket> {
     const t = this.store.getTicket(slug, id);
     if (!t) throw new Error(`ticket ${id} not found`);
     if (!text.trim()) throw new Error("message is empty");
@@ -154,12 +161,12 @@ export class Board {
     if (active) {
       if (active.stopRequested || this.shuttingDown) throw new ConflictError("Claude is stopping; send your message once it has stopped");
       // Saved on the ticket until Claude reads it, so closing the chat, Stop or a restart can't lose it.
-      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued" };
+      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued", ...(opts.peer ? { peer: true } : {}) };
       this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
       this.steer(active, msg);
       return this.store.getTicket(slug, id)!;
     }
-    this.start(slug, id, { text, mode: chatModeFor(t.status) });
+    this.start(slug, id, chatFor(t.status, { text, peer: opts.peer }));
     return this.store.getTicket(slug, id)!;
   }
 
@@ -169,7 +176,7 @@ export class Board {
     if (!msg) throw new Error("message not found");
     if (msg.state !== "unsent") throw new ConflictError("message is already on its way to Claude");
     this.dropQueued(slug, id, [msgId]);
-    return this.chat(slug, id, msg.text);
+    return this.chat(slug, id, msg.text, { peer: msg.peer });
   }
 
   discardQueued(slug: string, id: string, msgId: string): Ticket {
@@ -187,7 +194,7 @@ export class Board {
   /** Hand a queued message to the live claude process; false when there is none to take it yet. */
   private steer(run: ActiveRun, msg: QueuedMessage): boolean {
     if (run.inFlight.has(msg.id) || run.promptMsgId === msg.id) return true;
-    const text = localizeImages(steerPrompt(msg.text), this.store.attachmentsDir);
+    const text = localizeImages(msg.peer ? msg.text : steerPrompt(msg.text), this.store.attachmentsDir);
     if (!run.handle?.send(text)) return false;
     run.inFlight.set(msg.id, text);
     return true;
@@ -245,7 +252,9 @@ export class Board {
   }
 
   private begin(run: ActiveRun) {
-    this.patch(run.slug, run.id, run.chat?.mode === "refine"
+    this.patch(run.slug, run.id, run.chat?.quiet
+      ? { error: null, lastActivity: "Claude is replying…", runStartedAt: nowIso() }
+      : run.chat?.mode === "refine"
       ? { error: null, lastActivity: "Claude is replying…", refineStarted: true, runStartedAt: nowIso() }
       : { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…", runStartedAt: nowIso() });
   }
@@ -264,7 +273,7 @@ export class Board {
         this.patch(run.slug, run.id, { queued: (t.queued ?? []).map((m) => (m.state === "queued" ? { ...m, state: "unsent" } : m)) });
         return;
       }
-      run.chat = { text: next.text, mode: chatModeFor(t.status) };
+      run.chat = chatFor(t.status, next);
       run.promptMsgId = next.id;
       run.inFlight = new Map();
       run.handle = null;
@@ -273,9 +282,9 @@ export class Board {
     }
   }
 
-  /** Where the card lands after a run: refine chats never move it. */
+  /** Where the card lands after a run: refine chats and replies to other tickets never move it. */
   private endStatus(run: ActiveRun): Partial<Ticket> {
-    if (run.chat?.mode === "refine") return run.targetStatus ? { status: run.targetStatus } : {};
+    if (run.chat?.mode === "refine" || run.chat?.quiet) return run.targetStatus ? { status: run.targetStatus } : {};
     return { status: run.targetStatus ?? run.chat?.returnTo ?? "review" };
   }
 
@@ -312,6 +321,8 @@ export class Board {
 
     const t = this.store.getTicket(slug, id)!;
     const refine = run.chat?.mode === "refine";
+    // A reply to another ticket's Claude: not a run of this ticket's own work.
+    const quiet = !!run.chat?.quiet;
     const profile = this.store.getProfile(slug)!;
     const runNo = t.runCount + 1;
     const newComments = this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt));
@@ -386,7 +397,7 @@ export class Board {
     const base: Partial<Ticket> = {
       ...this.endStatus(run),
       sessionStarted: true,
-      ...(refine ? {} : { lastRunAt: startedAt, runCount: runNo }),
+      ...(refine || quiet ? {} : { lastRunAt: startedAt, runCount: runNo }),
       lastActivity: pendingActivity ?? this.store.getTicket(slug, id)?.lastActivity ?? null,
     };
 
@@ -401,7 +412,7 @@ export class Board {
       this.patch(slug, id, { ...base, outcome: "failed", error });
       return;
     }
-    if (refine) {
+    if (refine || quiet) {
       this.patch(slug, id, { ...base, lastActivity: null, error: null });
       return;
     }
@@ -843,7 +854,7 @@ export class Board {
       for (const t of this.store.listTickets(p.slug)) {
         const next = this.waiting(p.slug, t.id)[0];
         if (!next || this.isRunning(p.slug, t.id) || t.status === "ready" || t.error?.startsWith("corrupt")) continue;
-        this.start(p.slug, t.id, { text: next.text, mode: chatModeFor(t.status) }, next.id);
+        this.start(p.slug, t.id, chatFor(t.status, next), next.id);
       }
     }
   }

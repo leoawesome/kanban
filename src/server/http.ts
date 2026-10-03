@@ -8,6 +8,7 @@ import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
 import { cronError, describeCron, nextRuns, parseCron } from "./cron";
 import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
+import { QuestionError, Questions } from "./questions";
 import { attentionFor } from "./attention";
 import { MAX_RETRIES, planActive } from "./plan";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
@@ -38,6 +39,7 @@ export interface ServerDeps {
   mcp?: McpManager;
   scheduler?: Scheduler;
   agents?: AgentRegistry;
+  questions?: Questions;
   /** Runs `gh` for bug reports (tests pass a fake). */
   gh?: GhRunner;
 }
@@ -105,6 +107,7 @@ export function createServer(deps: ServerDeps) {
   const mcp = deps.mcp ?? new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
   const scheduler = deps.scheduler ?? new Scheduler(board, store, bus);
   const agents = deps.agents ?? new AgentRegistry();
+  const questions = deps.questions ?? new Questions(store, board);
 
   const profileOr404 = (slug: string): Profile => {
     const p = store.getProfile(slug);
@@ -136,6 +139,14 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(403, `${target.id} is not a child ticket of plan ${planner.id}; the planner may only change its own child tickets`);
     }
     return planner;
+  };
+  /** The board run's ticket (RUN_HEADER), null outside runs; a run may only reach tickets on its own board. */
+  const runTicket = (req: Request, slug: string): string | null => {
+    const h = req.headers.get(RUN_HEADER);
+    if (!h) return null;
+    const [runSlug, runId] = h.split("/");
+    if (runSlug !== slug || !runId) throw new HttpError(403, `tickets can only talk to tickets on their own board (${runSlug})`);
+    return runId;
   };
   const strings = (v: unknown): string[] | undefined =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : undefined;
@@ -444,6 +455,18 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
 
+    // /profiles/:p/questions/:q/(poll|reply) — ticket-to-ticket questions (ask_ticket / reply_ticket)
+    if (parts[2] === "questions" && parts.length === 5 && m === "POST") {
+      const b = await body(req);
+      const runId = runTicket(req, slug);
+      if (parts[4] === "poll") {
+        if (!runId) throw new HttpError(403, "only the asking ticket's run can wait for a reply");
+        return json(questions.poll(slug, parts[3], runId, !!b.final));
+      }
+      if (parts[4] === "reply") return json(await questions.reply(slug, parts[3], runId, String(b.text ?? "")));
+      throw new HttpError(404, "not found");
+    }
+
     // /profiles/:p/tickets
     if (parts[2] !== "tickets") throw new HttpError(404, "not found");
     if (parts.length === 3) {
@@ -574,6 +597,14 @@ export function createServer(deps: ServerDeps) {
         const planner = plannerFor(req, slug, store.getTicket(slug, id)!);
         return json(board.addComment(slug, id, planner ? `Planner: ${text}` : text), 201);
       }
+    }
+    // Another ticket's Claude asks this ticket's Claude (ask_ticket); the asker then polls questions/:q/poll.
+    if (m === "POST" && action === "ask") {
+      const from = runTicket(req, slug);
+      if (!from) throw new HttpError(403, "ask_ticket only works inside a board run (it asks on behalf of that run's ticket)");
+      const b = await body(req);
+      const q = await questions.ask(slug, from, id, String(b.question ?? ""), Number(b.waitMs) || 0);
+      return json(q, 201);
     }
     if (m === "POST" && action === "chat") {
       plannerFor(req, slug, store.getTicket(slug, id)!);
@@ -739,6 +770,7 @@ export function createServer(deps: ServerDeps) {
         if (e instanceof McpError) return json({ error: e.message }, e.status);
         if (e instanceof AgentError) return json({ error: e.message }, e.status);
         if (e instanceof ScheduleError) return json({ error: e.message }, e.status);
+        if (e instanceof QuestionError) return json({ error: e.message }, e.status);
         if (e instanceof URIError) return json({ error: "malformed URL" }, 400);
         console.error(e);
         return json({ error: (e as Error).message ?? "internal error" }, 500);

@@ -1,6 +1,6 @@
 import { helperCommand } from "./artifact";
 import { MAX_RETRIES } from "./plan";
-import type { Comment, Ticket } from "./types";
+import type { Comment, Ticket, TicketQuestion } from "./types";
 import { shellQuote } from "./util";
 
 const RESULT_RULE = `When you finish this run, end your final message with exactly one line in this format (valid JSON, single line):
@@ -29,8 +29,43 @@ export const TICKETS_FORMAT = `When the user wants to split the work into separa
 <ckanban-tickets>[{"key":"api","title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Acceptance criteria\\n- ..."},{"key":"ui","title":"...","description":"...","dependsOn":["api"]}]</ckanban-tickets>
 Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. "key" is a short unique name; "dependsOn" lists the keys that must be finished first. Give a dependency to tickets that build on each other or likely edit the same files, so they don't run at the same time and conflict. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket, and can then press Start plan: the board runs the tickets in dependency order and wakes you only when one needs a decision. You cannot create tickets yourself here. ${BLOCK_RULE}`;
 
-function context(note: string, body: string): string {
-  return `<ckanban-context note="${note.replace(/"/g, "'")}">\n${body}\n</ckanban-context>`;
+function context(note: string, body: string, attrs: Record<string, string> = {}): string {
+  const extra = Object.entries(attrs).map(([k, v]) => ` ${k}="${v.replace(/"/g, "'")}"`).join("");
+  return `<ckanban-context note="${note.replace(/"/g, "'")}"${extra}>\n${body}\n</ckanban-context>`;
+}
+
+/** Board runs can talk to other tickets' Claude sessions (ask_ticket / reply_ticket). */
+const PEERS_RULE = `# Other tickets
+- If you need something only another ticket's Claude knows (what it changed and why, an API it is building), read that ticket with the ckanban \`get_ticket\` tool first. If that isn't enough, ask its Claude with \`ask_ticket\` (same board only); the call waits for the reply.
+- If another ticket's Claude asks you something, reply with \`reply_ticket\` and the question id it gave you.`;
+
+const quote = (s: string, max = 200) => {
+  const one = s.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+};
+
+/**
+ * A question from ticket `from`'s Claude, sent into ticket `to`'s session (steering its run, or starting a reply).
+ * The question comes first so the chat shows it; the from/question attributes mark it as a ticket-to-ticket message.
+ */
+export function askPrompt(from: Ticket, q: TicketQuestion): string {
+  return `${q.text.trim()}
+
+${context("", `(Question from the Claude working on ticket ${from.id} "${from.title}" on this board; question id ${q.id}. That session is waiting for your reply.)
+Reply with the ckanban \`reply_ticket\` tool (questionId "${q.id}"): answer from what you know about this ticket, its conversation and its code, or ask a clarifying question back if you need more detail. Keep it short and specific.
+If you were in the middle of work, carry on with it afterwards and keep following the instructions you were given for that run, including how to end it. Otherwise just reply; don't change files for this.`, { from: from.id, question: q.id })}`;
+}
+
+/** A reply that arrived after the asker's ask_ticket call stopped waiting, sent into the asker's run. */
+export function lateReplyPrompt(to: Ticket, q: TicketQuestion): string {
+  return `${(q.reply ?? "").trim()}
+
+${context("", `(Reply from the Claude working on ticket ${to.id} "${to.title}" to your question ${q.id}: "${quote(q.text)}". It came after your ask_ticket call stopped waiting. Take it into account and carry on; keep following the instructions you were given for this run, including how to end it.)`, { from: to.id, reply: q.id })}`;
+}
+
+/** The same late reply as a comment, for the asker's next run. */
+export function lateReplyComment(to: Ticket, q: TicketQuestion): string {
+  return `Reply from ticket ${to.id} "${to.title}" to the question "${quote(q.text)}" (${q.id}):\n\n${(q.reply ?? "").trim()}`;
 }
 
 const INTERVIEW = `# How to work: interview first
@@ -115,6 +150,8 @@ ${interview ? `${INTERVIEW}\n\n` : ""}# Rules
 - If it is a development task but git or a GitHub remote is not available, do NOT fake it. Stop, and report status "blocked" explaining what is missing.
 - If it is a non-code task (research, writing, analysis, file organisation), no PR is needed.
 
+${PEERS_RULE}
+
 ${deliverableRule(ctx.outputDir)}
 
 ${artifactRule()}
@@ -132,6 +169,8 @@ export function resumePrompt(t: Ticket, newComments: Comment[], outputDir: strin
 ${feedback}
 
 ${t.mode === "interview" ? `${t.interviewed ? AFTER_ANSWERS : INTERVIEW.replace("In this first run:", "Before continuing, in this run:")}\n\n` : ""}Continue working on the ticket, addressing the feedback. If a pull request already exists, push new commits to the same branch to update it. Update deliverables in ${outputDir} rather than creating duplicates.
+
+${PEERS_RULE}
 
 ${artifactRule()}
 

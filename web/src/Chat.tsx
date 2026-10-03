@@ -150,7 +150,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onError }: {
   // Claude read a queued message: keep its bubble until the session file shows it, so it doesn't blink out.
   const prevQueued = useRef(queued);
   useEffect(() => {
-    const read = prevQueued.current.filter((q) => q.state === "queued" && !queued.some((n) => n.id === q.id)).map((q) => q.text);
+    // Peer messages show up in the session as another ticket's message, not as the user's bubble.
+    const read = prevQueued.current.filter((q) => q.state === "queued" && !q.peer && !queued.some((n) => n.id === q.id)).map((q) => q.text);
     prevQueued.current = queued;
     if (read.length) setPending((ps) => [...ps, ...read.map((text) => ({ text, steer: false }))]);
   }, [ticket.queued]);
@@ -211,12 +212,21 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onError }: {
 
   // A reply still on its way to the session file counts too, so the form doesn't offer "Send answers" again.
   const replying = pending.some((p) => !p.steer);
-  const answeredAfter = (index: number) => replying || entries.slice(index + 1).some((e) => e.role === "user" && e.kind === "text");
+  const answeredAfter = (index: number) => replying || entries.slice(index + 1).some((e) => e.role === "user" && e.kind === "text" && !e.peer);
   const isApplied = (p: { title: string; description: string }) =>
     (!p.title || p.title === ticket.title) && (!p.description || p.description.trim() === ticket.body.trim());
 
   const empty = page !== null && !loadError && entries.length === 0 && !pending.length && !queued.length && !running;
 
+  /** Who a ticket-to-ticket message is from or to, linking to that ticket when it still exists. */
+  const peerLabel = (dir: "in" | "out", ticketId: string | null) => {
+    const other = ticketId ? tickets.find((t) => t.id === ticketId) : undefined;
+    const name = other ? other.title : ticketId ?? "another ticket";
+    const link = other
+      ? <button className="link-btn" onClick={() => onOpenTicket(other.id)} title={other.id}>{name}</button>
+      : <span>{name}</span>;
+    return dir === "in" ? <>From {link}'s Claude</> : <>Claude to {link}</>;
+  };
   const childFor = (d: { title: string }) => tickets.find((t) => t.parentId === ticket.id && t.title === d.title);
   const createChild = async (d: NewTicketDraft) => {
     try {
@@ -306,6 +316,17 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onError }: {
           if (e.kind === "board") {
             return <div key={e.uuid} className="chat-note">{e.text}{e.at && <span title={fullTime(e.at)}> · {timeAgo(e.at)}</span>}</div>;
           }
+          if (e.peer) {
+            return (
+              <div key={e.uuid} className={`conv-msg peer ${e.peer.dir}`}>
+                <div className="conv-head">
+                  <b>{peerLabel(e.peer.dir, e.peer.ticketId)}</b>
+                  {e.at && <time className="muted small" dateTime={e.at} title={fullTime(e.at)}>{timeAgo(e.at)}</time>}
+                </div>
+                <Markdown text={e.text} />
+              </div>
+            );
+          }
           return (
             <div key={e.uuid} className={`conv-msg ${e.role}`}>
               <div className="conv-head">
@@ -359,7 +380,24 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onError }: {
             <Markdown text={p.text} />
           </div>
         ))}
-        {queued.map((q) => (
+        {queued.filter((q) => q.peer).map((q) => (
+          <div key={q.id} className="conv-msg peer in pending">
+            <div className="conv-head">
+              <b>{peerLabel("in", q.text.match(/<ckanban-context[^>]* from="([^"]*)"/)?.[1] ?? null)}</b>
+              <span className="muted small">{q.state === "queued" ? "queued · Claude reads this at its next step" : "not sent · Claude was stopped before reading it"}</span>
+            </div>
+            <Markdown text={q.text.split("<ckanban-context")[0].trim()} />
+            {q.state === "unsent" && (
+              <div className="queued-actions">
+                <button className="btn primary small" disabled={stopping}
+                  onClick={() => api.sendQueued(slug, ticket.id, q.id).catch((e) => onError(e.message))}>Send</button>
+                <button className="btn ghost small"
+                  onClick={() => api.discardQueued(slug, ticket.id, q.id).catch((e) => onError(e.message))}>Discard</button>
+              </div>
+            )}
+          </div>
+        ))}
+        {queued.filter((q) => !q.peer).map((q) => (
           <div key={q.id} className={`conv-msg user pending${q.state === "unsent" ? " unsent" : ""}`}>
             <div className="conv-head">
               <b>You</b>

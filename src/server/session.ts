@@ -45,6 +45,8 @@ export interface SessionEntry {
   moved?: "planning";
   /** A board block whose JSON couldn't be read (left visible as text; the chat says so). */
   unreadable?: BlockKind;
+  /** A ticket-to-ticket message (ask_ticket / reply_ticket): in = from that ticket's Claude, out = to it. */
+  peer?: { dir: "in" | "out"; ticketId: string | null };
 }
 
 export type BlockKind = "questions" | "proposal" | "tickets";
@@ -234,7 +236,7 @@ function isPublisher(block: any): boolean {
   return block.name === "Bash" && typeof block.input?.command === "string" && HELPER_PUBLISH.test(block.input.command);
 }
 
-function userText(content: unknown): { kind: "text" | "board"; text: string } | null {
+function userText(content: unknown): { kind: "text" | "board"; text: string; from?: string; question?: string } | null {
   if (Array.isArray(content)) {
     if (content.some((c: any) => c?.type === "tool_result")) return null;
     content = content.map((c: any) => (c?.type === "text" ? c.text : "")).join("\n");
@@ -244,6 +246,10 @@ function userText(content: unknown): { kind: "text" | "board"; text: string } | 
   if (ctx >= 0) {
     // Board-sent prompt: show only what the user typed; pure instructions become a short note.
     const typed = content.slice(0, ctx).trim();
+    const tag = content.slice(ctx, content.indexOf(">", ctx) + 1);
+    // Sent by another ticket's Claude (a question, or a late reply): from="<ticket id>".
+    const from = tag.match(/ from="([^"]*)"/)?.[1];
+    if (typed && from) return { kind: "text", text: typed, from, question: tag.match(/ question="([^"]*)"/)?.[1] };
     if (typed) return { kind: "text", text: typed };
     const note = content.slice(ctx).match(/note="([^"]*)"/)?.[1];
     return { kind: "board", text: note || "Board sent instructions to Claude" };
@@ -260,6 +266,10 @@ function resultText(content: unknown): string {
   return "";
 }
 
+const ASK_TOOL = /(?:^|__)ask_ticket$/;
+const REPLY_TOOL = /(?:^|__)reply_ticket$/;
+const REPLY_HEAD = /^Reply from ticket (\S+) .*:\n\n/;
+
 function toolLabel(block: any): string {
   const input = block.input ?? {};
   const key = TOOL_ARG_KEYS.find((k) => typeof input[k] === "string" && input[k]);
@@ -273,6 +283,13 @@ export function parseSession(raw: string): ParsedSession {
   const entries: SessionEntry[] = [];
   const artifacts = new Map<string, SessionArtifact>();
   const publishers = new Set<string>();
+  /** ask_ticket calls by tool_use id → asked ticket; question id → asking ticket. */
+  const asks = new Map<string, string | null>();
+  const askers = new Map<string, string>();
+  const peerEntry = (u: NonNullable<ReturnType<typeof userText>>, uuid: string, at: string): SessionEntry => {
+    if (u.from && u.question) askers.set(u.question, u.from);
+    return { uuid, at, role: "user", kind: u.kind, text: u.text, ...(u.from ? { peer: { dir: "in" as const, ticketId: u.from } } : {}) };
+  };
 
   for (const line of raw.split("\n")) {
     if (!line) continue;
@@ -289,7 +306,7 @@ export function parseSession(raw: string): ParsedSession {
     // A message sent while Claude was working is saved as an attachment to the running turn, not a user message.
     if (ev.type === "attachment" && ev.attachment?.type === "queued_command" && ev.attachment.commandMode === "prompt" && !ev.isSidechain) {
       const u = userText(ev.attachment.prompt);
-      if (u) entries.push({ uuid, at, role: "user", kind: u.kind, text: u.text });
+      if (u) entries.push(peerEntry(u, uuid, at));
       continue;
     }
     if ((ev.type !== "user" && ev.type !== "assistant") || ev.isSidechain) continue;
@@ -297,7 +314,15 @@ export function parseSession(raw: string): ParsedSession {
 
     if (ev.type === "user") {
       if (Array.isArray(content)) {
-        for (const b of content) {
+        for (const [i, b] of content.entries()) {
+          // The reply an ask_ticket call came back with: shown as that ticket's message.
+          if (b?.type === "tool_result" && asks.has(b.tool_use_id) && !b.is_error) {
+            const m = REPLY_HEAD.exec(resultText(b.content));
+            if (m) {
+              const text = resultText(b.content).slice(m[0].length).trim();
+              entries.push({ uuid: i ? `${uuid}:${i}` : uuid, at, role: "user", kind: "text", text, peer: { dir: "in", ticketId: asks.get(b.tool_use_id) ?? m[1] } });
+            }
+          }
           // Only real publishes: output of the Artifact tool, or of the `ckanban artifact publish`
           // helper headless runs use. Other tools (e.g. Bash grepping a different session's file)
           // can print the same text.
@@ -310,7 +335,7 @@ export function parseSession(raw: string): ParsedSession {
         }
       }
       const u = userText(content);
-      if (u && !ev.isMeta) entries.push({ uuid, at, role: "user", kind: u.kind, text: u.text });
+      if (u && !ev.isMeta) entries.push(peerEntry(u, uuid, at));
       continue;
     }
 
@@ -319,7 +344,14 @@ export function parseSession(raw: string): ParsedSession {
       if (b?.type === "tool_use" && typeof b.id === "string" && isPublisher(b)) publishers.add(b.id);
       const id = i ? `${uuid}:${i}` : uuid;
       if (b?.type === "text" && b.text?.trim()) entries.push({ uuid: id, at, role: "assistant", kind: "text", ...assistantBlock(b.text.trim()) });
-      else if (b?.type === "tool_use") entries.push({ uuid: id, at, role: "assistant", kind: "tool", text: toolLabel(b) });
+      else if (b?.type === "tool_use" && ASK_TOOL.test(b.name ?? "") && typeof b.input?.question === "string") {
+        const to = typeof b.input.id === "string" ? b.input.id : null;
+        if (typeof b.id === "string") asks.set(b.id, to);
+        entries.push({ uuid: id, at, role: "assistant", kind: "text", text: b.input.question.trim(), peer: { dir: "out", ticketId: to } });
+      } else if (b?.type === "tool_use" && REPLY_TOOL.test(b.name ?? "") && typeof b.input?.text === "string") {
+        const to = typeof b.input.questionId === "string" ? askers.get(b.input.questionId) ?? null : null;
+        entries.push({ uuid: id, at, role: "assistant", kind: "text", text: b.input.text.trim(), peer: { dir: "out", ticketId: to } });
+      } else if (b?.type === "tool_use") entries.push({ uuid: id, at, role: "assistant", kind: "tool", text: toolLabel(b) });
     });
   }
 
@@ -339,7 +371,8 @@ export function parseSession(raw: string): ParsedSession {
 function pendingSince(entries: SessionEntry[]): Pick<ParsedSession, "openQuestions" | "pendingProposal" | "pendingNewTickets"> {
   let lastUser = -1;
   entries.forEach((e, i) => {
-    if (e.role === "user" && e.kind === "text") lastUser = i;
+    // Messages from other tickets don't answer what Claude asked the user.
+    if (e.role === "user" && e.kind === "text" && !e.peer) lastUser = i;
   });
   const after = entries.slice(lastUser + 1);
   return {

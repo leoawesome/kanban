@@ -220,7 +220,9 @@ test("every tool advertises a profile argument; change tools are flagged", () =>
   expect(TOOLS.filter((t) => !t.changes).map((t) => t.name).sort()).toEqual([
     "get_ticket", "list_profiles", "list_schedules", "list_tickets", "report_bug", "schedule_history",
   ]);
-  expect(TOOLS.filter((t) => t.allowInRun).map((t) => t.name).sort()).toEqual(["create_schedule", "delete_schedule", "update_schedule"]);
+  expect(TOOLS.filter((t) => t.allowInRun).map((t) => t.name).sort()).toEqual([
+    "ask_ticket", "create_schedule", "delete_schedule", "reply_ticket", "update_schedule",
+  ]);
 });
 
 test("report_bug files from inside a board run, with the ticket attached", async () => {

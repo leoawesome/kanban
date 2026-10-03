@@ -136,6 +136,8 @@ export interface QueuedMessage {
   text: string;
   at: string;
   state: "queued" | "unsent";
+  /** From another ticket's Claude: text is the full prompt (question first, then board instructions). */
+  peer?: boolean;
 }
 
 export interface SessionMessage {
@@ -178,6 +180,8 @@ export interface SessionEntry {
   moved?: "planning";
   /** A board block whose JSON couldn't be read (left visible as text). */
   unreadable?: "questions" | "proposal" | "tickets";
+  /** A ticket-to-ticket message: in = from that ticket's Claude, out = Claude to it. */
+  peer?: { dir: "in" | "out"; ticketId: string | null };
 }
 
 export interface Comment {
