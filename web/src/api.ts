@@ -177,6 +177,8 @@ export interface SessionEntry {
   questions?: Question[];
   proposal?: { title: string; description: string };
   newTickets?: NewTicketDraft[];
+  /** Mockups Claude sent in this reply, saved as outputs/mockups/<name>. */
+  mockups?: string[];
   moved?: "planning";
   /** A board block whose JSON couldn't be read (left visible as text). */
   unreadable?: "questions" | "proposal" | "tickets";
@@ -409,6 +411,8 @@ export const api = {
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),
   addComment: (slug: string, id: string, text: string) => req<Comment>("POST", `${t(slug, id)}/comments`, { text }),
   chat: (slug: string, id: string, text: string) => req<Ticket>("POST", `${t(slug, id)}/chat`, { text }),
+  /** Keep a planning mockup as mockups/approved.html and tell Claude (name is relative to outputs). */
+  approveMockup: (slug: string, id: string, name: string) => req<Ticket>("POST", `${t(slug, id)}/approve-mockup`, { name }),
   sendQueued: (slug: string, id: string, msgId: string) => req<Ticket>("POST", `${t(slug, id)}/queued/${msgId}`),
   discardQueued: (slug: string, id: string, msgId: string) => req<Ticket>("DELETE", `${t(slug, id)}/queued/${msgId}`),
   conversation: (slug: string, id: string, before?: number) =>

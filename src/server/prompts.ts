@@ -1,4 +1,7 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { helperCommand } from "./artifact";
+import { APPROVED_MOCKUP, MOCKUPS_DIR } from "./mockups";
 import { MAX_RETRIES } from "./plan";
 import type { Comment, Ticket, TicketQuestion } from "./types";
 import { shellQuote } from "./util";
@@ -106,6 +109,33 @@ The Artifact tool is not available in board runs. To publish or read a claude.ai
 Include the printed URL in your summary.`;
 }
 
+/** Planning chats draw HTML mockups for UI work as reply blocks; the board saves them for the Outputs tab. */
+function mockupsRule(outputDir: string): string {
+  return `# Mockups for UI work
+If this ticket changes a user interface, show the user what you mean before the ticket is final:
+- Make self-contained HTML mockups: one complete HTML document each, inline CSS and JS, no external network needed, realistic content, matching the project's existing look if there is one (read its styles first).
+- You can't write files while planning. Put each mockup in your reply as a block like this; the board saves it to ${join(outputDir, MOCKUPS_DIR)}/<name> and hides it from the chat:
+<ckanban-mockup name="a-compact.html">
+<!doctype html>
+<html>...</html>
+</ckanban-mockup>
+- You decide how many variants are useful (often 2-5). Name them <letter>-<short-name>.html (letters, digits, dashes). Reuse a name to replace that mockup. Never use approved.html; the board writes it when the user approves a mockup.
+- Next to the blocks, list the mockups in plain text, one line each saying how they differ, and ask the user to review them in the ticket's Outputs tab, where they can Approve one or request changes.
+- On a change request, resend that mockup (same name) with the changes, or add new variants.
+- Don't propose the final ticket for UI work until a mockup is approved, unless the user says to skip mockups. When one is approved, the proposed ticket must name ${join(outputDir, APPROVED_MOCKUP)} as the target design.
+- Skip mockups for tickets with no UI change.`;
+}
+
+/** Runs of a ticket whose planning ended with an approved mockup must build that design. */
+function approvedMockupRule(outputDir: string): string {
+  const file = join(outputDir, APPROVED_MOCKUP);
+  if (!existsSync(file)) return "";
+  return `# Approved design
+The user approved a mockup for this ticket during planning: ${file}. Read it before changing the UI and match it closely (layout, wording, states); mention in your summary if you had to deviate and why.
+
+`;
+}
+
 export interface PromptContext {
   isGit: boolean;
   linked?: boolean;
@@ -152,7 +182,7 @@ ${interview ? `${INTERVIEW}\n\n` : ""}# Rules
 
 ${PEERS_RULE}
 
-${deliverableRule(ctx.outputDir)}
+${approvedMockupRule(ctx.outputDir)}${deliverableRule(ctx.outputDir)}
 
 ${artifactRule()}
 
@@ -170,7 +200,7 @@ ${feedback}
 
 ${t.mode === "interview" ? `${t.interviewed ? AFTER_ANSWERS : INTERVIEW.replace("In this first run:", "Before continuing, in this run:")}\n\n` : ""}Continue working on the ticket, addressing the feedback. If a pull request already exists, push new commits to the same branch to update it. Update deliverables in ${outputDir} rather than creating duplicates.
 
-${PEERS_RULE}
+${approvedMockupRule(outputDir)}${PEERS_RULE}
 
 ${artifactRule()}
 
@@ -201,7 +231,7 @@ export function chatPrompt(t: Ticket, text: string, mode: ChatMode, outputDir: s
 
 `;
     return `${typed}${typed ? "\n\n" : ""}${context(typed ? "" : "Board asked Claude to help refine this ticket", `${start}(Sent from the kanban board's ticket chat. The user reads your reply there, not in a terminal.)
-You are helping the user shape this ticket BEFORE any work starts. Do not modify files or start the work; reading code, docs and links to understand the context is fine.
+You are helping the user shape this ticket BEFORE any work starts. Do not modify files or start the work (mockups go in reply blocks, see below); reading code, docs and links to understand the context is fine.
 
 Current ticket
 Title: ${t.title}
@@ -213,6 +243,8 @@ How to help:
 - When you know enough (or the user asks), propose the improved ticket. After the user applies it they will move it to Ready and Claude will work on it autonomously, so make it self-contained.
 - Otherwise reply naturally and briefly, like in a normal chat.
 ${bugReportRule(t)}
+
+${mockupsRule(outputDir)}
 
 ${QUESTIONS_FORMAT}
 
@@ -228,7 +260,7 @@ If the message only asks you to plan, audit, review, list ideas, propose or disc
 If you need decisions from the user, ask with the questions block.
 ${bugReportRule(t)}
 
-${QUESTIONS_FORMAT}
+${approvedMockupRule(outputDir)}${QUESTIONS_FORMAT}
 
 ${artifactRule()}
 

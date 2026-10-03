@@ -453,6 +453,24 @@ test("chat in Planning refines read-only and keeps the card in place", async () 
   expect(readArgs()[1].args).toContain("--resume");
 });
 
+test("planning replies save their mockup blocks to outputs/mockups; work runs don't", async () => {
+  await setup();
+  process.env.FAKE_EXTRA = '\n<ckanban-mockup name="a-compact.html"><!doctype html><p>A</p></ckanban-mockup>';
+  try {
+    const t = await board.createTicket("p", { title: "New sidebar", body: "d", status: "backlog" });
+    await board.chat("p", t.id, "Show me options");
+    await board.whenIdle();
+    const file = join(store.outputsDir("p", t.id), "mockups", "a-compact.html");
+    expect(readFileSync(file, "utf8")).toBe("<!doctype html><p>A</p>\n");
+    const w = await board.createTicket("p", { title: "Work", body: "d", status: "review" });
+    await board.chat("p", w.id, "tweak it");
+    await board.whenIdle();
+    expect(existsSync(join(store.outputsDir("p", w.id), "mockups"))).toBe(false);
+  } finally {
+    delete process.env.FAKE_EXTRA;
+  }
+});
+
 test("runStartedAt is set while Claude works and cleared after, for runs and chat replies", async () => {
   await setup();
   const t = await board.createTicket("p", { title: "Timed", body: "d", status: "backlog" });

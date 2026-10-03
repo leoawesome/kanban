@@ -11,6 +11,7 @@ import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
 import { QuestionError, Questions } from "./questions";
 import { attentionFor } from "./attention";
 import { MAX_RETRIES, planActive } from "./plan";
+import { approvableMockup, approvedMessage, approveMockup } from "./mockups";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
 import { FileError, listDir, openWithSystem, readFileForView } from "./files";
@@ -575,6 +576,18 @@ export function createServer(deps: ServerDeps) {
           "content-security-policy": "sandbox",
         },
       });
+    }
+    // The user approves a planning mockup: the board keeps it as mockups/approved.html and tells Claude.
+    if (action === "approve-mockup" && m === "POST") {
+      if (req.headers.get(RUN_HEADER)) throw new HttpError(403, "approving mockups is for the user, not board runs");
+      const b = await body(req);
+      const name = approvableMockup(String(b.name ?? ""));
+      const file = name && store.outputPath(slug, id, name);
+      if (!name || !file) throw new HttpError(404, "mockup not found");
+      if (store.getTicket(slug, id)!.status !== "planning") throw new HttpError(409, "mockups can only be approved while the ticket is in Planning");
+      approveMockup(store.outputsDir(slug, id), file);
+      const t = await board.chat(slug, id, approvedMessage(name));
+      return json(view(profile, t), 202);
     }
     if (action === "conversation" && m === "GET") {
       // Read-only view of the ticket's Claude session file (terminal chat + board runs), newest last.

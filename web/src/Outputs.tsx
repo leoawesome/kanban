@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, subscribe, type OutputFile } from "./api";
-import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, FileImageIcon, FileTextIcon, FolderIcon, FolderOpenIcon } from "./icons";
+import { autoGrow } from "./autoGrow";
+import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileCodeIcon, FileIcon, FileImageIcon, FileTextIcon, FolderIcon, FolderOpenIcon } from "./icons";
 import { fullTime, timeAgo, useNow } from "./time";
+import { toast } from "./toast";
 import { Markdown } from "./Transcript";
 
 function kb(n: number): string {
@@ -12,6 +14,10 @@ function kb(n: number): string {
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const BINARY = /\.(ico|bmp|tiff?|psd|pdf|zip|gz|tgz|tar|7z|rar|mp3|wav|m4a|ogg|mp4|mov|webm|avi|woff2?|ttf|otf|eot|exe|dll|so|dylib|bin|dat|db|sqlite|wasm|pyc|class|jar|heic|avif)$/i;
 const MARKDOWN = /\.(md|markdown)$/i;
+const HTML = /\.html?$/i;
+/** Planning mockups (outputs/mockups/*.html) get Approve / Request changes; approved.html is the board's copy. */
+const MOCKUP = /^mockups\/[^/]+\.html?$/i;
+const APPROVED = "mockups/approved.html";
 /** Show the filter once the list gets long. */
 const FILTER_MIN = 10;
 
@@ -49,14 +55,75 @@ function buildTree(files: OutputFile[]): Folder {
 
 function fileIcon(name: string) {
   if (IMAGE.test(name) || /\.svg$/i.test(name)) return <FileImageIcon />;
+  if (HTML.test(name)) return <FileCodeIcon />;
   if (BINARY.test(name)) return <FileIcon />;
   return <FileTextIcon />;
 }
 
-/** Deliverables Claude saved in the ticket's outputs folder; markdown is rendered, images previewed, other text shown raw. */
-export function Outputs({ slug, ticketId, onCount }: { slug: string; ticketId: string; onCount?: (n: number) => void }) {
+const escapeAttr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * Claude-written HTML only ever runs in an opaque-origin frame (sandbox without allow-same-origin), so it can't
+ * reach the board's API. A new tab gets a script-free page on a blob URL that wraps the same sandboxed frame.
+ */
+function openInTab(name: string, html: string) {
+  const page = `<!doctype html><meta charset="utf-8"><title>${escapeAttr(name)}</title>`
+    + `<style>html,body{margin:0;height:100%}iframe{display:block;border:0;width:100%;height:100%}</style>`
+    + `<iframe sandbox="allow-scripts" srcdoc="${escapeAttr(html)}"></iframe>`;
+  const url = URL.createObjectURL(new Blob([page], { type: "text/html" }));
+  window.open(url, "_blank", "noopener");
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/** Approve a planning mockup or ask Claude to change it; both continue the planning chat. */
+function MockupActions({ slug, ticketId, name, onSent }: { slug: string; ticketId: string; name: string; onSent?: () => void }) {
+  const [changes, setChanges] = useState("");
+  const [busy, setBusy] = useState<"approve" | "changes" | null>(null);
+  useEffect(() => setChanges(""), [name]);
+  const run = async (kind: "approve" | "changes") => {
+    setBusy(kind);
+    try {
+      if (kind === "approve") await api.approveMockup(slug, ticketId, name);
+      else await api.chat(slug, ticketId, `Changes for ${name}: ${changes.trim()}`);
+      toast(kind === "approve" ? `Approved ${baseName(name)}. Claude is writing the final ticket.` : `Sent your changes for ${baseName(name)} to Claude.`, { tone: "ok" });
+      setChanges("");
+      onSent?.();
+    } catch (e) {
+      toast(`Couldn't send: ${(e as Error).message}`, { tone: "error" });
+    } finally {
+      setBusy(null);
+    }
+  };
+  if (name === APPROVED) return <div className="mockup-actions muted small">This is the approved design. The dev run builds against it.</div>;
+  return (
+    <div className="mockup-actions">
+      <textarea value={changes} rows={1} placeholder="What should change in this mockup?" aria-label="Changes for this mockup"
+        onChange={(e) => { setChanges(e.target.value); autoGrow(e.target); }}
+        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && changes.trim() && !busy) { e.preventDefault(); run("changes"); } }} />
+      <button className="btn" disabled={!changes.trim() || !!busy} onClick={() => run("changes")}>
+        {busy === "changes" ? "Sending…" : "Request changes"}
+      </button>
+      <button className="btn primary" disabled={!!busy} onClick={() => run("approve")} title="Keep this as mockups/approved.html and let Claude write the final ticket">
+        {busy === "approve" ? "Approving…" : "Approve"}
+      </button>
+    </div>
+  );
+}
+
+/** Deliverables Claude saved in the ticket's outputs folder; markdown is rendered, images and HTML previewed, other text shown raw. */
+export function Outputs({ slug, ticketId, onCount, focus, planning, onSent }: {
+  slug: string;
+  ticketId: string;
+  onCount?: (n: number) => void;
+  /** File to show first (path relative to outputs), e.g. a mockup clicked in the chat. */
+  focus?: string | null;
+  /** The ticket is in Planning: mockups can be approved or sent back with changes. */
+  planning?: boolean;
+  /** A mockup approval or change request went to Claude. */
+  onSent?: () => void;
+}) {
   const [files, setFiles] = useState<OutputFile[] | null>(null);
-  const [open, setOpen] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(focus ?? null);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -80,10 +147,10 @@ export function Outputs({ slug, ticketId, onCount }: { slug: string; ticketId: s
   }), [slug, ticketId]);
 
   const current = files?.find((f) => f.name === open);
-  const kind = !open ? null : IMAGE.test(open) ? "image" : BINARY.test(open) ? "binary" : "text";
+  const kind = !open ? null : IMAGE.test(open) ? "image" : BINARY.test(open) ? "binary" : HTML.test(open) ? "html" : "text";
   useEffect(() => {
     setText(null);
-    if (!open || kind !== "text") return;
+    if (!open || (kind !== "text" && kind !== "html")) return;
     api.outputText(slug, ticketId, open).then(setText).catch((e) => setText(`Could not load: ${e.message}`));
   }, [slug, ticketId, open, kind, current?.updatedAt]);
 
@@ -159,8 +226,17 @@ export function Outputs({ slug, ticketId, onCount }: { slug: string; ticketId: s
           {shown.length ? renderFolder(tree, 0) : <div className="tree-note muted small">No matches</div>}
         </nav>
       </div>
-      <div className="output-view">
-        {kind === "image" ? (
+      <div className={`output-view${kind === "html" ? " html" : ""}`}>
+        {kind === "html" && open && (
+          <div className="output-html-bar">
+            {planning && MOCKUP.test(open) && <MockupActions slug={slug} ticketId={ticketId} name={open} onSent={onSent} />}
+            <button className="link-btn small" disabled={text === null} onClick={() => text !== null && openInTab(open, text)}>Open in new tab</button>
+          </div>
+        )}
+        {kind === "html" ? (
+          text === null ? <div className="muted output-html-note">Loading…</div>
+            : <iframe className="output-html" sandbox="allow-scripts" srcDoc={text} title={`Preview of ${open}`} />
+        ) : kind === "image" ? (
           <div className="output-image"><img src={`${rawUrl}?v=${encodeURIComponent(current?.updatedAt ?? "")}`} alt={open ?? ""} /></div>
         ) : kind === "binary" ? binaryNote
           : text === null ? <div className="muted">Loading…</div>

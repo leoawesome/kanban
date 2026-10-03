@@ -107,6 +107,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const [baseBody, setBaseBody] = useState(ticket.body);
   const [tab, setTab] = useState<"chat" | "outputs">("chat");
   const [outputCount, setOutputCount] = useState(0);
+  // A file to show when the Outputs tab opens (a mockup clicked in the chat).
+  const [outputFocus, setOutputFocus] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [titleSave, setTitleSave] = useState<"saving" | "saved" | null>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -428,14 +430,16 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>
                 Chat {working && <span className="dot" />}
               </button>
-              <button role="tab" aria-selected={tab === "outputs"} className={tab === "outputs" ? "active" : ""} onClick={() => setTab("outputs")}>
+              <button role="tab" aria-selected={tab === "outputs"} className={tab === "outputs" ? "active" : ""} onClick={() => { setOutputFocus(null); setTab("outputs"); }}>
                 Outputs{outputCount > 0 && <span className="tab-count">{outputCount}</span>}
               </button>
             </nav>
             {tab === "outputs" ? (
-              <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} /></div>
+              <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount}
+                focus={outputFocus} planning={ticket.status === "planning"} onSent={() => setTab("chat")} /></div>
             ) : (
-              <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError} />
+              <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError}
+                onOpenOutput={(name) => { setOutputFocus(name); setTab("outputs"); }} />
             )}
           </div>
         </div>

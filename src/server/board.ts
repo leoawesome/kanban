@@ -7,6 +7,7 @@ import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, resolveBaseBranch, worktreeDir } from "./git";
 import { MOVE_TO_PLANNING_RE } from "./session";
+import { saveMockups } from "./mockups";
 import { chatPrompt, firstRunPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
 import {
   childrenOf, DEFAULT_MAX_CONCURRENT, findCycle, planActive, planProblem, planStep, planTable, resolveDeps, wakeupCap,
@@ -363,6 +364,7 @@ export class Board {
           } else if (!draftTimer) draftTimer = setTimeout(emitDraft, DRAFT_THROTTLE_MS);
         }
         if (ev?.type === "stream_event") return;
+        if (refine && ev?.type === "assistant") this.saveMockups(slug, id, outputDir, ev);
         const read = replayText(ev);
         if (read !== null) this.delivered(run, read);
         this.store.appendActivity(slug, id, runNo, ev);
@@ -437,6 +439,19 @@ export class Board {
       prUrl: run.chat?.raw ? current.prUrl : result?.prUrl ?? current.prUrl,
       error: null,
     });
+  }
+
+  /** Planning replies carry mockups as blocks (plan mode can't write files); save them for the Outputs tab. */
+  private saveMockups(slug: string, id: string, outputDir: string, ev: any) {
+    const content = ev.message?.content;
+    if (!Array.isArray(content)) return;
+    const text = content.map((b: any) => (b?.type === "text" && typeof b.text === "string" ? b.text : "")).join("\n");
+    try {
+      const names = saveMockups(outputDir, text);
+      if (names.length) this.patch(slug, id, { lastActivity: `Saved mockup${names.length > 1 ? "s" : ""} ${names.join(", ")}` });
+    } catch (e) {
+      this.store.addComment(slug, id, "ai", `Couldn't save mockups: ${(e as Error).message}`);
+    }
   }
 
   private sessionLocks = new Map<string, Promise<unknown>>();

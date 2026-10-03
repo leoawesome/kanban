@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { Bus } from "./events";
+import { stripMockups } from "./mockups";
 import type { Store } from "./store";
 
 /** One visible item of a Claude Code session, as shown in the ticket's Conversation tab. */
@@ -41,6 +42,8 @@ export interface SessionEntry {
   proposal?: TicketProposal;
   /** New tickets Claude proposed splitting the work into (rendered with Create buttons). */
   newTickets?: NewTicketDraft[];
+  /** Mockups Claude sent as blocks (saved to outputs/mockups; the chat links to them). */
+  mockups?: string[];
   /** Claude asked the board to move the ticket (a planning-only request arrived in Review). */
   moved?: "planning";
   /** A board block whose JSON couldn't be read (left visible as text; the chat says so). */
@@ -132,8 +135,9 @@ function parseNewTickets(v: any): NewTicketDraft[] | null {
 }
 
 /** Split an assistant text block into visible text + structured questions/proposal/new tickets. */
-function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" | "proposal" | "newTickets" | "moved" | "unreadable"> {
-  let out = text;
+function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" | "proposal" | "newTickets" | "mockups" | "moved" | "unreadable"> {
+  const { text: rest, names: mockups } = stripMockups(text);
+  let out = rest;
   let moved: "planning" | undefined;
   if (MOVE_TO_PLANNING_RE.test(out)) {
     moved = "planning";
@@ -160,6 +164,7 @@ function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" |
     ...(questions ? { questions } : {}),
     ...(proposal ? { proposal } : {}),
     ...(newTickets ? { newTickets } : {}),
+    ...(mockups.length ? { mockups } : {}),
     ...(moved ? { moved } : {}),
     ...(unreadable ? { unreadable } : {}),
   };

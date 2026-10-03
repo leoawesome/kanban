@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, subscribe, type NewTicketDraft, type SessionEntry, type Ticket } from "./api";
 import { autoGrow } from "./autoGrow";
-import { ArrowDownIcon, CloseIcon } from "./icons";
+import { ArrowDownIcon, CloseIcon, FileCodeIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { NewTicketsCard } from "./NewTicketsCard";
 import { ProposalCard } from "./ProposalCard";
@@ -35,6 +35,7 @@ function liveView(text: string): { text: string; preparing: string | null } {
   return {
     text: visible,
     preparing: rest.startsWith("<ckanban-questions") ? "Preparing questions…"
+      : rest.startsWith("<ckanban-mockup") ? "Drawing mockup…"
       : rest.startsWith("<ckanban-tickets") ? "Preparing tickets…"
       : rest.startsWith("<ckanban-ticket") ? "Preparing ticket proposal…" : null,
   };
@@ -70,12 +71,14 @@ export function useStop(slug: string, ticket: Ticket, working: boolean, onError:
   return { stopping, stop };
 }
 
-export function Chat({ slug, ticket, tickets, onOpenTicket, onError }: {
+export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onError }: {
   slug: string;
   ticket: Ticket;
   /** The board's tickets, to tell which proposed new tickets already exist. */
   tickets: Ticket[];
   onOpenTicket: (id: string) => void;
+  /** Show a file of the ticket's outputs folder (path relative to it) in the Outputs tab. */
+  onOpenOutput?: (name: string) => void;
   onError: (m: string) => void;
 }) {
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
@@ -343,6 +346,15 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onError }: {
               )}
               {e.newTickets && (
                 <NewTicketsCard drafts={e.newTickets} created={childFor} onCreate={createChild} onOpen={onOpenTicket} />
+              )}
+              {e.mockups && (
+                <div className="chat-mockups">
+                  {e.mockups.map((m) => (
+                    <button key={m} className="chat-mockup" onClick={() => onOpenOutput?.(`mockups/${m}`)} title="Preview in the Outputs tab">
+                      <FileCodeIcon size={13} /> Mockup <b>{m}</b>
+                    </button>
+                  ))}
+                </div>
               )}
               {e.unreadable && (
                 <div className="chat-unreadable" role="status">
