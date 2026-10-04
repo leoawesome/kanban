@@ -794,3 +794,130 @@ test("a finished run lands on top of Review; dragging to Ready keeps the drop sl
   await board.updateTicket("p", t.id, { status: "backlog", order: 7 });
   expect(store.getTicket("p", t.id)!.order).toBe(7);
 });
+
+test("restart mid-reply: planning chat keeps its partial text and recover() resumes it in plan mode", async () => {
+  await setup();
+  process.env.FAKE_MODE = "partial";
+  const t = await board.createTicket("p", { title: "plan", body: "", status: "backlog" });
+  await board.chat("p", t.id, "what next?");
+  await Bun.sleep(600);
+  await board.shutdown();
+  const cut = store.getTicket("p", t.id)!;
+  expect(cut.status).toBe("backlog");
+  expect(cut.interrupted).toMatchObject({ mode: "refine", partial: "Half a repl" });
+  expect(cut.interrupted!.prompt).toBeUndefined();
+  expect(cut.lastActivity).toBeNull();
+  expect(cut.runStartedAt).toBeNull();
+
+  process.env.FAKE_MODE = "ok";
+  board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async () => false });
+  board.recover();
+  await board.whenIdle();
+  const calls = readArgs();
+  expect(calls.length).toBe(2);
+  expect(calls[1].prompt).toContain("Reply interrupted by daemon restart");
+  expect(calls[1].args.join(" ")).toContain("--permission-mode plan");
+  expect(calls[1].args).toContain(cut.sessionId!);
+  expect(store.listComments("p", t.id).map((c) => c.text)).toContain("Reply interrupted by daemon restart; resuming.");
+  const after = store.getTicket("p", t.id)!;
+  expect(after.interrupted ?? null).toBeNull();
+  expect(after.status).toBe("backlog");
+}, 20000);
+
+test("recover() starts nothing when no reply was cut off", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "plan", body: "", status: "backlog" });
+  await board.chat("p", t.id, "hi");
+  await board.whenIdle();
+  await board.shutdown();
+  board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async () => false });
+  board.recover();
+  await board.whenIdle();
+  expect(readArgs().length).toBe(1);
+  expect(store.listComments("p", t.id).some((c) => c.text.includes("interrupted"))).toBe(false);
+});
+
+test("cut-off reply with a queued message: one reply that answers the message", async () => {
+  await setup();
+  process.env.FAKE_MODE = "partial";
+  const t = await board.createTicket("p", { title: "plan", body: "", status: "backlog" });
+  await board.chat("p", t.id, "first");
+  await Bun.sleep(600);
+  await board.shutdown();
+  store.updateTicket("p", t.id, { queued: [{ id: "m1", text: "and also this", at: new Date().toISOString(), state: "queued" }] });
+
+  process.env.FAKE_MODE = "ok";
+  board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async () => false });
+  board.recover();
+  await board.whenIdle();
+  const calls = readArgs();
+  expect(calls.length).toBe(2);
+  expect(calls[1].prompt!.startsWith("and also this")).toBe(true);
+  expect(store.getTicket("p", t.id)!.queued).toEqual([]);
+  expect(store.getTicket("p", t.id)!.interrupted ?? null).toBeNull();
+}, 20000);
+
+test("a chat cut off before claude started gets its message again, not a 'continue'", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "plan", body: "", status: "backlog" });
+  await board.chat("p", t.id, "my question");
+  await board.shutdown(); // still setting up the worktree: claude never spawned
+  expect(store.getTicket("p", t.id)!.interrupted?.prompt).toEqual({ text: "my question" });
+  board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async () => false });
+  board.recover();
+  await board.whenIdle();
+  const calls = readArgs();
+  expect(calls.length).toBe(1);
+  expect(calls[0].prompt!.startsWith("my question")).toBe(true);
+});
+
+test("requested restart waits for active runs and holds new ones until recover()", async () => {
+  await setup();
+  process.env.FAKE_STEP_MS = "300";
+  try {
+    const work = await board.createTicket("p", { title: "work", body: "", status: "ready" });
+    await Bun.sleep(300);
+    let restarted = false;
+    expect(board.requestRestart(() => { restarted = true; }).running).toBe(1);
+    expect(board.requestRestart(() => {}).alreadyPending).toBe(true);
+    // Nothing new starts while the restart waits.
+    const next = await board.createTicket("p", { title: "next", body: "", status: "ready" });
+    const plan = await board.createTicket("p", { title: "plan", body: "", status: "planning" });
+    const chat = await board.createTicket("p", { title: "chat", body: "", status: "backlog" });
+    await board.chat("p", chat.id, "hello?");
+    expect(board.isRunning("p", next.id) || board.isRunning("p", plan.id) || board.isRunning("p", chat.id)).toBe(false);
+    expect(store.getTicket("p", chat.id)!.queued).toMatchObject([{ text: "hello?", state: "queued" }]);
+    expect(store.getTicket("p", plan.id)!.interrupted).toMatchObject({ held: true });
+    expect(restarted).toBe(false);
+    await board.whenIdle();
+    await Bun.sleep(400);
+    expect(restarted).toBe(true);
+    expect(store.getTicket("p", work.id)!.status).toBe("review");
+
+    await board.shutdown();
+    const before = readArgs().length;
+    board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async () => false });
+    board.recover();
+    await Bun.sleep(50);
+    await board.whenIdle();
+    const prompts = readArgs().slice(before).map((c) => c.prompt ?? "");
+    expect(prompts.length).toBe(3);
+    expect(prompts.some((p) => p.startsWith("hello?"))).toBe(true);
+    expect(prompts.some((p) => p.includes("Board asked Claude to help refine"))).toBe(true);
+    expect(store.getTicket("p", next.id)!.status).toBe("review");
+    expect(store.listComments("p", plan.id).some((c) => c.text.includes("interrupted"))).toBe(false);
+  } finally {
+    delete process.env.FAKE_STEP_MS;
+  }
+}, 30000);
+
+test("requested restart gives up waiting after the timeout", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  await board.createTicket("p", { title: "work", body: "", status: "ready" });
+  await Bun.sleep(300);
+  let restarted = false;
+  board.requestRestart(() => { restarted = true; }, 500);
+  await Bun.sleep(1000);
+  expect(restarted).toBe(true);
+}, 15000);

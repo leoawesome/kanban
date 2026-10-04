@@ -55,13 +55,13 @@ The installer registers a macOS launch agent, so the board:
 - restarts itself if it crashes,
 - keeps running when you close the browser or terminal.
 
-Tickets that were **In Progress** when the Mac shut down or the service restarted go back to Ready and resume the same Claude session automatically. Nothing needs to stay open except your Mac being on.
+Tickets that were **In Progress** when the Mac shut down or the service restarted go back to Ready and resume the same Claude session automatically. A chat or Planning reply that a restart cut off keeps what Claude had written so far (greyed out) and continues on its own after the restart. Nothing needs to stay open except your Mac being on.
 
 ### Everyday commands
 
 ```bash
 ckanban update      # get the latest release (the board also shows a banner when one is out)
-ckanban restart     # restart the background service
+ckanban restart     # restart the background service once active runs finish (--now: at once)
 ckanban open        # open the board
 ckanban uninstall   # stop and remove the service (your boards in ~/.claude-kanban stay)
 ```

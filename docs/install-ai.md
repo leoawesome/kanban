@@ -60,7 +60,7 @@ Tell them:
 
 ```bash
 ckanban update      # download latest release and restart the service
-ckanban restart     # restart the service
+ckanban restart     # restart the service once active runs finish (--now: at once)
 ckanban uninstall   # stop and remove the service; boards in ~/.claude-kanban are kept
 ```
 

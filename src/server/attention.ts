@@ -33,6 +33,7 @@ export function attentionFor(
   }
   if (s?.pendingNewTickets?.some((n) => !o.createdTitles?.has(n.title))) return { kind: "proposal", label: "Review proposed tickets" };
   if (t.status === "review") return { kind: "review", label: "Ready for review" };
-  if (t.status === "planning" && s?.lastMessage?.role === "assistant") return { kind: "reply", label: "Claude replied" };
+  // A reply cut off by a restart isn't a reply yet: recover() resumes it.
+  if (t.status === "planning" && s?.lastMessage?.role === "assistant" && !t.interrupted) return { kind: "reply", label: "Claude replied" };
   return null;
 }

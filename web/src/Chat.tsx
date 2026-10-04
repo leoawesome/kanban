@@ -387,6 +387,12 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
             <Markdown text={p.text} />
           </div>
         ))}
+        {ticket.interrupted?.partial && (
+          <div className="conv-msg assistant interrupted">
+            <div className="conv-head"><b>Claude</b><span className="muted small">interrupted by a board restart; {running ? "continuing below…" : "resumes when the board is back"}</span></div>
+            <Markdown text={ticket.interrupted.partial} />
+          </div>
+        )}
         {live && (
           <div className="conv-msg assistant live" aria-live="polite">
             <div className="conv-head"><b>Claude</b><span className="muted small">writing…</span></div>

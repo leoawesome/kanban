@@ -55,6 +55,8 @@ export interface Ticket {
   plan?: Plan | null;
   /** Chat messages sent while Claude was working that it has not read yet, oldest first. */
   queued?: QueuedMessage[];
+  /** A chat reply the daemon cut off by restarting (or held back while a restart waited); recover() resumes it. */
+  interrupted?: Interrupted | null;
   createdAt: string;
   updatedAt: string;
   body: string;
@@ -97,6 +99,19 @@ export type ScheduleHistoryEntry =
   | { at: string; kind: "skipped"; trigger: ScheduleTrigger; ticketId: string | null }
   | { at: string; kind: "error"; trigger: ScheduleTrigger; message: string }
   | { at: string; kind: "edited"; action: ScheduleEditAction; fields: string[]; by: ScheduleEditor; previous?: SchedulePrevious };
+
+export interface Interrupted {
+  at: string;
+  mode: "refine" | "act";
+  /** A reply to another ticket's Claude: the card stays as it was. */
+  quiet?: boolean;
+  /** What Claude had written of its reply when it was cut off (shown greyed until the resumed reply arrives). */
+  partial?: string;
+  /** Claude never got this prompt (cut off during setup, or held while a restart waited): send it again as is. */
+  prompt?: { text: string; raw?: boolean };
+  /** Held back while a restart waited, not cut off: resumed without the interruption note. */
+  held?: boolean;
+}
 
 export interface QueuedMessage {
   id: string;

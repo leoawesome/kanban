@@ -228,6 +228,11 @@ export function steerPrompt(text: string): string {
 ${context("", `(Sent from the kanban board's ticket chat while you were working. Take it into account and carry on; keep following the instructions you were given for this run, including how to end it.)`)}`;
 }
 
+/** The daemon restarted while Claude was replying: pick the reply up where it was cut off. */
+export function interruptedPrompt(): string {
+  return context("Reply interrupted by daemon restart; Claude continues", `The board restarted while you were replying, so your last reply was cut off and the user never saw its end. Continue from where you stopped: finish what you were doing and give the user your full reply. Keep following the instructions you were given earlier in this conversation (same mode, same rules, same way to end).`);
+}
+
 /** A message the user typed in the ticket's chat. Their text comes first; board instructions are wrapped so the UI can hide them. */
 export function chatPrompt(t: Ticket, text: string, mode: ChatMode, outputDir: string): string {
   const typed = text.trim();

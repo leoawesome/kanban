@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Fake `claude` CLI for tests. Behaviour controlled by env:
-// FAKE_MODE=ok|fail|slow|blocked|noresult, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
+// FAKE_MODE=ok|fail|slow|partial|blocked|noresult, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
 // With --input-format stream-json it reads user messages from stdin like the real CLI: messages that
 // arrive mid-run are picked up at the next step (replayed with --replay-user-messages), later ones
 // get their own turn, and it exits at end of input.
@@ -97,6 +97,13 @@ if (mode === "child") {
 }
 
 if (mode === "slow") {
+  await Bun.sleep(30000);
+}
+
+// Starts writing its reply, then hangs (a restart cuts it off mid-reply).
+if (mode === "partial") {
+  emit({ type: "stream_event", event: { type: "message_start" } });
+  emit({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Half a repl" } } });
   await Bun.sleep(30000);
 }
 

@@ -27,7 +27,9 @@ export async function startDaemon(): Promise<void> {
   const shells = new ShellManager();
   const mcp = new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude", seenFile: join(store.root, "mcp-seen.json") });
   const scheduler = new Scheduler(board, store, bus);
-  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, mcp, scheduler, assets: WEB_ASSETS });
+  // launchd (KeepAlive) starts the daemon again once it exits.
+  const restart = () => board.requestRestart(() => void shutdown());
+  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, mcp, scheduler, assets: WEB_ASSETS, restart });
   console.log(`ckanban v${VERSION} listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();
   const stopPoller = startPoller(board, store, config.prPollMinutes);

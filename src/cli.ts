@@ -6,6 +6,7 @@ import { boardPort, ClientError } from "./client";
 import { serveStdio } from "./mcp-server";
 import { runArtifactJob } from "./server/artifact";
 import { LABEL, PLIST_PATH, plistXml } from "./server/launchd";
+import { RESTART_MAX_WAIT_MS } from "./server/board";
 import { startDaemon } from "./server/main";
 import { AgentError } from "./server/agents";
 import { defaultRoot } from "./server/store";
@@ -19,7 +20,8 @@ Usage:
   ckanban dev          Run the server in the foreground
   ckanban start        Same as dev (used by launchd)
   ckanban install      Install and start the launchd background daemon (macOS)
-  ckanban restart      Restart the daemon (after pulling or building changes)
+  ckanban restart      Restart the daemon once active runs finish (after pulling or building changes)
+                       --now: restart at once (cut-off replies resume after the restart)
   ckanban uninstall    Stop and remove the launchd daemon
   ckanban open         Open the board in your browser
   ckanban update       Update to the latest release and restart the daemon
@@ -84,13 +86,39 @@ async function quiet(cmd: string[]): Promise<number> {
   return Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" }).exited;
 }
 
-async function restart() {
-  const code = await sh(["launchctl", "kickstart", "-k", `gui/${process.getuid!()}/${LABEL}`]);
-  if (code !== 0) {
-    console.error("daemon not installed; run: ckanban install");
-    process.exit(code);
+/**
+ * Ask the daemon to restart once no run is active (so a reply or ticket mid-run isn't cut off).
+ * Returns how many runs it waits for, or null when the daemon can't be asked (not up, or an older version).
+ */
+async function gracefulRestart(): Promise<number | null> {
+  try {
+    const res = await fetch(`${boardUrl()}/api/restart`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}", signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    return Number(((await res.json()) as { running?: number }).running) || 0;
+  } catch {
+    return null;
   }
-  console.log(`Restarted. Board: ${boardUrl()}`);
+}
+
+async function restart(now: boolean) {
+  const target = `gui/${process.getuid!()}/${LABEL}`;
+  if ((await quiet(["launchctl", "print", target])) !== 0) {
+    console.error("daemon not installed; run: ckanban install");
+    process.exit(1);
+  }
+  const waiting = now ? null : await gracefulRestart();
+  if (waiting === null) {
+    const code = await sh(["launchctl", "kickstart", "-k", target]);
+    if (code !== 0) process.exit(code);
+    console.log(`Restarted. Board: ${boardUrl()}`);
+  } else if (waiting === 0) {
+    console.log(`Restarting. Board: ${boardUrl()}`);
+  } else {
+    console.log(`Restart pending: waiting for ${waiting} active run${waiting === 1 ? "" : "s"} to finish (at most ${RESTART_MAX_WAIT_MS / 60_000} min).
+New runs, chat replies and Planning interviews start after the restart. Use \`ckanban restart --now\` to restart at once.`);
+  }
 }
 
 async function update() {
@@ -123,8 +151,9 @@ async function update() {
   chmodSync(tmp, 0o755);
   renameSync(tmp, process.execPath);
   const running = (await quiet(["launchctl", "print", `gui/${process.getuid!()}/${LABEL}`])) === 0;
-  if (running) await quiet(["launchctl", "kickstart", "-k", `gui/${process.getuid!()}/${LABEL}`]);
-  console.log(`Updated to v${rel.version}.${running ? " Daemon restarted; refresh the board." : ""}`);
+  const waiting = running ? await gracefulRestart() : null;
+  if (running && waiting === null) await quiet(["launchctl", "kickstart", "-k", `gui/${process.getuid!()}/${LABEL}`]);
+  console.log(`Updated to v${rel.version}.${!running ? "" : waiting ? ` Daemon restarts once ${waiting} active run${waiting === 1 ? "" : "s"} finish; then refresh the board.` : " Daemon restarted; refresh the board."}`);
 }
 
 async function uninstall() {
@@ -183,7 +212,7 @@ switch (cmd) {
     await install();
     break;
   case "restart":
-    await restart();
+    await restart(process.argv.includes("--now"));
     break;
   case "uninstall":
     await uninstall();

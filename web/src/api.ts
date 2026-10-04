@@ -104,6 +104,8 @@ export interface Ticket {
   plan?: Plan | null;
   /** Messages sent while Claude was working that it has not read yet; "unsent" ones were cut off by Stop. */
   queued?: QueuedMessage[];
+  /** A reply a daemon restart cut off; the board resumes it. partial: what Claude had written so far. */
+  interrupted?: { at: string; partial?: string; held?: boolean } | null;
   createdAt: string;
   updatedAt: string;
   body: string;

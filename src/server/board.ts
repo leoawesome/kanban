@@ -8,7 +8,7 @@ import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, resolveBaseBranch, worktreeDir } from "./git";
 import { MOVE_TO_PLANNING_RE } from "./session";
 import { saveMockups } from "./mockups";
-import { chatPrompt, firstRunPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
+import { chatPrompt, firstRunPrompt, interruptedPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
 import {
   childrenOf, DEFAULT_MAX_CONCURRENT, findCycle, planActive, planProblem, planStep, planTable, resolveDeps, wakeupCap,
 } from "./plan";
@@ -18,7 +18,7 @@ import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
 import { mcpConfig } from "./agents";
 import type { Store } from "./store";
-import type { Plan, QueuedMessage, Status, Ticket, TicketMode } from "./types";
+import type { Interrupted, Plan, QueuedMessage, Status, Ticket, TicketMode } from "./types";
 import { nowIso, slugify } from "./util";
 
 export interface BoardOptions {
@@ -58,6 +58,15 @@ interface ActiveRun {
   inFlight: Map<string, string>;
   /** Queued message this chat run was started with; it leaves the queue once Claude reads the prompt. */
   promptMsgId?: string;
+  /** Reply text streaming in right now; kept on the ticket if a restart cuts the run off. */
+  draft?: DraftTracker;
+}
+
+/** A finished assistant message with text in it (not just thinking or a tool call). */
+function hasText(ev: any): boolean {
+  if (ev?.type !== "assistant" || ev.parent_tool_use_id) return false;
+  const c = ev.message?.content;
+  return Array.isArray(c) && c.some((b: any) => b?.type === "text" && typeof b.text === "string" && b.text.trim());
 }
 
 function replayText(ev: any): string | null {
@@ -78,6 +87,8 @@ function chatFor(status: Status, msg: { text: string; peer?: boolean }): NonNull
 }
 
 const ACTIVITY_THROTTLE_MS = 1000;
+/** A requested restart waits this long for active runs to finish, then restarts anyway (recover() resumes them). */
+export const RESTART_MAX_WAIT_MS = 10 * 60_000;
 const DRAFT_THROTTLE_MS = 120;
 
 /** The session's transcript file under Claude's projects folder, if any. */
@@ -101,6 +112,8 @@ export class ConflictError extends Error {}
 export class Board {
   private runs = new Map<string, ActiveRun>();
   private shuttingDown = false;
+  /** A restart waits for active runs to finish: no new run starts until then (see requestRestart). */
+  private restartPending = false;
   private sessionExists: (id: string) => boolean;
   private isSessionLive: (id: string, title: string | null) => Promise<boolean>;
   private notify: (title: string, body: string) => void;
@@ -137,6 +150,7 @@ export class Board {
   }
 
   dispatch(slug: string): void {
+    if (this.restartPending) return; // Ready tickets start after the restart
     const profile = this.store.getProfile(slug);
     if (!profile || !existsSync(profile.path)) return;
     const ready = this.store
@@ -167,6 +181,11 @@ export class Board {
       this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
       this.steer(active, msg);
       return this.store.getTicket(slug, id)!;
+    }
+    if (this.restartPending) {
+      // Starts after the restart: recover() answers queued messages.
+      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued", ...(opts.peer ? { peer: true } : {}) };
+      return this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
     }
     this.start(slug, id, chatFor(t.status, { text, peer: opts.peer }));
     return this.store.getTicket(slug, id)!;
@@ -223,6 +242,10 @@ export class Board {
     if (t.error?.startsWith("corrupt")) return;
     // A linked session is already a conversation about work underway; an interview would be noise.
     if (t.workdir || t.sessionStarted) return;
+    if (this.restartPending) {
+      this.patch(slug, id, { refineStarted: true, interrupted: { at: nowIso(), mode: "refine", prompt: { text: "" }, held: true } });
+      return;
+    }
     this.start(slug, id, { text: "", mode: "refine" });
   }
 
@@ -244,7 +267,7 @@ export class Board {
         // Tell the UI the run is over (earlier updates were sent while it was still registered).
         const now = this.store.getTicket(slug, id);
         if (now && !this.shuttingDown) {
-          if (now.runStartedAt) this.patch(slug, id, { runStartedAt: null });
+          if (now.runStartedAt || now.interrupted) this.patch(slug, id, { runStartedAt: null, interrupted: null });
           else this.emitTicket(slug, now);
         }
         // When the user moved the card, updateTicket() writes the new status and dispatches itself.
@@ -265,7 +288,7 @@ export class Board {
   private async execute(run: ActiveRun): Promise<void> {
     await this.executeOnce(run);
     for (;;) {
-      if (this.shuttingDown) return; // queue stays on the ticket; recover() delivers it
+      if (this.shuttingDown || this.restartPending) return; // queue stays on the ticket; recover() delivers it
       const t = this.store.getTicket(run.slug, run.id);
       if (!t) return;
       const next = this.waiting(run.slug, run.id)[0];
@@ -343,6 +366,9 @@ export class Board {
     let lastWrite = 0;
     let pendingActivity: string | null = null;
     const draft = new DraftTracker();
+    run.draft = draft;
+    // A reply cut off by a restart stays on screen until this run's reply replaces it.
+    let showsInterrupted = !!t.interrupted;
     let draftTimer: ReturnType<typeof setTimeout> | null = null;
     const emitDraft = () => {
       draftTimer = null;
@@ -366,6 +392,10 @@ export class Board {
         }
         if (ev?.type === "stream_event") return;
         if (refine && ev?.type === "assistant") this.saveMockups(slug, id, outputDir, ev);
+        if (showsInterrupted && !this.shuttingDown && hasText(ev)) {
+          showsInterrupted = false;
+          this.patch(slug, id, { interrupted: null });
+        }
         const read = replayText(ev);
         if (read !== null) this.delivered(run, read);
         this.store.appendActivity(slug, id, runNo, ev);
@@ -649,7 +679,7 @@ export class Board {
 
   /** Move every running plan on the board forward. Cheap and idempotent: call it after any change. */
   advancePlans(slug: string): void {
-    if (this.shuttingDown) return;
+    if (this.shuttingDown || this.restartPending) return;
     if (this.advancing.has(slug)) {
       this.advanceAgain.add(slug);
       return;
@@ -841,11 +871,49 @@ export class Board {
   /** Kill all runs without recording an outcome; tickets stay in_progress for recover(). */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    for (const r of this.runs.values()) this.markInterrupted(r);
     for (const r of this.runs.values()) {
       r.stopRequested = true;
       r.handle?.stop();
     }
     await Promise.race([this.whenIdle(), Bun.sleep(6000)]);
+  }
+
+  /** A chat reply is being cut off by shutdown: remember it so recover() resumes it (work runs stay in_progress). */
+  private markInterrupted(r: ActiveRun): void {
+    const t = this.store.getTicket(r.slug, r.id);
+    if (!t || !r.chat || r.stopRequested || t.status === "in_progress") return;
+    // Not spawned yet with a queued message: it is still in the queue, and recover() answers it.
+    if (!r.handle && r.promptMsgId) return;
+    const i: Interrupted = { at: nowIso(), mode: r.chat.mode };
+    if (r.chat.quiet) i.quiet = true;
+    if (r.draft?.text) i.partial = r.draft.text;
+    // Claude never got the prompt: send it again rather than asking it to continue.
+    if (!r.handle) i.prompt = r.chat.raw ? { text: r.chat.text, raw: true } : { text: r.chat.text };
+    this.patch(r.slug, r.id, { interrupted: i, lastActivity: null, runStartedAt: null });
+  }
+
+  /**
+   * Restart once no run is active. Until then nothing new starts: Ready tickets wait, chat messages queue and
+   * Planning interviews are held; recover() starts them after the restart. After maxWaitMs it restarts anyway.
+   */
+  requestRestart(onIdle: () => void, maxWaitMs = RESTART_MAX_WAIT_MS): { running: number; alreadyPending: boolean } {
+    const running = this.runs.size;
+    if (this.restartPending) return { running, alreadyPending: true };
+    this.restartPending = true;
+    void (async () => {
+      const deadline = Date.now() + maxWaitMs;
+      // Always yield first, so the caller's HTTP response goes out before the daemon exits.
+      do await Bun.sleep(200);
+      while (this.runs.size && Date.now() < deadline);
+      if (this.runs.size) console.log(`restart: ${this.runs.size} run(s) still active after ${Math.round(maxWaitMs / 1000)}s; restarting anyway`);
+      onIdle();
+    })();
+    return { running, alreadyPending: false };
+  }
+
+  isRestartPending(): boolean {
+    return this.restartPending;
   }
 
   recover(): void {
@@ -866,6 +934,15 @@ export class Board {
       }
       this.dispatch(p.slug);
       this.advancePlans(p.slug);
+      // Chat replies a restart cut off (or held back): continue them in the same session and mode.
+      for (const t of this.store.listTickets(p.slug)) {
+        const i = t.interrupted;
+        if (!i || this.isRunning(p.slug, t.id) || t.status === "in_progress" || t.error?.startsWith("corrupt")) continue;
+        if (!i.held) this.store.addComment(p.slug, t.id, "ai", "Reply interrupted by daemon restart; resuming.");
+        if (i.prompt) this.start(p.slug, t.id, { text: i.prompt.text, mode: i.mode, raw: i.prompt.raw, quiet: i.quiet });
+        // With a queued message waiting, the pass below answers it instead (one reply, not two).
+        else if (!this.waiting(p.slug, t.id).length) this.start(p.slug, t.id, { text: interruptedPrompt(), mode: i.mode, raw: true, quiet: i.quiet });
+      }
       // Messages a restarted chat run never got to: answer them in a chat reply now.
       for (const t of this.store.listTickets(p.slug)) {
         const next = this.waiting(p.slug, t.id)[0];

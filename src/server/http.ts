@@ -40,6 +40,8 @@ export interface ServerDeps {
   scheduler?: Scheduler;
   agents?: AgentRegistry;
   questions?: Questions;
+  /** Restart the daemon once no run is active (POST /api/restart); missing when not running as the daemon. */
+  restart?: () => { running: number; alreadyPending: boolean };
   /** Runs `gh` for bug reports (tests pass a fake). */
   gh?: GhRunner;
 }
@@ -292,6 +294,13 @@ export function createServer(deps: ServerDeps) {
     }
     if (parts[0] === "claude" && parts[1] === "defaults" && m === "GET") return json(claudeDefaults());
     if (parts[0] === "pick-folder" && m === "POST") return json({ path: await pickFolder() });
+    if (parts[0] === "restart" && parts.length === 1) {
+      if (m === "GET") return json({ pending: board.isRestartPending() });
+      if (m === "POST") {
+        if (!deps.restart) throw new HttpError(501, "restart is only available on the daemon");
+        return json(deps.restart());
+      }
+    }
 
     // Report bug: context preview, then file a GitHub issue on the ckanban repo.
     if (parts[0] === "bug-report" && m === "POST" && parts.length <= 2) {

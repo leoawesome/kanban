@@ -783,6 +783,8 @@ textarea { resize: vertical; font-size: 13.5px; }
 .search-clear:hover { color: var(--text); background: var(--border); }
 .show-all { align-self: center; }
 .conv-msg.assistant.live .conv-head .muted { font-style: italic; }
+.conv-msg.assistant.interrupted { opacity: 0.55; }
+.conv-msg.assistant.interrupted .conv-head .muted { font-style: italic; }
 .panel-error { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin: 10px 24px 0; cursor: default; }
 .panel-error span { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
 .select-label .need-chip { margin-left: 6px; vertical-align: 1px; }
