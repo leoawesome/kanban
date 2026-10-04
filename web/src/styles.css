@@ -1056,3 +1056,4 @@ input[aria-invalid="true"] { border-color: var(--err); }
 .queue-sep::after { content: ""; flex: 1; border-top: 1px dashed var(--border); }
 .card.is-queued { border-style: dashed; }
 .badge.queued { background: var(--warn-soft); color: var(--warn); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); font-weight: 600; white-space: nowrap; }

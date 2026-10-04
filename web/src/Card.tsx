@@ -35,12 +35,14 @@ export function outcomeBadge(t: Ticket) {
   }
 }
 
-/** queued: 1-based place in the queue for a free run slot (status `ready`). */
-export function Card({ ticket, onClick, dragging, queued }: { ticket: Ticket; onClick?: () => void; dragging?: boolean; queued?: number }) {
+/** queued: 1-based place in the queue for a free run slot (status `ready`). held: a pending daemon restart holds it. */
+export function Card({ ticket, onClick, dragging, queued, held }: { ticket: Ticket; onClick?: () => void; dragging?: boolean; queued?: number; held?: boolean }) {
   const working = ticket.status === "in_progress" || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
   const badge = att ? null
-    : queued && !working ? <span className="badge queued" title="Starts when a run slot is free">Queued · #{queued}</span>
+    : queued && !working ? (held
+      ? <span className="badge queued" title="A daemon restart is pending; queued tickets start right after it">Waits for restart</span>
+      : <span className="badge queued" title="Starts when a run slot is free">Queued · #{queued}</span>)
     : outcomeBadge(ticket);
   const showActivity = working && ticket.lastActivity && !QUIET_ACTIVITY.has(ticket.lastActivity);
   const last = ticket.session?.lastMessage;

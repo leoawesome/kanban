@@ -13,7 +13,9 @@ export type BusEvent =
   /** Connections panel: cached `claude mcp list` result, login progress. */
   | { type: "mcp.updated"; state: McpState }
   /** A schedule was created, changed (fired, paused, edited) or deleted (schedule: null). */
-  | { type: "schedule.updated"; profile: string; id: string; schedule: Schedule | null };
+  | { type: "schedule.updated"; profile: string; id: string; schedule: Schedule | null }
+  /** A daemon restart is waiting for `waiting` active runs; nothing new starts until then. */
+  | { type: "restart.updated"; pending: boolean; waiting: number };
 
 export class Bus {
   private listeners = new Set<(e: BusEvent) => void>();

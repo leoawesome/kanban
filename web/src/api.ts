@@ -329,7 +329,8 @@ export type BusEvent =
   | { type: "session.updated"; profile: string; id: string; session: SessionSummary }
   | { type: "draft"; profile: string; id: string; text: string }
   | { type: "mcp.updated"; state: McpState }
-  | { type: "schedule.updated"; profile: string; id: string; schedule: Omit<Schedule, "summary" | "active"> | null };
+  | { type: "schedule.updated"; profile: string; id: string; schedule: Omit<Schedule, "summary" | "active"> | null }
+  | { type: "restart.updated"; pending: boolean; waiting: number };
 
 export interface InboxItem {
   profile: string;
@@ -381,6 +382,8 @@ export const api = {
   pickFolder: () => req<{ path: string | null }>("POST", "/api/pick-folder"),
   version: () => req<{ version: string; latest: string | null; updateAvailable: boolean; url: string | null }>("GET", "/api/version"),
   health: () => req<Health>("GET", "/api/health"),
+  /** pending: a daemon restart holds new runs until the `waiting` active runs finish. */
+  restartState: () => req<{ pending: boolean; waiting: number }>("GET", "/api/restart"),
   bugDraft: (ref: { profile: string; ticketId: string } | null) =>
     req<{ blocks: BugBlock[]; screenshots: string[] }>("POST", "/api/bug-report/draft", ref ?? {}),
   reportBug: (input: { title: string; description: string; include: BugBlockId[]; profile?: string; ticketId?: string }) =>

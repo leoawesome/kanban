@@ -301,7 +301,7 @@ export function createServer(deps: ServerDeps) {
     if (parts[0] === "claude" && parts[1] === "defaults" && m === "GET") return json(claudeDefaults());
     if (parts[0] === "pick-folder" && m === "POST") return json({ path: await pickFolder() });
     if (parts[0] === "restart" && parts.length === 1) {
-      if (m === "GET") return json({ pending: board.isRestartPending() });
+      if (m === "GET") return json(board.restartState());
       if (m === "POST") {
         if (!deps.restart) throw new HttpError(501, "restart is only available on the daemon");
         return json(deps.restart());

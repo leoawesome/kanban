@@ -264,6 +264,7 @@ export class Board {
       })
       .finally(() => {
         this.runs.delete(this.key(slug, id));
+        if (this.restartPending) this.emitRestart();
         // Tell the UI the run is over (earlier updates were sent while it was still registered).
         const now = this.store.getTicket(slug, id);
         if (now && !this.shuttingDown) {
@@ -919,6 +920,7 @@ export class Board {
     const running = this.runs.size;
     if (this.restartPending) return { running, alreadyPending: true };
     this.restartPending = true;
+    this.emitRestart();
     void (async () => {
       const deadline = Date.now() + maxWaitMs;
       // Always yield first, so the caller's HTTP response goes out before the daemon exits.
@@ -932,6 +934,15 @@ export class Board {
 
   isRestartPending(): boolean {
     return this.restartPending;
+  }
+
+  /** pending: a restart holds new runs; waiting: active runs it waits for. */
+  restartState(): { pending: boolean; waiting: number } {
+    return { pending: this.restartPending, waiting: this.runs.size };
+  }
+
+  private emitRestart(): void {
+    this.bus.emit({ type: "restart.updated", ...this.restartState() });
   }
 
   recover(): void {

@@ -42,12 +42,14 @@ interface Props {
   onOpen: (id: string) => void;
   onMove: (id: string, status: Status, order: number) => void;
   onAdd: (status: Status) => void;
+  /** A pending daemon restart holds queued tickets. */
+  restartPending?: boolean;
   /** A search or filter is active (empty columns say "no match" instead of the usual hint). */
   filtered?: boolean;
 }
 
 /** Drag with the mouse, or focus a card: Enter opens it, Space picks it up (arrows move, Space drops, Esc cancels). */
-function SortableCard({ ticket, onOpen, queued }: { ticket: Ticket; onOpen: (id: string) => void; queued?: number }) {
+function SortableCard({ ticket, onOpen, queued, held }: { ticket: Ticket; onOpen: (id: string) => void; queued?: number; held?: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
     data: { status: ticket.status },
@@ -69,7 +71,7 @@ function SortableCard({ ticket, onOpen, queued }: { ticket: Ticket; onOpen: (id:
         listeners?.onKeyDown?.(e);
       }}
     >
-      <Card ticket={ticket} onClick={() => onOpen(ticket.id)} queued={queued} />
+      <Card ticket={ticket} onClick={() => onOpen(ticket.id)} queued={queued} held={held} />
     </div>
   );
 }
@@ -86,10 +88,12 @@ const EMPTY_HINT: Record<Status, string> = {
 const DONE_LIMIT = 10;
 const CLAUDE_TAG = "Claude starts automatically when a card is here";
 
-function Column({ id, label, hint, claude, tickets, queue = [], onOpen, onAdd, collapsed, onCollapse, filtered }: {
+function Column({ id, label, hint, claude, tickets, queue = [], held = false, onOpen, onAdd, collapsed, onCollapse, filtered }: {
   id: Status; label: string; hint: string; claude: boolean; tickets: Ticket[];
   /** In Progress only: tickets waiting for a free run slot, in start order. */
   queue?: Ticket[];
+  /** A pending daemon restart holds the queue. */
+  held?: boolean;
   onOpen: (id: string) => void; onAdd: (s: Status) => void;
   collapsed: boolean; onCollapse: (v: boolean) => void; filtered: boolean;
 }) {
@@ -138,7 +142,7 @@ function Column({ id, label, hint, claude, tickets, queue = [], onOpen, onAdd, c
           ))}
           {queue.length > 0 && <div className="queue-sep" title="These start in this order as run slots free up">Queued</div>}
           {queue.map((t, i) => (
-            <SortableCard key={t.id} ticket={t} onOpen={onOpen} queued={i + 1} />
+            <SortableCard key={t.id} ticket={t} onOpen={onOpen} queued={i + 1} held={held} />
           ))}
           {id === "done" && tickets.length > DONE_LIMIT && (
             <button className="btn ghost small show-all" onClick={() => setShowAll((v) => !v)}>
@@ -184,7 +188,7 @@ const collision: CollisionDetection = (args) => {
   return closestCenter(args);
 };
 
-export function Board({ tickets, onOpen, onMove, onAdd, filtered = false }: Props) {
+export function Board({ tickets, onOpen, onMove, onAdd, filtered = false, restartPending = false }: Props) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     // Enter is kept for opening the card, so only Space picks up / drops.
@@ -249,7 +253,7 @@ export function Board({ tickets, onOpen, onMove, onAdd, filtered = false }: Prop
     <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
       <main className="board">
         {BOARD_COLUMNS.map((c) => (
-          <Column key={c.id} {...c} tickets={byColumn.get(c.id) ?? []} queue={c.id === "in_progress" ? byColumn.get("ready") : undefined} onOpen={onOpen} onAdd={onAdd} filtered={filtered}
+          <Column key={c.id} {...c} tickets={byColumn.get(c.id) ?? []} queue={c.id === "in_progress" ? byColumn.get("ready") : undefined} held={restartPending} onOpen={onOpen} onAdd={onAdd} filtered={filtered}
             collapsed={collapsed.has(c.id)} onCollapse={(v) => setColumnCollapsed(c.id, v)} />
         ))}
       </main>

@@ -878,7 +878,12 @@ test("requested restart waits for active runs and holds new ones until recover()
     const work = await board.createTicket("p", { title: "work", body: "", status: "ready" });
     await Bun.sleep(300);
     let restarted = false;
+    const restartEvents: { pending: boolean; waiting: number }[] = [];
+    const off = bus.on((e) => { if (e.type === "restart.updated") restartEvents.push({ pending: e.pending, waiting: e.waiting }); });
+    expect(board.restartState()).toEqual({ pending: false, waiting: 1 });
     expect(board.requestRestart(() => { restarted = true; }).running).toBe(1);
+    expect(board.restartState()).toEqual({ pending: true, waiting: 1 });
+    expect(restartEvents).toEqual([{ pending: true, waiting: 1 }]);
     expect(board.requestRestart(() => {}).alreadyPending).toBe(true);
     // Nothing new starts while the restart waits.
     const next = await board.createTicket("p", { title: "next", body: "", status: "ready" });
@@ -893,6 +898,9 @@ test("requested restart waits for active runs and holds new ones until recover()
     await Bun.sleep(400);
     expect(restarted).toBe(true);
     expect(store.getTicket("p", work.id)!.status).toBe("review");
+    // The UI hears when the last run it waited for is gone.
+    expect(restartEvents.at(-1)).toEqual({ pending: true, waiting: 0 });
+    off();
 
     await board.shutdown();
     const before = readArgs().length;

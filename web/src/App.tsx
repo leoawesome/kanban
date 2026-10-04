@@ -215,7 +215,12 @@ export function App() {
   }, [slug]);
 
   // After the daemon restarts or the laptop wakes, events were missed: reload everything.
+  // A pending daemon restart holds new runs on every board: show it so queued cards don't look stuck.
+  const [restart, setRestart] = useState({ pending: false, waiting: 0 });
+  useEffect(() => { api.restartState().then(setRestart).catch(() => {}); }, []);
+
   useEffect(() => onReconnect(() => {
+    api.restartState().then(setRestart).catch(() => {});
     loadProfiles().catch(() => {});
     loadInbox();
     api.mcp().then(setMcp).catch(() => {});
@@ -304,6 +309,10 @@ export function App() {
       subscribe((e) => {
         if (e.type === "mcp.updated") {
           setMcp(e.state);
+          return;
+        }
+        if (e.type === "restart.updated") {
+          setRestart({ pending: e.pending, waiting: e.waiting });
           return;
         }
         if (e.type === "profile.updated") {
@@ -443,6 +452,11 @@ export function App() {
             {running}/{profile.maxParallel} running
           </span>
         )}
+        {restart.pending && (
+          <span className="pill warn" title="The daemon restarts once every active run (on any board) has finished. Until then nothing new starts: queued tickets, chat replies and Planning interviews wait.">
+            Restart pending{restart.waiting > 0 ? ` · waiting for ${restart.waiting} ${restart.waiting === 1 ? "run" : "runs"}` : ""}
+          </span>
+        )}
         <div className="spacer" />
         <Inbox items={inbox} onPick={(i) => {
           if (i.profile !== slug) setSlug(i.profile);
@@ -557,7 +571,7 @@ export function App() {
               </span>
             )}
           </div>
-          <Board tickets={shownTickets} filtered={filtering} onOpen={(id) => openTicket(id)} onMove={move} onAdd={() => setNewTicket(true)} />
+          <Board tickets={shownTickets} filtered={filtering} onOpen={(id) => openTicket(id)} onMove={move} onAdd={() => setNewTicket(true)} restartPending={restart.pending} />
         </>
       )}
 
