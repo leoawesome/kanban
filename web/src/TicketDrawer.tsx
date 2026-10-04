@@ -23,14 +23,13 @@ const BACKDROP_MIN = 64;
 
 const defaultWidth = () => Math.round(Math.min(1120, window.innerWidth * 0.72));
 
-/** Room the chat column can use: its 720px reading width plus side padding. Wider is only empty space. */
+/** Chat room for the default width: a comfortable reading column plus side padding. Dragging can go wider. */
 const CHAT_ROOM = 800;
 
-/** `cap`: the widest the panel's content can use (sidebar + chat room); it never grows past that. */
-function clampWidth(w: number, cap = Infinity): number {
+function clampWidth(w: number): number {
   const vw = window.innerWidth;
   // Narrow windows can't fit the minimum width plus the strip: the panel goes full width there.
-  const max = vw >= MIN_WIDTH + BACKDROP_MIN ? Math.min(vw - BACKDROP_MIN, Math.max(cap, MIN_WIDTH)) : vw;
+  const max = vw >= MIN_WIDTH + BACKDROP_MIN ? vw - BACKDROP_MIN : vw;
   return Math.round(Math.min(Math.max(w, Math.min(MIN_WIDTH, max)), max));
 }
 
@@ -103,24 +102,26 @@ function useSidebarWidth(bodyRef: React.RefObject<HTMLDivElement | null>) {
   return { width, pref, dragging, handle: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onDoubleClick: reset, onKeyDown } };
 }
 
-function savedWidth(): number {
+/** The width the user dragged to, or null when they never resized (or reset). */
+function savedWidth(): number | null {
   try {
     const v = Number(localStorage.getItem(WIDTH_KEY));
     if (v) return v;
   } catch {}
-  return defaultWidth();
+  return null;
 }
 
 /**
- * Drag the panel's left edge to resize; double-click resets to min(1120px, 72%). Width persists per browser.
- * `cap` is the widest the content can use; the panel never grows past it, so the board stays visible to click.
+ * Drag the panel's left edge to resize, up to the window minus the backdrop strip; double-click resets.
+ * Width persists per browser. Until the user resizes, the default is min(1120px, 72%) but no wider than
+ * `fit` (sidebar + chat reading room), so the panel doesn't open with empty space beside the chat.
  */
-function usePanelWidth(cap: number) {
+function usePanelWidth(fit: number) {
   const [pref, setPref] = useState(savedWidth);
   const [dragging, setDragging] = useState(false);
   // Re-render on window resize; the width is clamped to the window on every render.
   const [, setVw] = useState(window.innerWidth);
-  const width = clampWidth(pref, cap);
+  const width = clampWidth(pref ?? Math.min(defaultWidth(), fit));
   const widthRef = useRef(width);
   widthRef.current = width;
 
@@ -130,7 +131,7 @@ function usePanelWidth(cap: number) {
     } catch {}
   };
   const set = (w: number) => {
-    const c = clampWidth(w, cap);
+    const c = clampWidth(w);
     setPref(c);
     return c;
   };
@@ -147,7 +148,12 @@ function usePanelWidth(cap: number) {
     setDragging(false);
     persist(widthRef.current);
   };
-  const reset = () => persist(set(defaultWidth()));
+  const reset = () => {
+    setPref(null);
+    try {
+      localStorage.removeItem(WIDTH_KEY);
+    } catch {}
+  };
   const onKeyDown = (e: React.KeyboardEvent) => {
     const step = e.shiftKey ? 120 : 40;
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -255,7 +261,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const { stopping, stop } = useStop(slug, ticket, working, (m) => setPanelError(m));
   const bodyRef = useRef<HTMLDivElement>(null);
   const side = useSidebarWidth(bodyRef);
-  // Never wider than the sidebar plus the chat's reading column: anything more is empty space.
+  // Opens fitted to the sidebar plus the chat's reading column; dragging can make it wider.
   const { width, dragging, handle } = usePanelWidth((detailsOpen ? side.pref : 0) + CHAT_ROOM);
   const [descScrolled, setDescScrolled] = useState(false);
 

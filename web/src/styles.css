@@ -574,7 +574,7 @@ textarea { resize: vertical; font-size: 13.5px; }
 .plan-cap { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .plan-reason { color: var(--warn); }
 /* Plan tab: same centred column as the chat. */
-.panel-scroll.panel-plan { padding: 20px max(28px, calc((100% - 720px) / 2)); }
+.panel-scroll.panel-plan { padding: 20px max(28px, calc((100% - var(--read-max)) / 2)); }
 .plan-panel { display: flex; flex-direction: column; gap: 10px; }
 .plan-head { display: flex; align-items: center; gap: 10px; }
 .plan-progress { flex: 1; height: 6px; border-radius: 6px; background: var(--surface-2); overflow: hidden; }
@@ -680,12 +680,14 @@ textarea { resize: vertical; font-size: 13.5px; }
 .menu-item.danger:hover, .menu-item.danger:focus-visible { background: var(--err-soft); }
 
 /* ============ chat, claude.ai style ============ */
+/* Reading column of the chat and plan tab: centred, grows when the panel is dragged wider. */
+:root { --read-max: 1100px; }
 .panel-main .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 0; }
 .panel-main .chat-log {
   flex: 1; max-height: none; min-height: 0; overflow-y: auto; gap: 14px;
-  padding: 20px max(28px, calc((100% - 720px) / 2)) 12px;
+  padding: 20px max(28px, calc((100% - var(--read-max)) / 2)) 12px;
 }
-.panel-main .composer { margin: 0 max(28px, calc((100% - 720px) / 2)) 16px; }
+.panel-main .composer { margin: 0 max(28px, calc((100% - var(--read-max)) / 2)) 16px; }
 .conv-msg.assistant { background: none; padding: 0; max-width: 100%; align-self: stretch; border-radius: 0; font-size: 14px; line-height: 1.6; }
 .conv-msg.assistant .conv-head b { color: var(--accent); }
 .conv-msg.user { background: var(--surface-2); border-radius: 16px 16px 4px 16px; padding: 8px 14px; max-width: 80%; align-self: flex-end; font-size: 14px; }
