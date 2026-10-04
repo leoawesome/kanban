@@ -375,6 +375,24 @@ textarea { resize: vertical; font-size: 13.5px; }
 .topbar .profile-select .select-trigger { background: var(--surface-2); border-color: transparent; font-weight: 600; padding: 5px 10px; min-width: 150px; }
 .topbar .profile-select .select-trigger:hover { border-color: var(--border); }
 .status-select .select-trigger { padding: 4px 10px; font-weight: 550; }
+/* profile switcher menu: avatar, name + need-you chip on one line, path below, check on the right */
+.select-menu.profile-menu { width: min(380px, calc(100vw - 16px)); max-width: calc(100vw - 16px); padding: 6px; border-radius: 12px; }
+.profile-menu .select-item { align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; }
+.profile-menu .select-item.selected { font-weight: 450; }
+.profile-menu .select-item.footer { padding: 8px 10px; }
+.profile-menu .select-item.first-footer { margin-top: 13px; }
+.profile-menu .select-item.first-footer::before { top: -7px; }
+.profile-avatar {
+  width: 30px; height: 30px; border-radius: 8px; flex: none; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: 13px;
+}
+.profile-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.profile-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.profile-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-menu .select-item.selected .profile-name { color: var(--accent); }
+.profile-row .need-chip { margin-left: auto; flex: none; white-space: nowrap; font-size: 11px; padding: 1px 8px; }
+.profile-path { font: 11.5px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-check { width: 14px; flex: none; display: flex; justify-content: center; color: var(--accent); }
 
 /* confirm dialog */
 .confirm-overlay { z-index: 90; align-items: center; background: rgba(20, 18, 15, 0.5); }

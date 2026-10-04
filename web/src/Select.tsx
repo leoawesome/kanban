@@ -23,7 +23,7 @@ function textOf(n: ReactNode): string {
 }
 
 /** Styled dropdown replacing the native <select>. Keyboard: Enter/Space/↓ open, ↑↓ move, type to jump, Enter pick, Esc close. */
-export function Select<T extends string>({ value, options, onChange, footer, className, ariaLabel, renderValue }: {
+export function Select<T extends string>({ value, options, onChange, footer, className, ariaLabel, renderValue, menuClassName, renderOption, menuMaxHeight = 320 }: {
   value: T;
   options: SelectOption<T>[];
   onChange: (v: T) => void;
@@ -32,6 +32,11 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
   className?: string;
   ariaLabel?: string;
   renderValue?: (o: SelectOption<T> | undefined) => ReactNode;
+  /** Extra class on the portaled menu, to restyle one dropdown without touching the others. */
+  menuClassName?: string;
+  /** Custom row content instead of the left check + label/hint column. */
+  renderOption?: (o: SelectOption<T>, selected: boolean) => ReactNode;
+  menuMaxHeight?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -81,8 +86,8 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
       const above = trigger.top - GAP - MARGIN;
       const up = h > below && above > below;
       setPos(up
-        ? { left, bottom: vh - trigger.top + GAP, minWidth: trigger.width, maxHeight: Math.min(320, above) }
-        : { left, top: trigger.bottom + GAP, minWidth: trigger.width, maxHeight: Math.min(320, below) });
+        ? { left, bottom: vh - trigger.top + GAP, minWidth: trigger.width, maxHeight: Math.min(menuMaxHeight, above) }
+        : { left, top: trigger.bottom + GAP, minWidth: trigger.width, maxHeight: Math.min(menuMaxHeight, below) });
     };
     place();
     window.addEventListener("resize", place);
@@ -158,14 +163,16 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
         </svg>
       </button>
       {open && createPortal(
-        <div className="select-menu" role="listbox" id={listId} aria-label={ariaLabel} ref={menu} style={pos}>
+        <div className={`select-menu ${menuClassName ?? ""}`} role="listbox" id={listId} aria-label={ariaLabel} ref={menu} style={pos}>
           {items.map((it, i) =>
             it.kind === "option" ? (
               <div key={it.o.value} id={`${listId}-${i}`} role="option" aria-selected={it.o.value === value} aria-disabled={it.o.disabled}
                 className={`select-item ${i === active ? "active" : ""} ${it.o.value === value ? "selected" : ""} ${it.o.disabled ? "disabled" : ""}`}
                 onMouseEnter={() => setActive(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(i)}>
-                <span className="select-check" aria-hidden>{it.o.value === value && <CheckIcon size={12} />}</span>
-                <span className="select-label">{it.o.label}{it.o.hint && <span className="select-hint">{it.o.hint}</span>}</span>
+                {renderOption ? renderOption(it.o, it.o.value === value) : <>
+                  <span className="select-check" aria-hidden>{it.o.value === value && <CheckIcon size={12} />}</span>
+                  <span className="select-label">{it.o.label}{it.o.hint && <span className="select-hint">{it.o.hint}</span>}</span>
+                </>}
               </div>
             ) : (
               <div key={`f${i}`} id={`${listId}-${i}`} role="option" aria-selected={false} className={`select-item footer ${i === active ? "active" : ""} ${i === options.length ? "first-footer" : ""}`}

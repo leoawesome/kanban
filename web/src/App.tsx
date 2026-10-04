@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, copy, COLUMNS, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Schedule, type Status, type Ticket } from "./api";
+import { avatarColor, avatarLetter } from "./avatar";
 import { BugReportDialog } from "./BugReportDialog";
 import { ConnectionsDialog } from "./ConnectionsDialog";
 import { HeaderMenu } from "./HeaderMenu";
-import { BugIcon, ChatIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
+import { BugIcon, ChatIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
 import { Inbox } from "./Inbox";
 import { anyLayerOpen } from "./layers";
 import { Board, boardOrder } from "./Board";
@@ -410,11 +411,22 @@ export function App() {
             ariaLabel="Profile"
             value={slug ?? ""}
             onChange={setSlug}
-            options={profiles.map((p) => ({
-              value: p.slug,
-              label: perBoard.get(p.slug) ? <>{p.name} <span className="need-chip">{perBoard.get(p.slug)} need you</span></> : p.name,
-              hint: tildePath(p.path),
-            }))}
+            menuClassName="profile-menu"
+            menuMaxHeight={440}
+            options={profiles.map((p) => ({ value: p.slug, label: p.name, hint: tildePath(p.path) }))}
+            renderOption={(o, selected) => (
+              <>
+                <span className="profile-avatar" style={{ background: avatarColor(o.value) }} aria-hidden>{avatarLetter(String(o.label))}</span>
+                <span className="profile-body">
+                  <span className="profile-row">
+                    <span className="profile-name">{o.label}</span>
+                    {!!perBoard.get(o.value) && <span className="need-chip">{perBoard.get(o.value)} need you</span>}
+                  </span>
+                  <span className="profile-path" title={profiles.find((p) => p.slug === o.value)?.path}>{o.hint}</span>
+                </span>
+                <span className="profile-check" aria-hidden>{selected && <CheckIcon size={13} />}</span>
+              </>
+            )}
             renderValue={() => profile?.name}
             footer={[
               ...(profile ? [{
