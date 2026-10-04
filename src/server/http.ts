@@ -10,7 +10,7 @@ import { cronError, describeCron, nextRuns, parseCron } from "./cron";
 import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
 import { QuestionError, Questions } from "./questions";
 import { attentionFor } from "./attention";
-import { MAX_RETRIES, planActive } from "./plan";
+import { childrenOf, isComplete, MAX_RETRIES, planActive } from "./plan";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
 import { FileError, listDir, openWithSystem, readFileForView } from "./files";
@@ -152,6 +152,11 @@ export function createServer(deps: ServerDeps) {
   };
   const strings = (v: unknown): string[] | undefined =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : undefined;
+  // Only read for stuck plans, so listing the board stays cheap.
+  const planComplete = (slug: string, id: string) => {
+    const kids = childrenOf(store.listTickets(slug), id);
+    return kids.length > 0 && kids.every(isComplete);
+  };
   const view = (p: Profile, t: Ticket) => {
     const running = board.isRunning(p.slug, t.id);
     const session = t.sessionId ? sessions.summary(t.sessionId) : null;
@@ -165,6 +170,7 @@ export function createServer(deps: ServerDeps) {
       attention: attentionFor(t, session, running, {
         createdTitles: session?.pendingNewTickets.length ? childTitles(p.slug, t.id) : undefined,
         managed: t.parentId ? planActive(store.getTicket(p.slug, t.parentId)?.plan) : false,
+        planComplete: t.plan?.state === "stuck" ? planComplete(p.slug, t.id) : undefined,
       }),
     };
   };
@@ -648,7 +654,7 @@ export function createServer(deps: ServerDeps) {
       if (planner && stopped) store.addComment(slug, id, "ai", "Planner stopped this run.");
       return json({ stopped });
     }
-    // Start / pause / resume a planner's plan, or change how many children run at once.
+    // Start / pause / resume / mark done a planner's plan, or change how many children run at once.
     if (m === "POST" && action === "plan") {
       if (req.headers.get(RUN_HEADER)) throw new HttpError(403, "only the user can start or pause a plan");
       const b = await body(req);
@@ -656,9 +662,10 @@ export function createServer(deps: ServerDeps) {
       try {
         const t = b.action === "pause" ? board.pausePlan(slug, id)
           : b.action === "start" || b.action === "resume" ? board.startPlan(slug, id, { maxConcurrent: n })
+          : b.action === "done" ? board.markPlanDone(slug, id)
           : b.action === "concurrency" && n !== undefined ? board.setPlanConcurrency(slug, id, n)
           : null;
-        if (!t) throw new HttpError(400, "action must be start, pause, resume or concurrency");
+        if (!t) throw new HttpError(400, "action must be start, pause, resume, done or concurrency");
         return json(view(profile, store.getTicket(slug, id) ?? t));
       } catch (e) {
         if (e instanceof HttpError) throw e;

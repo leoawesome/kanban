@@ -10,7 +10,7 @@ import { MOVE_TO_PLANNING_RE } from "./session";
 import { saveMockups } from "./mockups";
 import { chatPrompt, firstRunPrompt, interruptedPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
 import {
-  childrenOf, DEFAULT_MAX_CONCURRENT, findCycle, planActive, planProblem, planStep, planTable, resolveDeps, wakeupCap,
+  childrenOf, DEFAULT_MAX_CONCURRENT, findCycle, isComplete, planActive, planProblem, planStep, planTable, resolveDeps, wakeupCap,
 } from "./plan";
 import { run as runCmd } from "./git";
 import { parseResult } from "./result";
@@ -649,6 +649,14 @@ export class Board {
     return this.patch(slug, id, { plan: { ...t.plan, state: "paused" } });
   }
 
+  /** Mark the plan done as it stands, without waking the planner (e.g. a stuck plan the user resolved by hand). */
+  markPlanDone(slug: string, id: string): Ticket {
+    const t = this.store.getTicket(slug, id);
+    if (!t?.plan) throw new Error("this ticket has no plan");
+    if (t.plan.state === "done") return t;
+    return this.closePlan(slug, t, t.plan, "Plan marked done.");
+  }
+
   setPlanConcurrency(slug: string, id: string, n: number): Ticket {
     const t = this.store.getTicket(slug, id);
     if (!t?.plan) throw new Error("this ticket has no plan");
@@ -724,7 +732,11 @@ export class Board {
       }
       plan.awaiting = null;
     }
-    if (plan.state === "stuck") return false;
+    if (plan.state === "stuck") {
+      // Whatever made it stuck is gone once every child is finished (e.g. its last PR got merged): close it, no run needed.
+      if (kids.length && kids.every(isComplete)) this.closePlan(slug, planner, plan, "Plan done: every child ticket finished, so the stuck plan was closed without another run.");
+      return false;
+    }
     if (plan.state === "finishing") {
       if (!plan.awaiting && !plannerBusy) this.wake(slug, planner, plan, "final", [], kids);
       else if (!sameJson(plan, planner.plan)) this.patch(slug, planner.id, { plan });
@@ -777,6 +789,12 @@ export class Board {
     // Back to where it was (In progress only if a restart cut a wake-up off).
     const returnTo = planner.status === "in_progress" ? "review" : planner.status;
     this.start(slug, planner.id, { text, mode: "act", raw: true, returnTo });
+  }
+
+  private closePlan(slug: string, planner: Ticket, plan: Plan, comment: string): Ticket {
+    const out = this.patch(slug, planner.id, { plan: { ...plan, state: "done", awaiting: null, reason: null, inbox: [], finishedAt: nowIso() } });
+    this.store.addComment(slug, planner.id, "ai", comment);
+    return out;
   }
 
   private stuck(slug: string, planner: Ticket, plan: Plan, reason: string) {

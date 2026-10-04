@@ -7,20 +7,21 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, ExternalIcon, FileTextIcon, SparkIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { useFocusTrap, useLayer } from "./layers";
-import { PlanPanel } from "./PlanPanel";
+import { complete, PlanPanel, PlanSummary } from "./PlanPanel";
 import { Outputs } from "./Outputs";
 import { Select } from "./Select";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
 import { TicketMenu } from "./TicketMenu";
 import { Markdown } from "./Transcript";
 
-const WIDTH_KEY = "ckanban.panelWidth";
+// v2: widths saved under the old 80% default are dropped once so the new default shows.
+const WIDTH_KEY = "ckanban.panelWidth.v2";
 const MIN_WIDTH = 640;
 
 /** Backdrop left visible beside the panel, so clicking it can always close the panel. */
 const BACKDROP_MIN = 64;
 
-const defaultWidth = () => Math.round(window.innerWidth * 0.8);
+const defaultWidth = () => Math.round(Math.min(1120, window.innerWidth * 0.72));
 
 function clampWidth(w: number): number {
   const vw = window.innerWidth;
@@ -30,7 +31,7 @@ function clampWidth(w: number): number {
 }
 
 const SIDE_KEY = "ckanban.sidebarWidth";
-const SIDE_DEFAULT = 320;
+const SIDE_DEFAULT = 340;
 const SIDE_MIN = 260;
 /** The chat column always keeps at least this much room. */
 const CHAT_MIN = 420;
@@ -39,7 +40,7 @@ const clampSide = (w: number, bodyWidth: number) =>
   Math.round(Math.max(SIDE_MIN, Math.min(w, bodyWidth ? bodyWidth - CHAT_MIN : w)));
 
 /**
- * Drag the line between the details sidebar and the chat; double-click resets to 320px.
+ * Drag the line between the details sidebar and the chat; double-click resets to 340px.
  * The preference persists per browser and is clamped to the panel's current width when shown.
  */
 function useSidebarWidth(bodyRef: React.RefObject<HTMLDivElement | null>) {
@@ -106,7 +107,7 @@ function savedWidth(): number {
   return clampWidth(defaultWidth());
 }
 
-/** Drag the panel's left edge to resize; double-click resets to 80%. Width persists per browser. */
+/** Drag the panel's left edge to resize; double-click resets to min(1120px, 72%). Width persists per browser. */
 function usePanelWidth() {
   const [width, setWidth] = useState(savedWidth);
   const [dragging, setDragging] = useState(false);
@@ -180,7 +181,9 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const images = useImagePaste(setBody);
   // Body the current edit started from; the server rejects the save if the file changed meanwhile.
   const [baseBody, setBaseBody] = useState(ticket.body);
-  const [tab, setTab] = useState<"chat" | "outputs">("chat");
+  const [tabPick, setTab] = useState<"chat" | "plan" | "outputs">("chat");
+  // The Plan tab exists only while the ticket has children.
+  const tab = tabPick === "plan" && !children.length ? "chat" : tabPick;
   const [outputCount, setOutputCount] = useState(0);
   // A file to show when the Outputs tab opens (a mockup clicked in the chat).
   const [outputFocus, setOutputFocus] = useState<string | null>(null);
@@ -408,9 +411,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                 </div>
               )}
 
-              {children.length > 0 && (
-                <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
-              )}
+              {children.length > 0 && <PlanSummary ticket={ticket} children={children} onOpen={() => setTab("plan")} />}
 
               {(!!ticket.session?.artifacts.length || outputCount > 0) && (
                 <div className="result-chips" aria-label="Results">
@@ -468,11 +469,22 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>
                 Chat {working && <span className="dot" />}
               </button>
+              {children.length > 0 && (
+                <button role="tab" aria-selected={tab === "plan"} className={tab === "plan" ? "active" : ""} onClick={() => setTab("plan")}>
+                  Plan<span className={`tab-count ${ticket.plan?.state === "stuck" ? "warn" : children.every(complete) ? "ok" : ""}`}>
+                    {children.filter(complete).length}/{children.length}
+                  </span>
+                </button>
+              )}
               <button role="tab" aria-selected={tab === "outputs"} className={tab === "outputs" ? "active" : ""} onClick={() => { setOutputFocus(null); setTab("outputs"); }}>
                 Outputs{outputCount > 0 && <span className="tab-count">{outputCount}</span>}
               </button>
             </nav>
-            {tab === "outputs" ? (
+            {tab === "plan" ? (
+              <div className="panel-scroll panel-plan">
+                <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
+              </div>
+            ) : tab === "outputs" ? (
               <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} focus={outputFocus} /></div>
             ) : (
               <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError}

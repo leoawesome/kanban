@@ -10,9 +10,27 @@ const STATE_LABEL: Record<string, [string, string]> = {
 };
 
 /** Done, or finished in Review without a PR to merge (same rule as the server's plan.ts). */
-const complete = (t: Ticket) => t.status === "done" || (t.status === "review" && t.outcome === "done" && !t.prUrl);
+export const complete = (t: Ticket) => t.status === "done" || (t.status === "review" && t.outcome === "done" && !t.prUrl);
 
-/** A planner's children, plus Start / Pause / Resume for running them unattended in dependency order. */
+const stateOf = (plan: Ticket["plan"]): [string, string] => plan ? STATE_LABEL[plan.state] ?? [plan.state, "stopped"] : ["Not started", "stopped"];
+
+/** Sidebar row: "Plan · 3/9 done →", with a badge while it runs or is stuck. Opens the Plan tab. */
+export function PlanSummary({ ticket, children, onOpen }: { ticket: Ticket; children: Ticket[]; onOpen: () => void }) {
+  const done = children.filter(complete).length;
+  const state = ticket.plan?.state;
+  const [label, tone] = stateOf(ticket.plan);
+  return (
+    <div className="field-row">
+      <span className="field-key">Plan</span>
+      <span className="plan-summary">
+        {(state === "stuck" || state === "running" || state === "finishing" || state === "paused") && <span className={`badge ${tone}`}>{label}</span>}
+        <button className="link-btn" onClick={onOpen}>{done}/{children.length} done →</button>
+      </span>
+    </div>
+  );
+}
+
+/** Plan tab: a planner's children, plus Start / Pause / Resume for running them unattended in dependency order. */
 export function PlanPanel({ slug, ticket, children, onOpenTicket, onError }: {
   slug: string;
   ticket: Ticket;
@@ -23,7 +41,7 @@ export function PlanPanel({ slug, ticket, children, onOpenTicket, onError }: {
   const [busy, setBusy] = useState(false);
   const plan = ticket.plan ?? null;
   const done = children.filter(complete).length;
-  const act = async (action: "start" | "pause" | "resume" | "concurrency", n?: number) => {
+  const act = async (action: "start" | "pause" | "resume" | "done" | "concurrency", n?: number) => {
     setBusy(true);
     try {
       await api.plan(slug, ticket.id, action, n);
@@ -37,13 +55,18 @@ export function PlanPanel({ slug, ticket, children, onOpenTicket, onError }: {
   const [draftCap, setDraftCap] = useState(2);
   const live = !!plan && plan.state !== "done";
   const cap = live ? plan!.maxConcurrent : draftCap;
-  const [label, tone] = plan ? STATE_LABEL[plan.state] ?? [plan.state, "stopped"] : ["Not started", "stopped"];
+  const [label, tone] = stateOf(plan);
   const titleOf = (ref: string) => children.find((c) => c.id === ref || c.planKey === ref)?.title ?? ref;
   return (
-    <section className="detail-section plan-panel">
-      <div className="section-head">
-        <h4>Plan · {done}/{children.length} done</h4>
+    <section className="plan-panel">
+      <div className="plan-head">
+        <b>Plan</b>
         <span className={`badge ${tone}`}>{label}</span>
+        <span className="plan-progress" role="progressbar" aria-valuemin={0} aria-valuemax={children.length} aria-valuenow={done}
+          aria-label={`${done} of ${children.length} done`}>
+          <i style={{ width: `${children.length ? (done / children.length) * 100 : 0}%` }} />
+        </span>
+        <span className="muted small">{done}/{children.length} done</span>
       </div>
       {plan?.state === "stuck" && plan.reason && <p className="field-help plan-reason">{plan.reason}</p>}
       <div className="plan-actions">
@@ -55,6 +78,10 @@ export function PlanPanel({ slug, ticket, children, onOpenTicket, onError }: {
           <button className="btn primary small" disabled={busy} onClick={() => act("resume")}>Resume plan</button>
         ) : (
           <button className="btn small" disabled={busy} onClick={() => act("pause")}>Pause</button>
+        )}
+        {(plan?.state === "stuck" || plan?.state === "paused") && (
+          <button className="btn small" disabled={busy} title="Close the plan as it is, without waking Claude"
+            onClick={() => act("done")}>Mark plan done</button>
         )}
         <label className="muted small plan-cap" title="Children of this plan in Ready or In progress at once">
           At once

@@ -61,3 +61,10 @@ test("proposed new tickets need attention until each one exists", () => {
   expect(attentionFor(T({}), s, false, { createdTitles: new Set(["A"]) })!.kind).toBe("proposal");
   expect(attentionFor(T({}), s, false, { createdTitles: new Set(["A", "B"]) })).toBeNull();
 });
+
+test("a stuck plan needs the user, unless the ticket is done or every child is finished", () => {
+  const plan = { state: "stuck" as const, maxConcurrent: 2, wakeups: 1, startedAt: "", originalCount: 2, reason: "x" };
+  expect(attentionFor(T({ status: "review", plan }), null, false)).toEqual({ kind: "blocked", label: "Plan stuck" });
+  expect(attentionFor(T({ status: "done", plan }), null, false)).toBeNull();
+  expect(attentionFor(T({ status: "review", outcome: "done", plan }), null, false, { planComplete: true })).toEqual({ kind: "review", label: "Ready for review" });
+});

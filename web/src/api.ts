@@ -407,7 +407,7 @@ export const api = {
   createTicket: (slug: string, input: {
     title: string; body: string; status: Status; sessionId?: string; mode?: TicketMode; parentId?: string; planKey?: string; dependsOn?: string[];
   }) => req<Ticket>("POST", t(slug), input),
-  plan: (slug: string, id: string, action: "start" | "pause" | "resume" | "concurrency", maxConcurrent?: number) =>
+  plan: (slug: string, id: string, action: "start" | "pause" | "resume" | "done" | "concurrency", maxConcurrent?: number) =>
     req<Ticket>("POST", `${t(slug, id)}/plan`, { action, maxConcurrent }),
   updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice">> & { expectedBody?: string }) =>
     req<Ticket>("PATCH", t(slug, id), patch),

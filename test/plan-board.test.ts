@@ -109,3 +109,44 @@ test("startPlan refuses cycles and plans without children", async () => {
   expect(() => board.startPlan("p", planner.id)).toThrow(/dependency cycle/);
   expect(store.getTicket("p", planner.id)!.plan).toBeUndefined();
 });
+
+/** A planner whose plan is stuck, with children in the given columns. */
+async function stuckPlan(...statuses: ("backlog" | "review" | "done")[]) {
+  const planner = await board.createTicket("p", { title: "Plan", body: "", status: "review" });
+  const kids = [];
+  for (const [i, s] of statuses.entries()) kids.push(await board.createTicket("p", { title: `K${i}`, body: "", status: s, parentId: planner.id }));
+  store.updateTicket("p", planner.id, {
+    plan: { state: "stuck", maxConcurrent: 2, wakeups: 1, startedAt: "", originalCount: kids.length, inbox: [], seen: {}, retries: {}, awaiting: null, reason: "the planner's run is blocked" },
+  });
+  return { planner, kids };
+}
+
+test("a stuck plan closes without a run once its last child is done", async () => {
+  const { planner, kids } = await stuckPlan("done", "review");
+  board.advancePlans("p");
+  expect(store.getTicket("p", planner.id)!.plan?.state).toBe("stuck");
+  await board.updateTicket("p", kids[1].id, { status: "done" });
+  const p = store.getTicket("p", planner.id)!;
+  expect(p.plan?.state).toBe("done");
+  expect(p.plan?.reason).toBeNull();
+  expect(p.runCount).toBe(0);
+  expect(store.listComments("p", planner.id).at(-1)!.text).toContain("stuck plan was closed");
+});
+
+test("startup clears a stuck plan whose children are all done", async () => {
+  const { planner } = await stuckPlan("done", "done");
+  board.recover();
+  expect(store.getTicket("p", planner.id)!.plan?.state).toBe("done");
+  expect(store.getTicket("p", planner.id)!.runCount).toBe(0);
+});
+
+test("Mark plan done closes a stuck plan with open children, without waking the planner", async () => {
+  const { planner, kids } = await stuckPlan("done", "backlog");
+  const t = board.markPlanDone("p", planner.id);
+  expect(t.plan?.state).toBe("done");
+  expect(t.plan?.finishedAt).toBeTruthy();
+  expect(t.runCount).toBe(0);
+  expect(store.getTicket("p", kids[1].id)!.status).toBe("backlog");
+  expect(store.listComments("p", planner.id).at(-1)!.text).toBe("Plan marked done.");
+  expect(() => board.markPlanDone("p", kids[0].id)).toThrow(/no plan/);
+});

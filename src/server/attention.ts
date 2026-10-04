@@ -12,11 +12,12 @@ export interface Attention {
 /**
  * createdTitles: titles of this ticket's children, to tell which proposed new tickets still wait for a click.
  * managed: the ticket is a child of a running plan, so its planner, not the user, handles it.
+ * planComplete: every child of this ticket's plan is finished, so a stuck plan no longer needs the user.
  */
 export function attentionFor(
-  t: Ticket, s: SessionSummary | null, running: boolean, o: { createdTitles?: Set<string>; managed?: boolean } = {},
+  t: Ticket, s: SessionSummary | null, running: boolean, o: { createdTitles?: Set<string>; managed?: boolean; planComplete?: boolean } = {},
 ): Attention | null {
-  if (t.plan?.state === "stuck") return { kind: "blocked", label: "Plan stuck" };
+  if (t.plan?.state === "stuck" && t.status !== "done" && !o.planComplete) return { kind: "blocked", label: "Plan stuck" };
   if (running || t.status === "in_progress") return null;
   // A running plan's planner and children are handled unattended; the plan pings the user when stuck.
   if (o.managed || t.plan?.state === "running" || t.plan?.state === "finishing" || t.plan?.state === "paused") return null;
