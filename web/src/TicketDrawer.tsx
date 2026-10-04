@@ -23,10 +23,14 @@ const BACKDROP_MIN = 64;
 
 const defaultWidth = () => Math.round(Math.min(1120, window.innerWidth * 0.72));
 
-function clampWidth(w: number): number {
+/** Room the chat column can use: its 720px reading width plus side padding. Wider is only empty space. */
+const CHAT_ROOM = 800;
+
+/** `cap`: the widest the panel's content can use (sidebar + chat room); it never grows past that. */
+function clampWidth(w: number, cap = Infinity): number {
   const vw = window.innerWidth;
   // Narrow windows can't fit the minimum width plus the strip: the panel goes full width there.
-  const max = vw >= MIN_WIDTH + BACKDROP_MIN ? vw - BACKDROP_MIN : vw;
+  const max = vw >= MIN_WIDTH + BACKDROP_MIN ? Math.min(vw - BACKDROP_MIN, Math.max(cap, MIN_WIDTH)) : vw;
   return Math.round(Math.min(Math.max(w, Math.min(MIN_WIDTH, max)), max));
 }
 
@@ -96,21 +100,27 @@ function useSidebarWidth(bodyRef: React.RefObject<HTMLDivElement | null>) {
       persist(set(widthRef.current + (e.key === "ArrowRight" ? step : -step)));
     }
   };
-  return { width, dragging, handle: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onDoubleClick: reset, onKeyDown } };
+  return { width, pref, dragging, handle: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onDoubleClick: reset, onKeyDown } };
 }
 
 function savedWidth(): number {
   try {
     const v = Number(localStorage.getItem(WIDTH_KEY));
-    if (v) return clampWidth(v);
+    if (v) return v;
   } catch {}
-  return clampWidth(defaultWidth());
+  return defaultWidth();
 }
 
-/** Drag the panel's left edge to resize; double-click resets to min(1120px, 72%). Width persists per browser. */
-function usePanelWidth() {
-  const [width, setWidth] = useState(savedWidth);
+/**
+ * Drag the panel's left edge to resize; double-click resets to min(1120px, 72%). Width persists per browser.
+ * `cap` is the widest the content can use; the panel never grows past it, so the board stays visible to click.
+ */
+function usePanelWidth(cap: number) {
+  const [pref, setPref] = useState(savedWidth);
   const [dragging, setDragging] = useState(false);
+  // Re-render on window resize; the width is clamped to the window on every render.
+  const [, setVw] = useState(window.innerWidth);
+  const width = clampWidth(pref, cap);
   const widthRef = useRef(width);
   widthRef.current = width;
 
@@ -119,35 +129,34 @@ function usePanelWidth() {
       localStorage.setItem(WIDTH_KEY, String(w));
     } catch {}
   };
+  const set = (w: number) => {
+    const c = clampWidth(w, cap);
+    setPref(c);
+    return c;
+  };
   const onPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     setDragging(true);
   };
   const onPointerMove = (e: React.PointerEvent) => {
-    if (dragging) setWidth(clampWidth(window.innerWidth - e.clientX));
+    if (dragging) set(window.innerWidth - e.clientX);
   };
   const onPointerUp = () => {
     if (!dragging) return;
     setDragging(false);
     persist(widthRef.current);
   };
-  const reset = () => {
-    const w = clampWidth(defaultWidth());
-    setWidth(w);
-    persist(w);
-  };
+  const reset = () => persist(set(defaultWidth()));
   const onKeyDown = (e: React.KeyboardEvent) => {
     const step = e.shiftKey ? 120 : 40;
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
-      const w = clampWidth(widthRef.current + (e.key === "ArrowLeft" ? step : -step));
-      setWidth(w);
-      persist(w);
+      persist(set(widthRef.current + (e.key === "ArrowLeft" ? step : -step)));
     }
   };
   useEffect(() => {
-    const onResize = () => setWidth((w) => clampWidth(w));
+    const onResize = () => setVw(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -244,9 +253,10 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const working = ticket.status === "in_progress" || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
   const { stopping, stop } = useStop(slug, ticket, working, (m) => setPanelError(m));
-  const { width, dragging, handle } = usePanelWidth();
   const bodyRef = useRef<HTMLDivElement>(null);
   const side = useSidebarWidth(bodyRef);
+  // Never wider than the sidebar plus the chat's reading column: anything more is empty space.
+  const { width, dragging, handle } = usePanelWidth((detailsOpen ? side.pref : 0) + CHAT_ROOM);
   const [descScrolled, setDescScrolled] = useState(false);
 
   const loadOutputs = () => api.outputs(slug, ticket.id).then((o) => setOutputCount(o.length)).catch(() => {});
