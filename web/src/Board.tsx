@@ -5,7 +5,7 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useMemo, useState } from "react";
-import { COLUMNS, type Status, type Ticket } from "./api";
+import { BOARD_COLUMNS, COLUMNS, type Status, type Ticket } from "./api";
 import { Card } from "./Card";
 import { CollapseIcon, PlusIcon, SparkIcon } from "./icons";
 
@@ -19,8 +19,15 @@ export function groupByColumn(tickets: Ticket[]): Map<Status, Ticket[]> {
   return m;
 }
 
+/** What a board column shows: In Progress also lists the queued (`ready`) tickets, under the running ones. */
+const shownIn = (byColumn: Map<Status, Ticket[]>, id: Status): Ticket[] =>
+  id === "in_progress" ? [...(byColumn.get("in_progress") ?? []), ...(byColumn.get("ready") ?? [])] : byColumn.get(id) ?? [];
+
 /** Tickets in board reading order: top to bottom in each column, columns left to right. */
-export const boardOrder = (tickets: Ticket[]): Ticket[] => [...groupByColumn(tickets).values()].flat();
+export const boardOrder = (tickets: Ticket[]): Ticket[] => {
+  const byColumn = groupByColumn(tickets);
+  return BOARD_COLUMNS.flatMap((c) => shownIn(byColumn, c.id));
+};
 
 function readCollapsed(): Set<Status> {
   try {
@@ -40,7 +47,7 @@ interface Props {
 }
 
 /** Drag with the mouse, or focus a card: Enter opens it, Space picks it up (arrows move, Space drops, Esc cancels). */
-function SortableCard({ ticket, onOpen }: { ticket: Ticket; onOpen: (id: string) => void }) {
+function SortableCard({ ticket, onOpen, queued }: { ticket: Ticket; onOpen: (id: string) => void; queued?: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
     data: { status: ticket.status },
@@ -62,7 +69,7 @@ function SortableCard({ ticket, onOpen }: { ticket: Ticket; onOpen: (id: string)
         listeners?.onKeyDown?.(e);
       }}
     >
-      <Card ticket={ticket} onClick={() => onOpen(ticket.id)} />
+      <Card ticket={ticket} onClick={() => onOpen(ticket.id)} queued={queued} />
     </div>
   );
 }
@@ -71,7 +78,7 @@ const EMPTY_HINT: Record<Status, string> = {
   backlog: "No parked ideas. Press N or + to add one.",
   planning: "Drop a card here and Claude starts interviewing you",
   ready: "Drop a card here and Claude starts working on it",
-  in_progress: "Cards show up here while Claude works",
+  in_progress: "Drop a card here and Claude starts working on it (queued if all slots are busy)",
   review: "Finished work lands here for you to check",
   done: "Nothing finished yet",
 };
@@ -79,20 +86,24 @@ const EMPTY_HINT: Record<Status, string> = {
 const DONE_LIMIT = 10;
 const CLAUDE_TAG = "Claude starts automatically when a card is here";
 
-function Column({ id, label, hint, claude, tickets, onOpen, onAdd, collapsed, onCollapse, filtered }: {
-  id: Status; label: string; hint: string; claude: boolean; tickets: Ticket[]; onOpen: (id: string) => void; onAdd: (s: Status) => void;
+function Column({ id, label, hint, claude, tickets, queue = [], onOpen, onAdd, collapsed, onCollapse, filtered }: {
+  id: Status; label: string; hint: string; claude: boolean; tickets: Ticket[];
+  /** In Progress only: tickets waiting for a free run slot, in start order. */
+  queue?: Ticket[];
+  onOpen: (id: string) => void; onAdd: (s: Status) => void;
   collapsed: boolean; onCollapse: (v: boolean) => void; filtered: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${id}`, data: { status: id } });
-  const needYou = tickets.filter((t) => t.attention && !t.running && t.status !== "in_progress").length;
-  const total = `${tickets.length} ${tickets.length === 1 ? "ticket" : "tickets"}`;
+  const all = [...tickets, ...queue];
+  const needYou = all.filter((t) => t.attention && !t.running && t.status !== "in_progress").length;
+  const total = `${all.length} ${all.length === 1 ? "ticket" : "tickets"}${queue.length ? `, ${queue.length} queued` : ""}`;
   const countLabel = needYou > 0 ? `${total}, ${needYou} ${needYou === 1 ? "needs" : "need"} you` : total;
   const canAdd = id !== "in_progress" && id !== "done";
   // Done keeps growing: show the most recently finished cards unless expanded.
   const [showAll, setShowAll] = useState(false);
   const limited = id === "done" && !showAll && tickets.length > DONE_LIMIT;
   const shown = limited ? tickets.slice(0, DONE_LIMIT) : tickets;
-  const countBadge = <span className={`count ${needYou > 0 ? "needs-you" : ""}`} title={countLabel} aria-label={countLabel}>{tickets.length}</span>;
+  const countBadge = <span className={`count ${needYou > 0 ? "needs-you" : ""}`} title={countLabel} aria-label={countLabel}>{all.length}</span>;
   if (collapsed) {
     // Narrow strip: still a drop target; click to expand.
     return (
@@ -120,17 +131,21 @@ function Column({ id, label, hint, claude, tickets, onOpen, onAdd, collapsed, on
         ) : <span className="icon-btn-placeholder" aria-hidden />}
       </header>
       <div className="column-hint">{hint}</div>
-      <SortableContext items={shown.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+      <SortableContext items={[...shown, ...queue].map((t) => t.id)} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className="column-body">
           {shown.map((t) => (
             <SortableCard key={t.id} ticket={t} onOpen={onOpen} />
+          ))}
+          {queue.length > 0 && <div className="queue-sep" title="These start in this order as run slots free up">Queued</div>}
+          {queue.map((t, i) => (
+            <SortableCard key={t.id} ticket={t} onOpen={onOpen} queued={i + 1} />
           ))}
           {id === "done" && tickets.length > DONE_LIMIT && (
             <button className="btn ghost small show-all" onClick={() => setShowAll((v) => !v)}>
               {showAll ? "Show fewer" : `Show all ${tickets.length}`}
             </button>
           )}
-          {tickets.length === 0 && (
+          {all.length === 0 && (
             <div className={claude ? "column-drop-hint" : "column-empty"}>{filtered ? "No matching tickets" : EMPTY_HINT[id]}</div>
           )}
         </div>
@@ -202,10 +217,14 @@ export function Board({ tickets, onOpen, onMove, onAdd, filtered = false }: Prop
     if (!over) return;
     const ticket = tickets.find((t) => t.id === active.id);
     if (!ticket) return;
-    const targetStatus = (over.data.current?.status as Status | undefined) ?? ticket.status;
+    let targetStatus = (over.data.current?.status as Status | undefined) ?? ticket.status;
+    // Only Claude puts a ticket in progress: a card dropped on In Progress joins the queue
+    // (at the front when dropped on a running card, else at the end) and starts when a slot is free.
+    const queueDrop = targetStatus === "in_progress" && ticket.status !== "in_progress";
+    if (queueDrop) targetStatus = "ready";
     const list = (byColumn.get(targetStatus) ?? []).filter((t) => t.id !== ticket.id);
-    let index = list.length;
-    if (!String(over.id).startsWith("col:")) {
+    let index = queueDrop && !String(over.id).startsWith("col:") ? 0 : list.length;
+    if (!queueDrop && !String(over.id).startsWith("col:")) {
       const overIndex = list.findIndex((t) => t.id === over.id);
       if (overIndex >= 0) {
         const originalList = byColumn.get(targetStatus) ?? [];
@@ -229,8 +248,8 @@ export function Board({ tickets, onOpen, onMove, onAdd, filtered = false }: Prop
   return (
     <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
       <main className="board">
-        {COLUMNS.map((c) => (
-          <Column key={c.id} {...c} tickets={byColumn.get(c.id) ?? []} onOpen={onOpen} onAdd={onAdd} filtered={filtered}
+        {BOARD_COLUMNS.map((c) => (
+          <Column key={c.id} {...c} tickets={byColumn.get(c.id) ?? []} queue={c.id === "in_progress" ? byColumn.get("ready") : undefined} onOpen={onOpen} onAdd={onAdd} filtered={filtered}
             collapsed={collapsed.has(c.id)} onCollapse={(v) => setColumnCollapsed(c.id, v)} />
         ))}
       </main>

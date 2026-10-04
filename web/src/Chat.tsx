@@ -309,7 +309,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
                 </button>
               </>
             ) : (
-              <p className="muted">No conversation yet. Move the card to Ready to let Claude work on it, or send a message.</p>
+              <p className="muted">No conversation yet. Move the card to In Progress to let Claude work on it, or send a message.</p>
             )}
           </div>
         )}
@@ -375,7 +375,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
               {e.moved === "planning" && (
                 <div className="chat-moved">
                   Moved to <b>Planning</b>: this was a planning request, so nothing was changed. Answer or refine here, then
-                  drag the card to Ready when you want Claude to do it.
+                  drag the card to In Progress when you want Claude to do it.
                 </div>
               )}
             </div>

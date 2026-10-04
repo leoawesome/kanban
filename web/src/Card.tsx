@@ -35,17 +35,20 @@ export function outcomeBadge(t: Ticket) {
   }
 }
 
-export function Card({ ticket, onClick, dragging }: { ticket: Ticket; onClick?: () => void; dragging?: boolean }) {
+/** queued: 1-based place in the queue for a free run slot (status `ready`). */
+export function Card({ ticket, onClick, dragging, queued }: { ticket: Ticket; onClick?: () => void; dragging?: boolean; queued?: number }) {
   const working = ticket.status === "in_progress" || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
-  const badge = att ? null : outcomeBadge(ticket);
+  const badge = att ? null
+    : queued && !working ? <span className="badge queued" title="Starts when a run slot is free">Queued · #{queued}</span>
+    : outcomeBadge(ticket);
   const showActivity = working && ticket.lastActivity && !QUIET_ACTIVITY.has(ticket.lastActivity);
   const last = ticket.session?.lastMessage;
   useNow();
   const lastAt = ticket.session ? ticket.session.lastMessage?.at || ticket.session.updatedAt : null;
   return (
     <article
-      className={`card ${dragging ? "dragging" : ""} ${working ? "is-running" : ""} ${att ? `needs-you att-${att.kind}` : ""}`}
+      className={`card ${dragging ? "dragging" : ""} ${queued && !working ? "is-queued" : ""} ${working ? "is-running" : ""} ${att ? `needs-you att-${att.kind}` : ""}`}
       onClick={onClick}>
       {att && (
         <div className={`your-turn att-${att.kind}`}>
