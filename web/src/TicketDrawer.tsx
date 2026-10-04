@@ -1,26 +1,101 @@
 import { useEffect, useRef, useState } from "react";
-import { api, copy, COLUMNS, safeHref, startWorkTarget, subscribe, type ClaudeSession, type Profile, type Status, type Ticket } from "./api";
+import { api, COLUMNS, safeHref, startWorkTarget, subscribe, type ClaudeSession, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
 import { BugReportDialog } from "./BugReportDialog";
 import { Chat, useStop } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { BugIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, CopyIcon, ExternalIcon, FileTextIcon, SparkIcon } from "./icons";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, ExternalIcon, FileTextIcon, SparkIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { useFocusTrap, useLayer } from "./layers";
-import { ModeToggle } from "./ModeToggle";
 import { PlanPanel } from "./PlanPanel";
 import { Outputs } from "./Outputs";
 import { Select } from "./Select";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
+import { TicketMenu } from "./TicketMenu";
 import { Markdown } from "./Transcript";
 
 const WIDTH_KEY = "ckanban.panelWidth";
 const MIN_WIDTH = 640;
 
+/** Backdrop left visible beside the panel, so clicking it can always close the panel. */
+const BACKDROP_MIN = 64;
+
 const defaultWidth = () => Math.round(window.innerWidth * 0.8);
 
 function clampWidth(w: number): number {
-  return Math.round(Math.min(Math.max(w, Math.min(MIN_WIDTH, window.innerWidth)), window.innerWidth));
+  const vw = window.innerWidth;
+  // Narrow windows can't fit the minimum width plus the strip: the panel goes full width there.
+  const max = vw >= MIN_WIDTH + BACKDROP_MIN ? vw - BACKDROP_MIN : vw;
+  return Math.round(Math.min(Math.max(w, Math.min(MIN_WIDTH, max)), max));
+}
+
+const SIDE_KEY = "ckanban.sidebarWidth";
+const SIDE_DEFAULT = 320;
+const SIDE_MIN = 260;
+/** The chat column always keeps at least this much room. */
+const CHAT_MIN = 420;
+
+const clampSide = (w: number, bodyWidth: number) =>
+  Math.round(Math.max(SIDE_MIN, Math.min(w, bodyWidth ? bodyWidth - CHAT_MIN : w)));
+
+/**
+ * Drag the line between the details sidebar and the chat; double-click resets to 320px.
+ * The preference persists per browser and is clamped to the panel's current width when shown.
+ */
+function useSidebarWidth(bodyRef: React.RefObject<HTMLDivElement | null>) {
+  const [pref, setPref] = useState(() => {
+    try {
+      return Number(localStorage.getItem(SIDE_KEY)) || SIDE_DEFAULT;
+    } catch {
+      return SIDE_DEFAULT;
+    }
+  });
+  const [bodyWidth, setBodyWidth] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const width = clampSide(pref, bodyWidth);
+  const widthRef = useRef(width);
+  widthRef.current = width;
+
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBodyWidth(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const persist = (w: number) => {
+    try {
+      localStorage.setItem(SIDE_KEY, String(w));
+    } catch {}
+  };
+  const set = (w: number) => {
+    const c = clampSide(w, bodyRef.current?.clientWidth ?? 0);
+    setPref(c);
+    return c;
+  };
+  const onPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setDragging(true);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const left = bodyRef.current?.getBoundingClientRect().left ?? 0;
+    if (dragging) set(e.clientX - left);
+  };
+  const onPointerUp = () => {
+    if (!dragging) return;
+    setDragging(false);
+    persist(widthRef.current);
+  };
+  const reset = () => persist(set(SIDE_DEFAULT));
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 120 : 40;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      persist(set(widthRef.current + (e.key === "ArrowRight" ? step : -step)));
+    }
+  };
+  return { width, dragging, handle: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onDoubleClick: reset, onKeyDown } };
 }
 
 function savedWidth(): number {
@@ -109,7 +184,6 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const [outputCount, setOutputCount] = useState(0);
   // A file to show when the Outputs tab opens (a mockup clicked in the chat).
   const [outputFocus, setOutputFocus] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
   const [titleSave, setTitleSave] = useState<"saving" | "saved" | null>(null);
   const panelRef = useRef<HTMLElement>(null);
   useLayer(onClose, { skipInInputs: true });
@@ -168,6 +242,9 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const att = working ? null : ticket.attention ?? null;
   const { stopping, stop } = useStop(slug, ticket, working, (m) => setPanelError(m));
   const { width, dragging, handle } = usePanelWidth();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const side = useSidebarWidth(bodyRef);
+  const [descScrolled, setDescScrolled] = useState(false);
 
   const loadOutputs = () => api.outputs(slug, ticket.id).then((o) => setOutputCount(o.length)).catch(() => {});
 
@@ -214,11 +291,6 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
       setTitleSave(null);
       onError(`Title not saved: ${e.message}`);
     }
-  };
-  const copyText = async (key: string, text: string) => {
-    await copy(text);
-    setCopied(key);
-    setTimeout(() => setCopied((c) => (c === key ? null : c)), 1600);
   };
   const startEdit = async () => {
     try {
@@ -279,73 +351,87 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                 title={editing ? "Save or cancel the description first" : "Next ticket (Alt+↓)"}><ChevronDownIcon size={16} /></button>
             </span>
           )}
+          <TicketMenu ticket={ticket} working={working} live={!!(ticket.terminalOpen || linked?.live)}
+            linkedLabel={ticket.workdir && ticket.sessionId ? (linked ? sessionLabel(linked) : ticket.sessionId.slice(0, 8)) : null}
+            onPickSession={() => setPicking(true)}
+            onUnlink={() => act(() => api.linkSession(slug, ticket.id, null))}
+            onCheckPr={() => act(() => api.checkPr(slug, ticket.id))}
+            onReportBug={() => setReportingBug(true)}
+            onDelete={() => setConfirmDelete(true)} />
           <button className="icon-btn" onClick={onClose} aria-label="Close" title="Close (Esc)"><CloseIcon /></button>
         </header>
 
-        <div className={`panel-body ${detailsOpen ? "" : "details-closed"}`}>
+        <div ref={bodyRef} className={`panel-body ${detailsOpen ? "" : "details-closed"} ${side.dragging ? "resizing" : ""}`}
+          style={{ "--side-w": `${side.width}px` } as React.CSSProperties}>
           <div className="panel-details">
-
-            <div className="field-row">
-              <span className="field-key">Status</span>
-              <Select className="status-select" ariaLabel="Status" value={ticket.status} onChange={(s) => setStatus(s as Status)}
-                options={COLUMNS.map((c) => ({ value: c.id, label: c.label, hint: c.hint, disabled: c.id === "in_progress" && !working }))} />
-            </div>
-            {col && <p className="field-help">{col.claude && <SparkIcon className="icon spark" />}{col.hint}</p>}
-
-            <div className="action-stack">
-              {working && <button className="btn danger" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop Claude"}</button>}
-              {!working && (ticket.status === "backlog" || ticket.status === "planning") && (
-                <button className={`btn ${att?.kind === "questions" || att?.kind === "proposal" ? "" : "primary"}`}
-                  onClick={startWork} title={startTarget === "planning" ? "Claude interviews you first" : "Claude works on its own"}>Start work</button>
-              )}
-              {!working && ticket.status === "backlog" && (
-                <button className="btn" onClick={() => setStatus("planning")}>Refine with Claude</button>
-              )}
-              {ticket.status === "review" && <button className="btn primary" onClick={() => setStatus("done")}>Mark done</button>}
-              {ticket.prUrl && (
-                <a className="btn icon-label" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer">Open PR #{ticket.prUrl.split("/").pop()} <ExternalIcon size={12} /></a>
-              )}
-            </div>
-
-            <div className="field-row">
-              <span className="field-key" title="How Claude works once the ticket is in Ready">When working</span>
-              <ModeToggle value={ticket.mode ?? "auto"} disabled={working}
-                onChange={(mode) => act(() => api.updateTicket(slug, ticket.id, { mode }))} />
-            </div>
-
-            {ticket.parentId && (
+            <div className="details-pinned">
               <div className="field-row">
-                <span className="field-key" title="The planner ticket whose chat proposed this one">From</span>
-                {parent ? (
-                  <button className="link-btn ticket-link" onClick={() => onOpenTicket(parent.id)}>{parent.title}</button>
-                ) : (
-                  <span className="muted small">Planner ticket was deleted</span>
+                <span className="field-key">Status</span>
+                <Select className="status-select" ariaLabel="Status" value={ticket.status} onChange={(s) => setStatus(s as Status)}
+                  options={COLUMNS.map((c) => ({ value: c.id, label: c.label, hint: c.hint, disabled: c.id === "in_progress" && !working }))} />
+              </div>
+              {col && <p className="field-help">{col.claude && <SparkIcon className="icon spark" />}{col.hint}</p>}
+
+              <div className="action-stack">
+                {working && <button className="btn danger" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop Claude"}</button>}
+                {!working && (ticket.status === "backlog" || ticket.status === "planning") && (
+                  <button className={`btn ${att?.kind === "questions" || att?.kind === "proposal" ? "" : "primary"}`}
+                    onClick={startWork} title={startTarget === "planning" ? "Claude interviews you first" : "Claude works on its own"}>Start work</button>
+                )}
+                {!working && ticket.status === "backlog" && (
+                  <button className="btn" onClick={() => setStatus("planning")}>Refine with Claude</button>
+                )}
+                {ticket.status === "review" && <button className="btn primary" onClick={() => setStatus("done")}>Mark done</button>}
+                {ticket.prUrl && (
+                  <a className="btn icon-label" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer">Open PR #{ticket.prUrl.split("/").pop()} <ExternalIcon size={12} /></a>
                 )}
               </div>
-            )}
-            {deps.length > 0 && (
-              <div className="field-row">
-                <span className="field-key" title="A running plan starts this ticket once these are done">Waits for</span>
-                <span className="dep-list">
-                  {deps.map((d) => typeof d === "string"
-                    ? <span key={d} className="muted small">{d} (missing)</span>
-                    : <button key={d.id} className="link-btn ticket-link" onClick={() => onOpenTicket(d.id)}>{d.title}</button>)}
-                </span>
-              </div>
-            )}
 
-            {children.length > 0 && (
-              <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
-            )}
+              {ticket.parentId && (
+                <div className="field-row">
+                  <span className="field-key" title="The planner ticket whose chat proposed this one">From</span>
+                  {parent ? (
+                    <button className="link-btn ticket-link" onClick={() => onOpenTicket(parent.id)}>{parent.title}</button>
+                  ) : (
+                    <span className="muted small">Planner ticket was deleted</span>
+                  )}
+                </div>
+              )}
+              {deps.length > 0 && (
+                <div className="field-row">
+                  <span className="field-key" title="A running plan starts this ticket once these are done">Waits for</span>
+                  <span className="dep-list">
+                    {deps.map((d) => typeof d === "string"
+                      ? <span key={d} className="muted small">{d} (missing)</span>
+                      : <button key={d.id} className="link-btn ticket-link" onClick={() => onOpenTicket(d.id)}>{d.title}</button>)}
+                  </span>
+                </div>
+              )}
 
-            <section className="detail-section">
+              {children.length > 0 && (
+                <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
+              )}
+
+              {(!!ticket.session?.artifacts.length || outputCount > 0) && (
+                <div className="result-chips" aria-label="Results">
+                  {outputCount > 0 && (
+                    <button className="result-chip" onClick={() => setTab("outputs")}><FileTextIcon size={13} /> {outputCount} output file{outputCount > 1 ? "s" : ""}</button>
+                  )}
+                  {ticket.session?.artifacts.slice().reverse().map((a) => (
+                    <a key={a.url} className="result-chip" href={safeHref(a.url)} target="_blank" rel="noreferrer" title={a.url}><ExternalIcon size={12} /> {a.label}</a>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <section className={`details-desc ${descScrolled && !editing ? "scrolled" : ""}`}>
               <div className="section-head">
                 <h4>Description</h4>
                 {!editing && <button className="btn ghost small" onClick={startEdit}>Edit</button>}
               </div>
               {editing ? (
-                <>
-                  <textarea className={`body-input${images.dragOver ? " drop-target" : ""}`} rows={12} value={body} onChange={(e) => setBody(e.target.value)} autoFocus
+                <div className="desc-edit">
+                  <textarea className={`body-input${images.dragOver ? " drop-target" : ""}`} value={body} onChange={(e) => setBody(e.target.value)} autoFocus
                     placeholder="Markdown. Paste or drop images." {...images.handlers}
                     onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveBody(); }} />
                   {images.error && <div className="form-error">{images.error}</div>}
@@ -353,71 +439,23 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                     <button className="btn ghost small" onClick={() => { setBody(baseBody); setEditing(false); images.clearError(); }}>Cancel</button>
                     <button className="btn primary small" disabled={images.uploading} onClick={saveBody}>{images.uploading ? "Uploading…" : "Save"}</button>
                   </div>
-                </>
-              ) : body.trim() ? (
-                <div className="body-view" onDoubleClick={startEdit}><Markdown text={body} /></div>
-              ) : (
-                <div className="muted small">No description yet. {ticket.status === "planning" ? "Claude can propose one in the chat." : ""}</div>
-              )}
-            </section>
-
-            {(!!ticket.session?.artifacts.length || outputCount > 0) && (
-              <section className="detail-section">
-                <h4>Results</h4>
-                {outputCount > 0 && (
-                  <button className="result-link" onClick={() => setTab("outputs")}><FileTextIcon size={13} /> {outputCount} output file{outputCount > 1 ? "s" : ""}</button>
-                )}
-                {ticket.session?.artifacts.slice().reverse().map((a) => (
-                  <a key={a.url} className="result-link" href={safeHref(a.url)} target="_blank" rel="noreferrer" title={a.url}><ExternalIcon size={13} /> {a.label}</a>
-                ))}
-              </section>
-            )}
-
-            <section className="detail-section">
-              <h4>Session</h4>
-              {ticket.workdir && ticket.sessionId ? (
-                <div className="session-line">
-                  <span>Linked: <b>{linked ? sessionLabel(linked) : ticket.sessionId.slice(0, 8)}</b></span>
-                  {(ticket.terminalOpen || linked?.live) && <span className="badge running"><span className="live-dot" /> open in terminal</span>}
-                  {!working && <button className="link-btn" onClick={() => setPicking(true)}>Change</button>}
-                  {!working && <button className="link-btn" onClick={() => act(() => api.linkSession(slug, ticket.id, null))}>Unlink</button>}
                 </div>
-              ) : !working && ticket.status !== "done" && ticket.runCount === 0 && (
-                <button className="link-btn" onClick={() => setPicking(true)}>Link an existing Claude session…</button>
-              )}
-              {ticket.resumeCommand && (
-                <button className="btn small" disabled={working} title={working ? "Wait until Claude is done" : ticket.resumeCommand}
-                  onClick={() => copyText("resume", ticket.resumeCommand!)}>
-                  {copied === "resume" ? "Copied!" : "Copy terminal command"}
-                </button>
-              )}
-              <div className="meta-lines">
-                {ticket.branch && (
-                  <span className="meta-line">
-                    <code title={ticket.worktree ?? ""}>{ticket.branch}</code>
-                    <button className="icon-btn tiny" aria-label="Copy branch name" title="Copy branch name" onClick={() => copyText("branch", ticket.branch!)}>
-                      {copied === "branch" ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                    </button>
-                  </span>
-                )}
-                <span className="meta-line">
-                  <span>{ticket.id}</span>
-                  <button className="icon-btn tiny" aria-label="Copy ticket ID" title="Copy ticket ID" onClick={() => copyText("id", ticket.id)}>
-                    {copied === "id" ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                  </button>
-                </span>
-              </div>
-              {ticket.prUrl && ticket.status === "review" && (
-                <button className="link-btn" onClick={() => act(() => api.checkPr(slug, ticket.id))}>Check PR status now</button>
+              ) : (
+                <div className="desc-scroll" onScroll={(e) => setDescScrolled(e.currentTarget.scrollTop > 0)}>
+                  {body.trim() ? (
+                    <div className="body-view" onDoubleClick={startEdit}><Markdown text={body} /></div>
+                  ) : (
+                    <div className="muted small">No description yet. {ticket.status === "planning" ? "Claude can propose one in the chat." : ""}</div>
+                  )}
+                </div>
               )}
             </section>
-
-            <button className="link-btn small bug-report-btn" onClick={() => setReportingBug(true)}
-              title="Something wrong with Claude Kanban on this ticket? File a GitHub issue with its details attached">
-              <BugIcon size={12} /> Report a bug in Claude Kanban
-            </button>
-            <button className="btn ghost danger small delete-btn" onClick={() => setConfirmDelete(true)}>Delete ticket</button>
           </div>
+
+          {detailsOpen && (
+            <div className="sidebar-resize" role="separator" aria-orientation="vertical" aria-label="Resize details"
+              aria-valuenow={side.width} tabIndex={0} title="Drag to resize · double-click to reset" {...side.handle} />
+          )}
 
           <div className="panel-main">
             {panelError && (

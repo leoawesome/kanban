@@ -38,6 +38,7 @@ export const GearIcon = (p: IconProps) => svg(<><circle cx="8" cy="8" r="2.2" />
 export const ClockIcon = (p: IconProps) => svg(<><circle cx="8" cy="8" r="6.2" /><path d="M8 4.6V8l2.4 1.6" /></>, p);
 export const PlugIcon = (p: IconProps) => svg(<path d="M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 0 1-7 0V5zM8 11v3" />, p);
 export const BugIcon = (p: IconProps) => svg(<><rect x="5" y="5" width="6" height="8.5" rx="3" /><path d="M6.3 5.2a1.7 1.7 0 0 1 3.4 0M8 8v5.5M5 8.5H2.5M13.5 8.5H11M5.2 11.5l-2 1.2M10.8 11.5l2 1.2M5.3 6.3L3.5 5M10.7 6.3L12.5 5" /></>, p);
+export const TrashIcon = (p: IconProps) => svg(<path d="M2.8 4.5h10.4M6.3 4.5V3.2c0-.4.3-.7.7-.7h2c.4 0 .7.3.7.7v1.3M4.2 4.5l.6 8.3c0 .4.4.7.8.7h4.8c.4 0 .8-.3.8-.7l.6-8.3" />, p);
 export const InfoIcon = (p: IconProps) => svg(<><circle cx="8" cy="8" r="6.2" /><path d="M8 7.3v3.7M8 5h.01" /></>, p);
 export const CollapseIcon = (p: IconProps) => svg(<path d="M9.5 3.5L5 8l4.5 4.5M13 3v10" />, p);
 export const ExpandIcon = (p: IconProps) => svg(<path d="M6.5 3.5L11 8l-4.5 4.5M3 3v10" />, p);
