@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Board } from "../src/server/board";
 import { Bus } from "../src/server/events";
@@ -162,26 +162,12 @@ test("new tickets default to interview mode; outputs are served as sandboxed tex
   }
 });
 
-test("approving a mockup copies it to approved.html, only in Planning and only for mockups", async () => {
+test("mockups can't be approved through the API any more", async () => {
   const path = tempDir("ck-plain-");
   await fetch(`${base}/api/profiles`, json("POST", { name: "Mocks", path }));
   const t = (await (await fetch(`${base}/api/profiles/mocks/tickets`, json("POST", { title: "t", status: "backlog" }))).json()) as any;
-  const dir = store.outputsDir("mocks", t.id);
-  mkdirSync(join(dir, "mockups"), { recursive: true });
-  writeFileSync(join(dir, "mockups", "a.html"), "<p>A</p>");
-  writeFileSync(join(dir, "mockups", "b.html"), "<p>B</p>");
-  writeFileSync(join(dir, "notes.html"), "<p>n</p>");
-  const approve = (name: string, headers: Record<string, string> = {}) => fetch(`${base}/api/profiles/mocks/tickets/${t.id}/approve-mockup`,
-    { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ name }) });
-  expect((await approve("mockups/a.html")).status).toBe(409);
-  store.updateTicket("mocks", t.id, { status: "planning" });
-  for (const bad of ["mockups/../../ticket.md", "mockups/missing.html", "notes.html", "../ticket.md"]) expect((await approve(bad)).status).toBe(404);
-  expect((await approve("mockups/a.html", { "x-ckanban-run": `mocks/${t.id}` })).status).toBe(403);
-  expect(readFileSync(join(dir, "mockups", "a.html"), "utf8")).toBe("<p>A</p>");
-  expect((await approve("mockups/a.html")).status).toBe(202);
-  expect(readFileSync(join(dir, "mockups", "approved.html"), "utf8")).toBe("<p>A</p>");
-  expect((await approve("mockups/b.html")).status).toBe(202);
-  expect(readFileSync(join(dir, "mockups", "approved.html"), "utf8")).toBe("<p>B</p>");
+  const r = await fetch(`${base}/api/profiles/mocks/tickets/${t.id}/approve-mockup`, json("POST", { name: "mockups/a.html" }));
+  expect(r.status).toBe(404);
 });
 
 test("chat endpoint validates and conflicts", async () => {

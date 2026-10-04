@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { Bus } from "./events";
-import { stripMockups } from "./mockups";
+import { mockupName, stripMockups } from "./mockups";
 import type { Store } from "./store";
 
 /** One visible item of a Claude Code session, as shown in the ticket's Conversation tab. */
@@ -10,6 +10,8 @@ export interface QuestionOption {
   label: string;
   description?: string;
   recommended: boolean;
+  /** Mockup this option stands for (file name in outputs/mockups); the form links to its preview. */
+  mockup?: string;
 }
 
 export interface Question {
@@ -107,6 +109,7 @@ function parseQuestions(v: any): Question[] | null {
       label: String(o?.label ?? "").trim(),
       description: typeof o?.description === "string" && o.description ? o.description : undefined,
       recommended: !!o?.recommended,
+      ...(typeof o?.mockup === "string" && mockupName(o.mockup) ? { mockup: mockupName(o.mockup)! } : {}),
     })).filter((o: QuestionOption) => o.label),
   }));
   return qs.every((q) => q.question) ? qs : null;

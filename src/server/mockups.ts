@@ -1,26 +1,23 @@
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
  * Planning runs are read-only (plan mode), so Claude can't write mockup files itself. It puts each one in a
  * <ckanban-mockup name="..."> block in its reply instead; the board saves it to the ticket's outputs folder,
- * where the Outputs tab previews it and offers Approve.
+ * where the Outputs tab previews it. Feedback goes through the chat's question form.
  */
 
 /** Where mockups live, relative to the outputs folder. */
 export const MOCKUPS_DIR = "mockups";
-export const APPROVED_NAME = "approved.html";
-export const APPROVED_MOCKUP = `${MOCKUPS_DIR}/${APPROVED_NAME}`;
 
 const BLOCK_RE = /<ckanban-mockup\s+name="([^"]*)"\s*>([\s\S]*?)<\/ckanban-mockup>/g;
-/** A block still being written (no closing tag yet), so the chat can hide it while it streams. */
-export const OPEN_MOCKUP_TAG = "<ckanban-mockup";
+/** A real opening tag of a block still being written (no closing tag yet), so the chat can hide it while it streams. */
+const OPEN_RE = /<ckanban-mockup\s+name="[^"]*"\s*>\s*(?:<|```|$)/g;
 
-/** A safe file name for a mockup ("a-compact.html"), or null. approved.html is the board's own. */
+/** A safe file name for a mockup ("a-compact.html"), or null. */
 export function mockupName(name: string): string | null {
   const n = name.trim();
-  if (!/^[\w][\w.-]{0,80}\.html?$/i.test(n) || n.includes("..")) return null;
-  return n.toLowerCase() === APPROVED_NAME ? null : n;
+  return /^[\w][\w.-]{0,80}\.html?$/i.test(n) && !n.includes("..") ? n : null;
 }
 
 export interface Mockup {
@@ -43,9 +40,10 @@ export function extractMockups(text: string): Mockup[] {
 export function stripMockups(text: string): { text: string; names: string[] } {
   const names = extractMockups(text).map((m) => m.name);
   let out = text.replace(BLOCK_RE, "");
-  // An unfinished block (the reply was cut off) is HTML noise in the chat; drop it too.
-  const open = out.indexOf(OPEN_MOCKUP_TAG);
-  if (open >= 0) out = out.slice(0, open);
+  // An unfinished block (the reply was cut off) is HTML noise in the chat; drop it too. Only a real opening tag
+  // with no board block after it: a reply that just mentions the tag (e.g. in a ticket proposal) stays whole.
+  const open = [...out.matchAll(OPEN_RE)].at(-1)?.index;
+  if (open !== undefined && !out.includes("<ckanban-", open + 1)) out = out.slice(0, open);
   return { text: out, names };
 }
 
@@ -58,23 +56,3 @@ export function saveMockups(outputDir: string, text: string): string[] {
   for (const m of mockups) writeFileSync(join(dir, m.name), m.html.endsWith("\n") ? m.html : `${m.html}\n`);
   return mockups.map((m) => m.name);
 }
-
-/** Path (relative to outputs) of an existing mockup the user may approve, or null. */
-export function approvableMockup(name: string): string | null {
-  if (!name.startsWith(`${MOCKUPS_DIR}/`)) return null;
-  const file = name.slice(MOCKUPS_DIR.length + 1);
-  return file.toLowerCase() === APPROVED_NAME || mockupName(file) ? `${MOCKUPS_DIR}/${file}` : null;
-}
-
-/** Copy an approved mockup (absolute path, already validated) to mockups/approved.html. */
-export function approveMockup(outputDir: string, file: string): string {
-  const target = join(outputDir, APPROVED_MOCKUP);
-  if (file !== target) copyFileSync(file, target);
-  return target;
-}
-
-/** The chat message the board sends when the user approves a mockup. */
-export function approvedMessage(name: string): string {
-  return `Approved mockup: ${name} (saved as ${APPROVED_MOCKUP}). Please propose the final ticket with it as the target design.`;
-}
-

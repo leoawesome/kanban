@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { helperCommand } from "./artifact";
-import { APPROVED_MOCKUP, MOCKUPS_DIR } from "./mockups";
+import { MOCKUPS_DIR } from "./mockups";
 import { MAX_RETRIES } from "./plan";
 import type { Comment, Ticket, TicketQuestion } from "./types";
 import { shellQuote } from "./util";
@@ -111,27 +111,33 @@ Include the printed URL in your summary.`;
 
 /** Planning chats draw HTML mockups for UI work as reply blocks; the board saves them for the Outputs tab. */
 function mockupsRule(outputDir: string): string {
+  const dir = join(outputDir, MOCKUPS_DIR);
   return `# Mockups for UI work
 If this ticket changes a user interface, show the user what you mean before the ticket is final:
 - Make self-contained HTML mockups: one complete HTML document each, inline CSS and JS, no external network needed, realistic content, matching the project's existing look if there is one (read its styles first).
-- You can't write files while planning. Put each mockup in your reply as a block like this; the board saves it to ${join(outputDir, MOCKUPS_DIR)}/<name> and hides it from the chat:
+- You can't write files while planning. Put each mockup in your reply as a block like this; the board saves it to ${dir}/<name> and hides it from the chat:
 <ckanban-mockup name="a-compact.html">
 <!doctype html>
 <html>...</html>
 </ckanban-mockup>
-- You decide how many variants are useful (often 2-5). Name them <letter>-<short-name>.html (letters, digits, dashes). Reuse a name to replace that mockup. Never use approved.html; the board writes it when the user approves a mockup.
-- Next to the blocks, list the mockups in plain text, one line each saying how they differ, and ask the user to review them in the ticket's Outputs tab, where they can Approve one or request changes.
-- On a change request, resend that mockup (same name) with the changes, or add new variants.
-- Don't propose the final ticket for UI work until a mockup is approved, unless the user says to skip mockups. When one is approved, the proposed ticket must name ${join(outputDir, APPROVED_MOCKUP)} as the target design.
+- You decide how many variants are useful (often 2-5). Name them <letter>-<short-name>.html (letters, digits, dashes). Reuse a name to replace that mockup.
+- Next to the blocks, list the mockups in plain text, one line each saying how they differ. The user previews them in the ticket's Outputs tab.
+- Then ask for feedback with ONE questions block, one question per design decision: alternatives for the same decision (e.g. a vs b) are options of one question; a mockup with no alternative gets its own question (e.g. "Board without the Ready column: OK?" with options like "Looks good" / "Needs changes"). Give each option that shows a mockup a "mockup" field with its file name, e.g. {"label":"a: two buttons","mockup":"a-two-buttons.html"}; the form shows a Preview link for it. Tell the user they can add a note to any question and nothing is sent until they submit.
+- When answers ask for changes, resend those mockups (same name) and ask again, only about the decisions still open.
+- Don't propose the final ticket for UI work until every decision has a chosen mockup, unless the user says to skip mockups. The proposed ticket must list the chosen mockups by absolute path (${dir}/<name>) under a "Target design" heading.
 - Skip mockups for tickets with no UI change.`;
 }
 
-/** Runs of a ticket whose planning ended with an approved mockup must build that design. */
-function approvedMockupRule(outputDir: string): string {
-  const file = join(outputDir, APPROVED_MOCKUP);
-  if (!existsSync(file)) return "";
-  return `# Approved design
-The user approved a mockup for this ticket during planning: ${file}. Read it before changing the UI and match it closely (layout, wording, states); mention in your summary if you had to deviate and why.
+/** Runs of a ticket that has planning mockups build the ones its Target design names. */
+function targetDesignRule(outputDir: string): string {
+  const dir = join(outputDir, MOCKUPS_DIR);
+  let html = false;
+  try {
+    html = readdirSync(dir).some((f) => /\.html?$/i.test(f));
+  } catch {}
+  if (!html) return "";
+  return `# Target design
+This ticket has HTML mockups from planning in ${dir}. The ticket's "Target design" names the ones the user chose: read those before changing the UI and match them closely (layout, wording, states); mention in your summary if you had to deviate and why. Ignore mockups the ticket doesn't name.
 
 `;
 }
@@ -182,7 +188,7 @@ ${interview ? `${INTERVIEW}\n\n` : ""}# Rules
 
 ${PEERS_RULE}
 
-${approvedMockupRule(ctx.outputDir)}${deliverableRule(ctx.outputDir)}
+${targetDesignRule(ctx.outputDir)}${deliverableRule(ctx.outputDir)}
 
 ${artifactRule()}
 
@@ -200,7 +206,7 @@ ${feedback}
 
 ${t.mode === "interview" ? `${t.interviewed ? AFTER_ANSWERS : INTERVIEW.replace("In this first run:", "Before continuing, in this run:")}\n\n` : ""}Continue working on the ticket, addressing the feedback. If a pull request already exists, push new commits to the same branch to update it. Update deliverables in ${outputDir} rather than creating duplicates.
 
-${approvedMockupRule(outputDir)}${PEERS_RULE}
+${targetDesignRule(outputDir)}${PEERS_RULE}
 
 ${artifactRule()}
 
@@ -260,7 +266,7 @@ If the message only asks you to plan, audit, review, list ideas, propose or disc
 If you need decisions from the user, ask with the questions block.
 ${bugReportRule(t)}
 
-${approvedMockupRule(outputDir)}${QUESTIONS_FORMAT}
+${targetDesignRule(outputDir)}${QUESTIONS_FORMAT}
 
 ${artifactRule()}
 

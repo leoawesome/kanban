@@ -66,11 +66,13 @@ function answerText(a: Answer): string {
  * Claude's interview questions, one at a time (like Claude Code's question picker).
  * Keys: 1-9 pick an option, Enter goes next, Backspace/← goes back when not typing.
  */
-export function QuestionsForm({ questions, answered, disabled, onSubmit, storageKey }: {
+export function QuestionsForm({ questions, answered, disabled, onSubmit, storageKey, onPreview }: {
   questions: Question[];
   answered: boolean;
   disabled: boolean;
   onSubmit: (text: string) => void;
+  /** Open an option's mockup (file name in outputs/mockups); options with one get a Preview link. */
+  onPreview?: (mockup: string) => void;
   /** Where to keep unsent progress so it survives leaving the ticket; omit to not save. */
   storageKey?: string;
 }) {
@@ -160,7 +162,7 @@ export function QuestionsForm({ questions, answered, disabled, onSubmit, storage
           <div className="qopts" role={q.multiSelect ? "group" : "radiogroup"}>
             {q.options.map((o, i) => {
               const on = a.picked.includes(o.label);
-              return (
+              const option = (
                 <button key={o.label} type="button" disabled={disabled}
                   className={`qopt ${on ? "on" : ""} ${q.multiSelect ? "multi" : ""}`}
                   role={q.multiSelect ? "checkbox" : "radio"} aria-checked={on} onClick={() => pick(o.label)}>
@@ -175,6 +177,15 @@ export function QuestionsForm({ questions, answered, disabled, onSubmit, storage
                   <kbd className="qkey">{i + 1}</kbd>
                 </button>
               );
+              // A sibling, not inside the option: previewing must not pick it. Progress is saved, so leaving for the Outputs tab keeps it.
+              return o.mockup && onPreview ? (
+                <div key={o.label} className="qopt-row">
+                  {option}
+                  <button type="button" className="qpreview" title={`Preview ${o.mockup} in the Outputs tab`} onClick={() => onPreview(o.mockup!)}>
+                    Preview
+                  </button>
+                </div>
+              ) : option;
             })}
             <button type="button" disabled={disabled} className={`qopt ${a.otherOn ? "on" : ""} ${q.multiSelect ? "multi" : ""}`}
               role={q.multiSelect ? "checkbox" : "radio"} aria-checked={a.otherOn} onClick={toggleOther}>

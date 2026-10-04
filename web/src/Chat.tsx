@@ -339,6 +339,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
               {e.text && <Markdown text={e.text.replace(/^.*CKANBAN_RESULT:.*$/m, "").trim()} />}
               {e.questions && (
                 <QuestionsForm questions={e.questions} answered={answeredAfter(b.index)} disabled={running} onSubmit={send}
+                  onPreview={onOpenOutput && ((m) => onOpenOutput(`mockups/${m}`))}
                   storageKey={formKey(slug, ticket.id, e.uuid)} />
               )}
               {e.proposal && (

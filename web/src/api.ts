@@ -160,6 +160,8 @@ export interface QuestionOption {
   label: string;
   description?: string;
   recommended: boolean;
+  /** Mockup this option stands for (file name in outputs/mockups). */
+  mockup?: string;
 }
 
 export interface Question {
@@ -411,8 +413,6 @@ export const api = {
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),
   addComment: (slug: string, id: string, text: string) => req<Comment>("POST", `${t(slug, id)}/comments`, { text }),
   chat: (slug: string, id: string, text: string) => req<Ticket>("POST", `${t(slug, id)}/chat`, { text }),
-  /** Keep a planning mockup as mockups/approved.html and tell Claude (name is relative to outputs). */
-  approveMockup: (slug: string, id: string, name: string) => req<Ticket>("POST", `${t(slug, id)}/approve-mockup`, { name }),
   sendQueued: (slug: string, id: string, msgId: string) => req<Ticket>("POST", `${t(slug, id)}/queued/${msgId}`),
   discardQueued: (slug: string, id: string, msgId: string) => req<Ticket>("DELETE", `${t(slug, id)}/queued/${msgId}`),
   conversation: (slug: string, id: string, before?: number) =>

@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, subscribe, type OutputFile } from "./api";
-import { autoGrow } from "./autoGrow";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileCodeIcon, FileIcon, FileImageIcon, FileTextIcon, FolderIcon, FolderOpenIcon } from "./icons";
 import { fullTime, timeAgo, useNow } from "./time";
-import { toast } from "./toast";
 import { Markdown } from "./Transcript";
 
 function kb(n: number): string {
@@ -15,9 +13,6 @@ const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const BINARY = /\.(ico|bmp|tiff?|psd|pdf|zip|gz|tgz|tar|7z|rar|mp3|wav|m4a|ogg|mp4|mov|webm|avi|woff2?|ttf|otf|eot|exe|dll|so|dylib|bin|dat|db|sqlite|wasm|pyc|class|jar|heic|avif)$/i;
 const MARKDOWN = /\.(md|markdown)$/i;
 const HTML = /\.html?$/i;
-/** Planning mockups (outputs/mockups/*.html) get Approve / Request changes; approved.html is the board's copy. */
-const MOCKUP = /^mockups\/[^/]+\.html?$/i;
-const APPROVED = "mockups/approved.html";
 /** Show the filter once the list gets long. */
 const FILTER_MIN = 10;
 
@@ -75,52 +70,13 @@ function openInTab(name: string, html: string) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-/** Approve a planning mockup or ask Claude to change it; both continue the planning chat. */
-function MockupActions({ slug, ticketId, name, onSent }: { slug: string; ticketId: string; name: string; onSent?: () => void }) {
-  const [changes, setChanges] = useState("");
-  const [busy, setBusy] = useState<"approve" | "changes" | null>(null);
-  useEffect(() => setChanges(""), [name]);
-  const run = async (kind: "approve" | "changes") => {
-    setBusy(kind);
-    try {
-      if (kind === "approve") await api.approveMockup(slug, ticketId, name);
-      else await api.chat(slug, ticketId, `Changes for ${name}: ${changes.trim()}`);
-      toast(kind === "approve" ? `Approved ${baseName(name)}. Claude is writing the final ticket.` : `Sent your changes for ${baseName(name)} to Claude.`, { tone: "ok" });
-      setChanges("");
-      onSent?.();
-    } catch (e) {
-      toast(`Couldn't send: ${(e as Error).message}`, { tone: "error" });
-    } finally {
-      setBusy(null);
-    }
-  };
-  if (name === APPROVED) return <div className="mockup-actions muted small">This is the approved design. The dev run builds against it.</div>;
-  return (
-    <div className="mockup-actions">
-      <textarea value={changes} rows={1} placeholder="What should change in this mockup?" aria-label="Changes for this mockup"
-        onChange={(e) => { setChanges(e.target.value); autoGrow(e.target); }}
-        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && changes.trim() && !busy) { e.preventDefault(); run("changes"); } }} />
-      <button className="btn" disabled={!changes.trim() || !!busy} onClick={() => run("changes")}>
-        {busy === "changes" ? "Sending…" : "Request changes"}
-      </button>
-      <button className="btn primary" disabled={!!busy} onClick={() => run("approve")} title="Keep this as mockups/approved.html and let Claude write the final ticket">
-        {busy === "approve" ? "Approving…" : "Approve"}
-      </button>
-    </div>
-  );
-}
-
 /** Deliverables Claude saved in the ticket's outputs folder; markdown is rendered, images and HTML previewed, other text shown raw. */
-export function Outputs({ slug, ticketId, onCount, focus, planning, onSent }: {
+export function Outputs({ slug, ticketId, onCount, focus }: {
   slug: string;
   ticketId: string;
   onCount?: (n: number) => void;
   /** File to show first (path relative to outputs), e.g. a mockup clicked in the chat. */
   focus?: string | null;
-  /** The ticket is in Planning: mockups can be approved or sent back with changes. */
-  planning?: boolean;
-  /** A mockup approval or change request went to Claude. */
-  onSent?: () => void;
 }) {
   const [files, setFiles] = useState<OutputFile[] | null>(null);
   const [open, setOpen] = useState<string | null>(focus ?? null);
@@ -229,7 +185,6 @@ export function Outputs({ slug, ticketId, onCount, focus, planning, onSent }: {
       <div className={`output-view${kind === "html" ? " html" : ""}`}>
         {kind === "html" && open && (
           <div className="output-html-bar">
-            {planning && MOCKUP.test(open) && <MockupActions slug={slug} ticketId={ticketId} name={open} onSent={onSent} />}
             <button className="link-btn small" disabled={text === null} onClick={() => text !== null && openInTab(open, text)}>Open in new tab</button>
           </div>
         )}
