@@ -43,6 +43,13 @@ function liveView(text: string): { text: string; preparing: string | null } {
 
 const UNREADABLE = { questions: "questions", proposal: "ticket proposal", tickets: "proposed tickets" } as const;
 
+/** What the Resend button sends: the same content again, through the matching tool. */
+const RESEND = {
+  questions: "The board couldn't read your questions. Please resend them with the ask_questions tool.",
+  proposal: "The board couldn't read your ticket proposal. Please resend it with the propose_ticket tool.",
+  tickets: "The board couldn't read your proposed tickets. Please resend them with the propose_tickets tool.",
+} as const;
+
 const REFINE = (s: Ticket["status"]) => s === "backlog" || s === "planning";
 
 // Image links reach the session as local file paths, so compare by file name.
@@ -359,7 +366,10 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
               )}
               {e.unreadable && (
                 <div className="chat-unreadable" role="status">
-                  Couldn't read Claude's {UNREADABLE[e.unreadable]}. Ask it to resend.
+                  <span>Couldn't read Claude's {UNREADABLE[e.unreadable]}.</span>
+                  {!answeredAfter(b.index) && (
+                    <button className="btn small" disabled={running} onClick={() => send(RESEND[e.unreadable!])}>Resend</button>
+                  )}
                 </div>
               )}
               {e.moved === "planning" && (

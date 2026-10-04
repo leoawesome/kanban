@@ -216,10 +216,13 @@ test("inside a board run, changing tools are refused and read tools work", async
 });
 
 test("every tool advertises a profile argument; change tools are flagged", () => {
-  for (const t of TOOLS.filter((t) => t.name !== "list_profiles")) expect(t.inputSchema.properties.profile).toBeDefined();
+  // The planning chat tools only check their input: no board, no profile.
+  const PLANNING = ["ask_questions", "propose_ticket", "propose_tickets"];
+  for (const t of TOOLS.filter((t) => t.name !== "list_profiles" && !PLANNING.includes(t.name))) expect(t.inputSchema.properties.profile).toBeDefined();
   expect(TOOLS.filter((t) => !t.changes).map((t) => t.name).sort()).toEqual([
-    "get_ticket", "list_profiles", "list_schedules", "list_tickets", "report_bug", "schedule_history",
+    "ask_questions", "get_ticket", "list_profiles", "list_schedules", "list_tickets", "propose_ticket", "propose_tickets", "report_bug", "schedule_history",
   ]);
+  expect(TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name).sort()).toEqual(PLANNING);
   expect(TOOLS.filter((t) => t.allowInRun).map((t) => t.name).sort()).toEqual([
     "ask_ticket", "create_schedule", "delete_schedule", "reply_ticket", "update_schedule",
   ]);
@@ -249,6 +252,8 @@ test("JSON-RPC: initialize, tools/list, tools/call, notifications, unknown metho
   const list: any = await handleMessage({ jsonrpc: "2.0", id: 3, method: "tools/list" }, ctx);
   expect(list.result.tools.map((t: any) => t.name)).toContain("create_ticket");
   expect(list.result.tools[0].changes).toBeUndefined();
+  expect(list.result.tools.find((t: any) => t.name === "ask_questions").annotations).toEqual({ readOnlyHint: true });
+  expect(list.result.tools.find((t: any) => t.name === "create_ticket").annotations).toBeUndefined();
   const call: any = await handleMessage({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "list_profiles", arguments: {} } }, ctx);
   expect(call.result.content[0].text).toContain("kanban  (kanban, /repos/kanban)");
   const bad: any = await handleMessage({ jsonrpc: "2.0", id: 5, method: "resources/list" }, ctx);

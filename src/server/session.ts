@@ -82,25 +82,34 @@ function jsonEnd(text: string, from: number): number {
 /**
  * Find a `<tag>` block and parse its JSON. The JSON's own end decides where the block stops, so a wrong or
  * missing closing tag, or a closing tag quoted inside the JSON text, doesn't break it. A ```json fence around
- * the JSON is fine. `raw` is the block's text (to remove it), `value` undefined when the JSON can't be read.
+ * the JSON is fine. Each occurrence of the opening tag is tried in order (prose may mention the tag before the
+ * real block); the first whose content parses wins. `raw` is the block's text (to remove it), `value` null when
+ * no occurrence parses (then `raw` is the first one).
  */
-function findBlock(text: string, tag: string): { raw: string; value: unknown } | null {
+function findBlock<T>(text: string, tag: string, parse: (v: unknown) => T | null): { raw: string; value: T | null } | null {
   const open = `<${tag}>`;
-  const start = text.indexOf(open);
-  if (start < 0) return null;
-  const head = /^\s*(?:```(?:json)?\s*)?/.exec(text.slice(start + open.length))![0];
-  const from = start + open.length + head.length;
-  const end = text[from] === "{" || text[from] === "[" ? jsonEnd(text, from) : -1;
-  if (end < 0) return { raw: text.slice(start), value: undefined };
-  const tail = /^(?:\s*```)?(?:\s*<\/[\w-]+>)?/.exec(text.slice(end))![0];
-  let value: unknown;
-  try {
-    value = JSON.parse(text.slice(from, end));
-  } catch {}
-  return { raw: text.slice(start, end + tail.length), value };
+  let first: string | null = null;
+  for (let start = text.indexOf(open); start >= 0; start = text.indexOf(open, start + open.length)) {
+    const head = /^\s*(?:```(?:json)?\s*)?/.exec(text.slice(start + open.length))![0];
+    const from = start + open.length + head.length;
+    const end = text[from] === "{" || text[from] === "[" ? jsonEnd(text, from) : -1;
+    if (end < 0) {
+      first ??= text.slice(start);
+      continue;
+    }
+    const tail = /^(?:\s*```)?(?:\s*<\/[\w-]+>)?/.exec(text.slice(end))![0];
+    const raw = text.slice(start, end + tail.length);
+    let value: T | null = null;
+    try {
+      value = parse(JSON.parse(text.slice(from, end)));
+    } catch {}
+    if (value) return { raw, value };
+    first ??= raw;
+  }
+  return first === null ? null : { raw: first, value: null };
 }
 
-function parseQuestions(v: any): Question[] | null {
+export function parseQuestions(v: any): Question[] | null {
   if (!Array.isArray(v) || !v.length) return null;
   const qs = v.map((q: any) => ({
     question: String(q?.question ?? "").trim(),
@@ -115,13 +124,13 @@ function parseQuestions(v: any): Question[] | null {
   return qs.every((q) => q.question) ? qs : null;
 }
 
-function parseProposal(v: any): TicketProposal | null {
+export function parseProposal(v: any): TicketProposal | null {
   const title = typeof v?.title === "string" ? v.title.trim() : "";
   const description = typeof v?.description === "string" ? v.description.trim() : "";
   return title || description ? { title, description } : null;
 }
 
-function parseNewTickets(v: any): NewTicketDraft[] | null {
+export function parseNewTickets(v: any): NewTicketDraft[] | null {
   if (!Array.isArray(v)) return null;
   const ts = v.map((x: any) => {
     const d: NewTicketDraft = {
@@ -149,15 +158,14 @@ function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" |
   let unreadable: BlockKind | undefined;
   /** Parse one block and cut it from the text; an unreadable block stays visible and is flagged. */
   const take = <T>(tag: string, kind: BlockKind, parse: (v: unknown) => T | null): T | undefined => {
-    const b = findBlock(out, tag);
+    const b = findBlock(out, tag, parse);
     if (!b) return undefined;
-    const parsed = b.value === undefined ? null : parse(b.value);
-    if (!parsed) {
+    if (!b.value) {
       unreadable ??= kind;
       return undefined;
     }
     out = out.replace(b.raw, "");
-    return parsed;
+    return b.value;
   };
   const questions = take("ckanban-questions", "questions", parseQuestions);
   const proposal = take("ckanban-ticket", "proposal", parseProposal);
@@ -276,7 +284,29 @@ function resultText(content: unknown): string {
 
 const ASK_TOOL = /(?:^|__)ask_ticket$/;
 const REPLY_TOOL = /(?:^|__)reply_ticket$/;
+/** Planning-chat tools (ckanban MCP): their input becomes a form or card, like the text blocks. */
+const QUESTIONS_TOOL = /(?:^|__)ask_questions$/;
+const PROPOSAL_TOOL = /(?:^|__)propose_ticket$/;
+const TICKETS_TOOL = /(?:^|__)propose_tickets$/;
 const REPLY_HEAD = /^Reply from ticket (\S+) .*:\n\n/;
+
+/** The form or card a planning-chat tool call shows, or null for other tools (or input that can't be read). */
+function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "newTickets"> | null {
+  const name = String(block.name ?? "");
+  if (QUESTIONS_TOOL.test(name)) {
+    const questions = parseQuestions(block.input?.questions);
+    return questions && { questions };
+  }
+  if (PROPOSAL_TOOL.test(name)) {
+    const proposal = parseProposal(block.input);
+    return proposal && { proposal };
+  }
+  if (TICKETS_TOOL.test(name)) {
+    const newTickets = parseNewTickets(block.input?.tickets);
+    return newTickets && { newTickets };
+  }
+  return null;
+}
 
 function toolLabel(block: any): string {
   const input = block.input ?? {};
@@ -294,6 +324,9 @@ export function parseSession(raw: string): ParsedSession {
   /** ask_ticket calls by tool_use id → asked ticket; question id → asking ticket. */
   const asks = new Map<string, string | null>();
   const askers = new Map<string, string>();
+  /** Card tool calls (by tool_use id) and those whose result was an error: those don't render. */
+  const cards = new Set<string>();
+  const failed = new Set<string>();
   const peerEntry = (u: NonNullable<ReturnType<typeof userText>>, uuid: string, at: string): SessionEntry => {
     if (u.from && u.question) askers.set(u.question, u.from);
     return { uuid, at, role: "user", kind: u.kind, text: u.text, ...(u.from ? { peer: { dir: "in" as const, ticketId: u.from } } : {}) };
@@ -323,6 +356,7 @@ export function parseSession(raw: string): ParsedSession {
     if (ev.type === "user") {
       if (Array.isArray(content)) {
         for (const [i, b] of content.entries()) {
+          if (b?.type === "tool_result" && b.is_error && cards.has(b.tool_use_id)) failed.add(b.tool_use_id);
           // The reply an ask_ticket call came back with: shown as that ticket's message.
           if (b?.type === "tool_result" && asks.has(b.tool_use_id) && !b.is_error) {
             const m = REPLY_HEAD.exec(resultText(b.content));
@@ -351,6 +385,7 @@ export function parseSession(raw: string): ParsedSession {
     content.forEach((b: any, i: number) => {
       if (b?.type === "tool_use" && typeof b.id === "string" && isPublisher(b)) publishers.add(b.id);
       const id = i ? `${uuid}:${i}` : uuid;
+      const card = b?.type === "tool_use" && typeof b.id === "string" ? cardEntry(b) : null;
       if (b?.type === "text" && b.text?.trim()) entries.push({ uuid: id, at, role: "assistant", kind: "text", ...assistantBlock(b.text.trim()) });
       else if (b?.type === "tool_use" && ASK_TOOL.test(b.name ?? "") && typeof b.input?.question === "string") {
         const to = typeof b.input.id === "string" ? b.input.id : null;
@@ -359,10 +394,15 @@ export function parseSession(raw: string): ParsedSession {
       } else if (b?.type === "tool_use" && REPLY_TOOL.test(b.name ?? "") && typeof b.input?.text === "string") {
         const to = typeof b.input.questionId === "string" ? askers.get(b.input.questionId) ?? null : null;
         entries.push({ uuid: id, at, role: "assistant", kind: "text", text: b.input.text.trim(), peer: { dir: "out", ticketId: to } });
+      } else if (card) {
+        // The tool_use id keeps the uuid stable, so form drafts and answered/applied state stick to it.
+        cards.add(b.id);
+        entries.push({ uuid: b.id, at, role: "assistant", kind: "text", text: "", ...card });
       } else if (b?.type === "tool_use") entries.push({ uuid: id, at, role: "assistant", kind: "tool", text: toolLabel(b) });
     });
   }
 
+  if (failed.size) entries.splice(0, entries.length, ...entries.filter((e) => !failed.has(e.uuid)));
   const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal || e.newTickets));
   const lastText = !last ? "" : last.text
     || (last.questions ? `Asked ${last.questions.length} question${last.questions.length > 1 ? "s" : ""}`

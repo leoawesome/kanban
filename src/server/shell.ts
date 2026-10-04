@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { mcpConfig } from "./agents";
 import { helperArgv } from "./artifact";
 
 /** Bun ≥ 1.3.5 can spawn processes on a pseudo-terminal (`Bun.spawn({ terminal })`). */
@@ -33,8 +34,6 @@ export interface ChatProfile {
  * so asking it to "make a ticket" works without registering ckanban with Claude Code first.
  */
 export function quickChatArgs(profile: ChatProfile, serverArgv: string[] = [...helperArgv(), "mcp"]): string[] {
-  const [command, ...args] = serverArgv;
-  const mcp = JSON.stringify({ mcpServers: { ckanban: { command, args } } });
   const note = [
     `You are running in the quick Claude chat of Claude Kanban (ckanban), a local kanban board that runs tickets through Claude.`,
     `This chat belongs to the board (profile) "${profile.name}" (slug: ${profile.slug}), whose folder is ${profile.path}.`,
@@ -42,7 +41,7 @@ export function quickChatArgs(profile: ChatProfile, serverArgv: string[] = [...h
     `Use profile "${profile.slug}" unless the user names another board. New tickets land in Backlog.`,
     `Anything else, answer normally.`,
   ].join(" ");
-  return ["--mcp-config", mcp, "--append-system-prompt", note];
+  return ["--mcp-config", mcpConfig(serverArgv), "--append-system-prompt", note];
 }
 
 /** One interactive login shell on a PTY. Output is kept (bounded) so a reconnecting client can replay it. */

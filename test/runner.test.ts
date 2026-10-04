@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
+import { mcpConfig } from "../src/server/agents";
 import { buildArgs, startRun } from "../src/server/runner";
 import { tempDir } from "./helpers";
 
@@ -120,4 +121,13 @@ test("run without follow-ups exits once Claude has answered", async () => {
   const r = await startRun({ bin: FAKE, cwd: tempDir(), args: STREAM, input: "hi", onEvent: () => {} }).done;
   expect(r.code).toBe(0);
   expect(Date.now() - t0).toBeLessThan(5000);
+});
+
+test("buildArgs passes the board's MCP server so every run has the ckanban tools", () => {
+  const cfg = mcpConfig(["/bin/bun", "/src/cli.ts", "mcp"]);
+  expect(JSON.parse(cfg)).toEqual({ mcpServers: { ckanban: { command: "/bin/bun", args: ["/src/cli.ts", "mcp"] } } });
+  const args = buildArgs("u1", false, null, "plan", cfg);
+  expect(args[args.indexOf("--mcp-config") + 1]).toBe(cfg);
+  expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
+  expect(JSON.parse(mcpConfig()).mcpServers.ckanban.args.at(-1)).toBe("mcp");
 });

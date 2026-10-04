@@ -8,29 +8,30 @@ import { shellQuote } from "./util";
 
 const RESULT_RULE = `When you finish this run, end your final message with exactly one line in this format (valid JSON, single line):
 CKANBAN_RESULT: {"status":"done"|"blocked"|"questions","prUrl":<string or null>,"summary":"<1-3 sentence summary for the user>"}
-- "questions": you are waiting for the user's answers (the questions must be in your final message).
+- "questions": you are waiting for the user's answers (ask them with the ask_questions tool in this final turn).
 - "blocked": you cannot continue without something from the user (explain what in summary).
 - "done": the task is complete.`;
 
-/** Keeps board blocks readable: the board parses the JSON right after the opening tag. */
+/** Keeps fallback blocks readable: the board parses the JSON right after the opening tag. */
 const BLOCK_RULE = "End the block with its own closing tag exactly as shown, and never write a board tag (like the closing tag) inside the JSON text.";
 
+/** The planning tools may be deferred: Claude has to load them before the first call. */
+const TOOL_NOTE = "(ckanban MCP tool; if it's deferred, load it with ToolSearch first)";
+
 /** How Claude asks questions so the board can render them as a clickable form. */
-export const QUESTIONS_FORMAT = `To ask the user questions, put them in ONE block like this in your message (valid JSON array):
-<ckanban-questions>
-[{"question":"Who will read the result?","options":[{"label":"My manager","description":"decision-oriented, 1 page","recommended":true},{"label":"Engineering team","description":"technical depth"}],"multiSelect":false}]
-</ckanban-questions>
-The board shows it as a form (the user can also add free text) and sends the answers back as the user's next message. Rules: at most 5 questions per round, 2-4 options each, mark exactly one option "recommended", set "multiSelect": true only when several options can apply. Put a one-line intro before the block; don't repeat the questions as plain text. ${BLOCK_RULE}`;
+export const QUESTIONS_FORMAT = `To ask the user questions, call the \`ask_questions\` tool ${TOOL_NOTE}, e.g. questions: [{"question":"Who will read the result?","options":[{"label":"My manager","description":"decision-oriented, 1 page","recommended":true},{"label":"Engineering team","description":"technical depth"}],"multiSelect":false}]
+The board shows them as a form (the user can also add free text) and sends the answers back as the user's next message. Rules: at most 5 questions per round, 2-4 options each, mark exactly one option "recommended", set "multiSelect": true only when several options can apply. If the tool returns an error, fix the input and call it again. Put a one-line intro in your reply; don't repeat the questions as plain text. After the call, end your turn.
+Only if the ckanban tools aren't available: put the same JSON array in ONE <ckanban-questions>[...]</ckanban-questions> block in your message instead. ${BLOCK_RULE}`;
 
 /** How Claude proposes an improved ticket so the board can show an Apply button. */
-export const TICKET_FORMAT = `To propose an improved ticket, add ONE block like this (valid JSON; description is markdown):
-<ckanban-ticket>{"title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Scope\\n**In:** ...\\n**Out:** ...\\n\\n## Requirements\\n- ...\\n\\n## Acceptance criteria\\n- ...\\n\\n## Open questions\\n- ..."}</ckanban-ticket>
-The board shows it as a card; the user clicks Apply to replace the ticket's title and description. ${BLOCK_RULE}`;
+export const TICKET_FORMAT = `To propose an improved ticket, call the \`propose_ticket\` tool ${TOOL_NOTE} with title (short, specific, under 80 characters) and description (markdown: ## Goal, ## Context, ## Scope with **In:** / **Out:**, ## Requirements, ## Acceptance criteria, ## Open questions).
+The board shows it as a card; the user clicks Apply to replace the ticket's title and description. If the tool returns an error, fix the input and call it again.
+Only if the ckanban tools aren't available: put {"title":"...","description":"..."} in ONE <ckanban-ticket>{...}</ckanban-ticket> block in your message instead. ${BLOCK_RULE}`;
 
 /** How a planner ticket's chat proposes splitting the work into new tickets; the user creates them by clicking. */
-export const TICKETS_FORMAT = `When the user wants to split the work into separate tickets (this ticket as the planner), first call the ckanban \`list_tickets\` tool to avoid duplicates, then add ONE block like this (valid JSON array; description is markdown):
-<ckanban-tickets>[{"key":"api","title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Acceptance criteria\\n- ..."},{"key":"ui","title":"...","description":"...","dependsOn":["api"]}]</ckanban-tickets>
-Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. "key" is a short unique name; "dependsOn" lists the keys that must be finished first. Give a dependency to tickets that build on each other or likely edit the same files, so they don't run at the same time and conflict. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket, and can then press Start plan: the board runs the tickets in dependency order and wakes you only when one needs a decision. You cannot create tickets yourself here. ${BLOCK_RULE}`;
+export const TICKETS_FORMAT = `When the user wants to split the work into separate tickets (this ticket as the planner), first call the ckanban \`list_tickets\` tool to avoid duplicates, then call the \`propose_tickets\` tool ${TOOL_NOTE}, e.g. tickets: [{"key":"api","title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Acceptance criteria\\n- ..."},{"key":"ui","title":"...","description":"...","dependsOn":["api"]}]
+Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. "key" is a short unique name; "dependsOn" lists the keys that must be finished first. Give a dependency to tickets that build on each other or likely edit the same files, so they don't run at the same time and conflict. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket, and can then press Start plan: the board runs the tickets in dependency order and wakes you only when one needs a decision. You cannot create tickets yourself here. If the tool returns an error, fix the input and call it again.
+Only if the ckanban tools aren't available: put the same JSON array in ONE <ckanban-tickets>[...]</ckanban-tickets> block in your message instead. ${BLOCK_RULE}`;
 
 function context(note: string, body: string, attrs: Record<string, string> = {}): string {
   const extra = Object.entries(attrs).map(([k, v]) => ` ${k}="${v.replace(/"/g, "'")}"`).join("");
@@ -75,7 +76,7 @@ const INTERVIEW = `# How to work: interview first
 The user wants to be interviewed before you do the work. In this first run:
 1. Gather just enough context to ask good questions: read the ticket, its links, relevant code, docs and notes. Do NOT produce the deliverable yet.
 2. Find what is unclear and would change the result: the goal (why is this wanted, who asked), the audience, the deliverable and its format, what "good" looks like (criteria), scope and depth, constraints, deadline.
-3. Ask your questions using the questions block below.
+3. Ask your questions with the ask_questions tool (below).
 4. End with status "questions".
 Only skip the interview if the ticket already answers all of this; then write the brief (below) and do the task.
 
@@ -122,7 +123,7 @@ If this ticket changes a user interface, show the user what you mean before the 
 </ckanban-mockup>
 - You decide how many variants are useful (often 2-5). Name them <letter>-<short-name>.html (letters, digits, dashes). Reuse a name to replace that mockup.
 - Next to the blocks, list the mockups in plain text, one line each saying how they differ. The user previews them in the ticket's Outputs tab.
-- Then ask for feedback with ONE questions block, one question per design decision: alternatives for the same decision (e.g. a vs b) are options of one question; a mockup with no alternative gets its own question (e.g. "Board without the Ready column: OK?" with options like "Looks good" / "Needs changes"). Give each option that shows a mockup a "mockup" field with its file name, e.g. {"label":"a: two buttons","mockup":"a-two-buttons.html"}; the form shows a Preview link for it. Tell the user they can add a note to any question and nothing is sent until they submit.
+- Then ask for feedback with ONE ask_questions call, one question per design decision: alternatives for the same decision (e.g. a vs b) are options of one question; a mockup with no alternative gets its own question (e.g. "Board without the Ready column: OK?" with options like "Looks good" / "Needs changes"). Give each option that shows a mockup a "mockup" field with its file name, e.g. {"label":"a: two buttons","mockup":"a-two-buttons.html"}; the form shows a Preview link for it. Tell the user they can add a note to any question and nothing is sent until they submit.
 - When answers ask for changes, resend those mockups (same name) and ask again, only about the decisions still open.
 - Don't propose the final ticket for UI work until every decision has a chosen mockup, unless the user says to skip mockups. The proposed ticket must list the chosen mockups by absolute path (${dir}/<name>) under a "Target design" heading.
 - Skip mockups for tickets with no UI change.`;
@@ -263,7 +264,7 @@ ${TICKETS_FORMAT}`)}`;
 ${context("", `(Sent from the kanban board's ticket chat for "${t.title}". The user reads your reply there, not in a terminal.)
 Act on the message as you would in an interactive session. If a pull request already exists, push new commits to the same branch. Save research/writing deliverables in ${outputDir}.
 If the message only asks you to plan, audit, review, list ideas, propose or discuss, and no changes are wanted yet (e.g. "don't change anything yet"): do not modify any files, answer, and end your reply with <ckanban-move to="planning"/> on its own line. The board then moves the ticket to Planning, where the next steps get shaped before any work.
-If you need decisions from the user, ask with the questions block.
+If you need decisions from the user, ask with the ask_questions tool.
 ${bugReportRule(t)}
 
 ${targetDesignRule(outputDir)}${QUESTIONS_FORMAT}
@@ -328,7 +329,7 @@ ${job}
 The ckanban MCP tools create_ticket, update_ticket (title, body, status, mode, dependsOn), move_ticket, chat_ticket, stop_ticket and comment_ticket work on THIS plan's child tickets only; everything else on the board is refused. create_ticket here always makes a child of this plan in Backlog (auto mode). Every change is logged on the child.
 
 # When you need the user
-End with status "blocked" (or "questions" with the questions block) only when a human must decide or fix something. That pauses the plan and notifies the user. Otherwise end with "done".
+End with status "blocked" (or "questions" after asking with the ask_questions tool) only when a human must decide or fix something. That pauses the plan and notifies the user. Otherwise end with "done".
 
 ${RESULT_RULE}`)}`;
 }

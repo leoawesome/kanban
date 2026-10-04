@@ -143,7 +143,12 @@ test("only the planning chat can propose new tickets", () => {
   const refine = chatPrompt(t, "split it", "refine", "/o");
   expect(refine).toContain("<ckanban-tickets>");
   expect(refine).toContain("list_tickets");
+  // Tools first; the text blocks are only the fallback.
+  for (const tool of ["ask_questions", "propose_ticket", "propose_tickets"]) expect(refine).toContain(`\`${tool}\` tool`);
+  expect(refine.indexOf("`propose_tickets` tool")).toBeLessThan(refine.indexOf("<ckanban-tickets>"));
+  expect(refine).toContain("Only if the ckanban tools aren't available");
   expect(chatPrompt(t, "hi", "act", "/o")).not.toContain("ckanban-tickets");
+  expect(chatPrompt(t, "hi", "act", "/o")).not.toContain("propose_tickets");
   expect(firstRunPrompt(t, { isGit: true, outputDir: "/o" })).not.toContain("ckanban-tickets");
 });
 

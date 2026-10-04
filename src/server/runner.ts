@@ -29,6 +29,8 @@ function killGroup(pid: number, signal: "TERM" | "KILL") {
 export function buildArgs(
   sessionId: string, resume: boolean, model?: string | null,
   permissionMode: "bypassPermissions" | "plan" = "bypassPermissions",
+  /** Inline MCP config (see mcpConfig) so every run has the board's tools. */
+  mcp?: string,
 ): string[] {
   // Prompts go in on stdin (see startRun) so more messages can follow while Claude works;
   // --replay-user-messages echoes each one back when Claude picks it up.
@@ -37,6 +39,7 @@ export function buildArgs(
     "--include-partial-messages", "--permission-mode", permissionMode];
   args.push(resume ? "--resume" : "--session-id", sessionId);
   if (model) args.push("--model", model);
+  if (mcp) args.push("--mcp-config", mcp);
   return args;
 }
 

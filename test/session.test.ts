@@ -253,3 +253,63 @@ test("parseSession: unreadable chat blocks stay visible and are flagged", () => 
   expect(entry("<ckanban-tickets>[{title: A}]</ckanban-tickets>").unreadable).toBe("tickets");
   expect(entry("plain reply").unreadable).toBeUndefined();
 });
+
+test("parseSession: prose mentioning the opening tag before the real block still parses", () => {
+  const entry = (text: string) => parseSession(asst([{ type: "text", text }], "1")).entries[0];
+  const e = entry('I will send a <ckanban-ticket> block now, and `<ckanban-ticket>{oops}` was a typo.\n<ckanban-ticket>{"title":"T","description":"D"}</ckanban-ticket>');
+  expect(e.proposal).toEqual({ title: "T", description: "D" });
+  expect(e.unreadable).toBeUndefined();
+  expect(e.text).toContain("I will send a <ckanban-ticket> block now");
+  expect(e.text).not.toContain('"title":"T"');
+  // Only broken occurrences: still flagged.
+  const bad = entry('See <ckanban-questions> below.\n<ckanban-questions>[{"question": oops}]</ckanban-questions>');
+  expect(bad.questions).toBeUndefined();
+  expect(bad.unreadable).toBe("questions");
+});
+
+test("parseSession: planning tool calls become forms and cards keyed by the tool_use id", () => {
+  const questions = [{ question: "Color?", options: [{ label: "Red", recommended: true }, { label: "Blue", mockup: "a-blue.html" }], multiSelect: false }];
+  const raw = [
+    user("plan it", "2026-10-04T01:00:00Z"),
+    asst([
+      { type: "text", text: "A few questions:" },
+      { type: "tool_use", id: "toolu_bad", name: "mcp__ckanban__ask_questions", input: { questions: [{ ...questions[0], options: [{ label: "Red", recommended: true }, { label: "Blue", recommended: true }] }] } },
+    ], "2026-10-04T01:00:01Z"),
+    user([{ type: "tool_result", tool_use_id: "toolu_bad", is_error: true, content: [{ type: "text", text: "question 1: mark exactly one option recommended (found 2)" }] }], "2026-10-04T01:00:02Z"),
+    asst([{ type: "tool_use", id: "toolu_q", name: "mcp__ckanban__ask_questions", input: { questions } }], "2026-10-04T01:00:03Z"),
+    user([{ type: "tool_result", tool_use_id: "toolu_q", content: [{ type: "text", text: "Shown to the user as a form." }] }], "2026-10-04T01:00:04Z"),
+  ].join("\n");
+  const s = parseSession(raw);
+  // The errored call doesn't render; no tool label line for the card calls.
+  expect(s.entries.map((e) => [e.uuid, e.kind])).toEqual([["u2026-10-04T01:00:00Z", "text"], ["a2026-10-04T01:00:01Z", "text"], ["toolu_q", "text"]]);
+  const q = s.entries[2];
+  expect(q.role).toBe("assistant");
+  expect(q.text).toBe("");
+  expect(q.questions).toEqual([{ question: "Color?", multiSelect: false, options: [
+    { label: "Red", description: undefined, recommended: true }, { label: "Blue", description: undefined, recommended: false, mockup: "a-blue.html" },
+  ] }]);
+  expect(s.openQuestions).toBe(1);
+  expect(s.lastMessage?.text).toBe("Asked 1 question");
+
+  const more = parseSession([
+    raw,
+    user("Red", "2026-10-04T01:00:05Z"),
+    asst([
+      { type: "tool_use", id: "toolu_p", name: "mcp__ckanban__propose_ticket", input: { title: " Fix chat ", description: "## Goal" } },
+      { type: "tool_use", id: "toolu_t", name: "propose_tickets", input: { tickets: [{ key: "api", title: "API", description: "A" }, { key: "ui", title: "UI", description: "B", dependsOn: ["api"] }] } },
+    ], "2026-10-04T01:00:06Z"),
+  ].join("\n"));
+  const p = more.entries.find((e) => e.uuid === "toolu_p")!;
+  expect(p.proposal).toEqual({ title: "Fix chat", description: "## Goal" });
+  const t = more.entries.find((e) => e.uuid === "toolu_t")!;
+  expect(t.newTickets).toEqual([{ key: "api", title: "API", description: "A" }, { key: "ui", title: "UI", description: "B", dependsOn: ["api"] }]);
+  expect(more.entries.some((e) => e.kind === "tool")).toBe(false);
+  expect(more.pendingProposal).toEqual({ title: "Fix chat", description: "## Goal" });
+  expect(more.pendingNewTickets).toHaveLength(2);
+  expect(more.openQuestions).toBe(0);
+});
+
+test("parseSession: an unreadable planning tool call falls back to a tool line", () => {
+  const s = parseSession(asst([{ type: "tool_use", id: "x", name: "mcp__ckanban__propose_tickets", input: { tickets: "nope" } }], "1"));
+  expect(s.entries[0].kind).toBe("tool");
+});

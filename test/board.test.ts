@@ -443,9 +443,12 @@ test("chat in Planning refines read-only and keeps the card in place", async () 
   expect(got.sessionStarted).toBe(true);
   const call = readArgs()[0];
   expect(call.args[call.args.indexOf("--permission-mode") + 1]).toBe("plan");
+  // The planning tools come from the board's own MCP server, whatever the user registered.
+  expect(JSON.parse(call.args[call.args.indexOf("--mcp-config") + 1]).mcpServers.ckanban.args.at(-1)).toBe("mcp");
   const prompt = call.prompt;
   expect(prompt.startsWith("Help me shape this idea")).toBe(true);
   expect(prompt).toContain("<ckanban-context");
+  expect(prompt).toContain("propose_ticket");
   expect(prompt).toContain("<ckanban-ticket>");
   // second message resumes the same session
   await board.chat("p", t.id, "Just for me");

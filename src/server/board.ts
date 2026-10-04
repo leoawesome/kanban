@@ -16,6 +16,7 @@ import { run as runCmd } from "./git";
 import { parseResult } from "./result";
 import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
+import { mcpConfig } from "./agents";
 import type { Store } from "./store";
 import type { Plan, QueuedMessage, Status, Ticket, TicketMode } from "./types";
 import { nowIso, slugify } from "./util";
@@ -350,7 +351,7 @@ export class Board {
     run.handle = startRun({
       bin: this.opts.claudeBin,
       cwd: session.dir,
-      args: buildArgs(session.sessionId, session.existed, profile.model, refine ? "plan" : "bypassPermissions"),
+      args: buildArgs(session.sessionId, session.existed, profile.model, refine ? "plan" : "bypassPermissions", mcpConfig()),
       input: prompt,
       // CKANBAN_TICKET marks board runs: the ckanban MCP/CLI refuses board changes there (no runs starting runs).
       env: { CKANBAN_OUTPUT_DIR: outputDir, CKANBAN_TICKET: `${slug}/${id}` },

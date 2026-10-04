@@ -14,6 +14,15 @@ export type AgentId = "claude" | "codex";
 export const AGENT_IDS: AgentId[] = ["claude", "codex"];
 export const SERVER_NAME = "ckanban";
 
+/**
+ * Inline `--mcp-config` JSON with the board's MCP server (`ckanban mcp`), so a session has the board tools without
+ * registering ckanban with Claude Code first. Claude Code lets it replace a user-scope `ckanban` of the same name.
+ */
+export function mcpConfig(serverArgv: string[] = [...helperArgv(), "mcp"]): string {
+  const [command, ...args] = serverArgv;
+  return JSON.stringify({ mcpServers: { [SERVER_NAME]: { command, args } } });
+}
+
 export interface AgentStatus {
   id: AgentId;
   label: string;

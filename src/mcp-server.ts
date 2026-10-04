@@ -64,6 +64,8 @@ interface Tool {
   name: string;
   description: string;
   inputSchema: { type: "object"; properties: Record<string, unknown>; required?: string[] };
+  /** MCP tool hints; readOnlyHint lets Claude Code call it in plan mode (the planning chat). */
+  annotations?: { readOnlyHint?: boolean };
   /** Changes the board: refused inside board runs, unless allowInRun. */
   changes: boolean;
   /**
@@ -260,6 +262,170 @@ const SCHEDULE_TOOLS: Tool[] = [
       const limit = Math.max(1, Math.min(100, Number(args?.limit) || 20));
       const lines = h.slice(0, limit).map(historyLine);
       return `${s ? scheduleText(s) : `Schedule ${id}`}\n\nHistory:\n${lines.length ? lines.join("\n") : "(not run yet)"}`;
+    },
+  },
+];
+
+// --- Planning chat cards ----------------------------------------------------------------------
+// The board's planning chat renders these calls (from the session transcript) as a form or cards.
+// The tools only check the input, so a bad call comes back to Claude as an error to fix.
+
+const MAX_TITLE = 80;
+const SHOWN = "Shown to the user as a card. End your turn and wait for their reply.";
+
+const isText = (v: unknown): v is string => typeof v === "string" && !!v.trim();
+
+function titleError(title: unknown, where: string): string | null {
+  if (!isText(title)) return `${where}title is required`;
+  if (title.trim().length >= MAX_TITLE) return `${where}title must be under ${MAX_TITLE} characters (it has ${title.trim().length})`;
+  return null;
+}
+
+/** Checks ask_questions input; returns what's wrong, or null when it's fine. */
+export function questionsError(args: any): string | null {
+  const qs = args?.questions;
+  if (!Array.isArray(qs) || qs.length < 1 || qs.length > 5) return "questions must be a list of 1-5 questions";
+  for (const [i, q] of qs.entries()) {
+    const at = `question ${i + 1}: `;
+    if (!isText(q?.question)) return `${at}question text is required`;
+    const opts = q.options;
+    if (!Array.isArray(opts) || opts.length < 2 || opts.length > 4) return `${at}give 2-4 options`;
+    if (opts.some((o: any) => !isText(o?.label))) return `${at}every option needs a label`;
+    const rec = opts.filter((o: any) => o?.recommended === true).length;
+    if (rec !== 1) return `${at}mark exactly one option recommended (found ${rec})`;
+    if (q.multiSelect !== undefined && typeof q.multiSelect !== "boolean") return `${at}multiSelect must be true or false`;
+  }
+  return null;
+}
+
+/** Checks propose_ticket input; returns what's wrong, or null when it's fine. */
+export function proposalError(args: any): string | null {
+  return titleError(args?.title, "") ?? (isText(args?.description) ? null : "description is required");
+}
+
+/** Checks propose_tickets input; returns what's wrong, or null when it's fine. */
+export function ticketsError(args: any): string | null {
+  const ts = args?.tickets;
+  if (!Array.isArray(ts) || !ts.length) return "tickets must be a non-empty list";
+  const keys = new Set<string>();
+  for (const [i, t] of ts.entries()) {
+    const at = `ticket ${i + 1}: `;
+    if (!isText(t?.key)) return `${at}key is required`;
+    if (keys.has(t.key.trim())) return `${at}key "${t.key.trim()}" is used twice; keys must be unique`;
+    keys.add(t.key.trim());
+    const e = titleError(t.title, at) ?? (isText(t.description) ? null : `${at}description is required`);
+    if (e) return e;
+  }
+  for (const [i, t] of ts.entries()) {
+    if (t.dependsOn === undefined) continue;
+    if (!Array.isArray(t.dependsOn) || t.dependsOn.some((d: unknown) => typeof d !== "string")) return `ticket ${i + 1}: dependsOn must be a list of keys`;
+    const bad = t.dependsOn.find((d: string) => !keys.has(d.trim()) || d.trim() === t.key.trim());
+    if (bad !== undefined) return `ticket ${i + 1}: dependsOn "${bad}" is not the key of another ticket in this list (keys: ${[...keys].join(", ")})`;
+  }
+  return null;
+}
+
+const TITLE = { type: "string", description: "Short, specific title (under 80 characters)." };
+
+const PLANNING_TOOLS: Tool[] = [
+  {
+    name: "ask_questions",
+    description:
+      "Board planning chat only: ask the user questions as a form in the board's ticket chat (they can also add free text). " +
+      "Their answers come back as the user's next message. At most 5 questions per round, 2-4 options each, exactly one option recommended; " +
+      "multiSelect true only when several options can apply. Put a one-line intro in your reply; don't repeat the questions as text. " +
+      "Nothing is created or changed. After the call, end your turn and wait for the answers.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        questions: {
+          type: "array", minItems: 1, maxItems: 5,
+          items: {
+            type: "object",
+            properties: {
+              question: { type: "string" },
+              options: {
+                type: "array", minItems: 2, maxItems: 4,
+                items: {
+                  type: "object",
+                  properties: {
+                    label: { type: "string" },
+                    description: { type: "string", description: "Short note on what this option means." },
+                    recommended: { type: "boolean", description: "true on exactly one option." },
+                    mockup: { type: "string", description: "File name of the mockup this option stands for (e.g. a-two-buttons.html); the form links to its preview." },
+                  },
+                  required: ["label"],
+                },
+              },
+              multiSelect: { type: "boolean", description: "Several options can apply. Default: false." },
+            },
+            required: ["question", "options"],
+          },
+        },
+      },
+      required: ["questions"],
+    },
+    annotations: { readOnlyHint: true },
+    changes: false,
+    async run(args) {
+      const e = questionsError(args);
+      if (e) throw new ClientError(`${e}. Fix it and call ask_questions again.`);
+      return SHOWN.replace("a card", "a form");
+    },
+  },
+  {
+    name: "propose_ticket",
+    description:
+      "Board planning chat only: propose an improved title and markdown description for this ticket. " +
+      "The board shows it as a card; the user clicks Apply to replace the ticket's title and description. " +
+      "Write the description self-contained (## Goal, ## Context, ## Scope, ## Requirements, ## Acceptance criteria, ## Open questions): " +
+      "Claude works on it later without this chat. Nothing is created or changed by the call.",
+    inputSchema: {
+      type: "object",
+      properties: { title: TITLE, description: { type: "string", description: "Markdown description." } },
+      required: ["title", "description"],
+    },
+    annotations: { readOnlyHint: true },
+    changes: false,
+    async run(args) {
+      const e = proposalError(args);
+      if (e) throw new ClientError(`${e}. Fix it and call propose_ticket again.`);
+      return SHOWN;
+    },
+  },
+  {
+    name: "propose_tickets",
+    description:
+      "Board planning chat only: propose splitting the work into new tickets, with this ticket as the planner. Call list_tickets first to avoid duplicates. " +
+      "The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket. " +
+      "Each description must be self-contained (goal, context with relevant files, acceptance criteria). " +
+      "key is a short unique name; dependsOn lists keys that must be finished first: give one to tickets that build on each other or likely edit the same files. " +
+      "Nothing is created by the call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tickets: {
+          type: "array", minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              key: { type: "string", description: "Short unique name, e.g. api." },
+              title: TITLE,
+              description: { type: "string", description: "Markdown description." },
+              dependsOn: { type: "array", items: { type: "string" }, description: "Keys of tickets in this list that must be finished first." },
+            },
+            required: ["key", "title", "description"],
+          },
+        },
+      },
+      required: ["tickets"],
+    },
+    annotations: { readOnlyHint: true },
+    changes: false,
+    async run(args) {
+      const e = ticketsError(args);
+      if (e) throw new ClientError(`${e}. Fix it and call propose_tickets again.`);
+      return SHOWN;
     },
   },
 ];
@@ -529,6 +695,7 @@ export const TOOLS: Tool[] = [
       return bugReportText(r);
     },
   },
+  ...PLANNING_TOOLS,
   ...SCHEDULE_TOOLS,
 ];
 
@@ -566,13 +733,14 @@ export async function handleMessage(msg: JsonRpc, ctx: ToolContext): Promise<obj
         instructions:
           "Tools for the user's local Claude Kanban board. Use them when the user asks to put work on the board, " +
           "find what to do next, or check on, start or steer tickets. Tickets you create land in Backlog in interview mode by default. " +
-          "Schedules (create_schedule etc.) make the board create and run a ticket on a cron, for work the user wants done regularly.",
+          "Schedules (create_schedule etc.) make the board create and run a ticket on a cron, for work the user wants done regularly. " +
+          "ask_questions, propose_ticket and propose_tickets are for the board's planning chat: they show a form or cards to the user.",
       });
     }
     case "ping":
       return reply({});
     case "tools/list":
-      return reply({ tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+      return reply({ tools: TOOLS.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, ...(annotations ? { annotations } : {}) })) });
     case "tools/call":
       return reply(await callTool(String(msg.params?.name ?? ""), msg.params?.arguments, ctx));
     default:
