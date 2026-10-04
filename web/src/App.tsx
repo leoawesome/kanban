@@ -109,7 +109,7 @@ export function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const inboxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [profileDialog, setProfileDialog] = useState<"new" | "edit" | null>(null);
-  const [newTicket, setNewTicket] = useState<Status | null>(null);
+  const [newTicket, setNewTicket] = useState(false);
   const setError = (msg: string) => toast(msg, { tone: "error" });
   const [filters, setFilters] = useState<Set<FilterId>>(new Set());
   const [dismissed, setDismissed] = useState(readDismissed);
@@ -258,7 +258,7 @@ export function App() {
       if (openId || profileDialog || newTicket || connections || schedulesOpen || anyLayerOpen() || document.querySelector(".overlay")) return;
       if (e.key === "n" || e.key === "N") {
         e.preventDefault();
-        if (slug) setNewTicket("backlog");
+        if (slug) setNewTicket(true);
       } else if (e.key === "/") {
         e.preventDefault();
         searchRef.current?.focus();
@@ -464,7 +464,7 @@ export function App() {
           {mcpAttention > 0 && <span className="need-chip">{mcpAttention}</span>}
         </button>
         {profile && (
-          <button className="btn primary" onClick={() => setNewTicket("backlog")} title="New ticket (N)">
+          <button className="btn primary" onClick={() => setNewTicket(true)} title="New ticket (N)">
             New ticket
           </button>
         )}
@@ -545,7 +545,7 @@ export function App() {
               </span>
             )}
           </div>
-          <Board tickets={shownTickets} filtered={filtering} onOpen={(id) => openTicket(id)} onMove={move} onAdd={setNewTicket} />
+          <Board tickets={shownTickets} filtered={filtering} onOpen={(id) => openTicket(id)} onMove={move} onAdd={() => setNewTicket(true)} />
         </>
       )}
 
@@ -590,12 +590,11 @@ export function App() {
         <NewTicketDialog
           slug={profile.slug}
           folder={profile.path}
-          initialStatus={newTicket}
-          onClose={() => setNewTicket(null)}
+          onClose={() => setNewTicket(false)}
           onCreate={async (input) => {
             const t = await api.createTicket(profile.slug, input);
             setTickets((ts) => (ts.some((x) => x.id === t.id) ? ts : [...ts, t]));
-            setNewTicket(null);
+            setNewTicket(false);
             // Planning starts the interview immediately: open the ticket so the questions are in view.
             if (t.status === "planning") openTicket(t.id);
           }}

@@ -975,3 +975,5 @@ input[aria-invalid="true"] { border-color: var(--err); }
 .sched-prev summary { cursor: pointer; list-style: none; }
 .sched-prev pre { margin: 4px 0 6px; padding: 6px 8px; background: var(--surface); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
 .sched-entry { flex-wrap: wrap; align-items: baseline; padding: 2px 0; }
+.form-where { text-align: right; margin-top: -4px; }
+.btn.primary kbd.kbd-on-primary { font-family: inherit; background: rgba(255, 255, 255, 0.2); border-color: transparent; color: inherit; }
