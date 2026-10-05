@@ -20,6 +20,7 @@ import { SessionCache } from "./session";
 import { ptySupported, ShellManager, type PtyKind, type Shell } from "./shell";
 import type { TerminalWatcher } from "./terminals";
 import { UpdateChecker } from "./update";
+import { fetchUsage, type UsageResult } from "./usage";
 import type { Store } from "./store";
 import { STATUSES, type Profile, type ScheduleEditor, type Status, type Ticket } from "./types";
 import { nowIso, slugify } from "./util";
@@ -44,6 +45,8 @@ export interface ServerDeps {
   restart?: () => { running: number; alreadyPending: boolean };
   /** Runs `gh` for bug reports (tests pass a fake). */
   gh?: GhRunner;
+  /** Claude plan usage for the header pill (tests pass a fake). */
+  usage?: () => Promise<UsageResult>;
 }
 
 interface ShellSocket {
@@ -221,6 +224,7 @@ export function createServer(deps: ServerDeps) {
 
     if (parts[0] === "events" && m === "GET") return sse(req);
     if (parts[0] === "version" && m === "GET") return json(await updates.status());
+    if (parts[0] === "usage" && m === "GET") return json(await (deps.usage ?? fetchUsage)());
     if (parts[0] === "inbox" && m === "GET") {
       // Every board: tickets where Claude is waiting on the user (Review is left out on purpose).
       const out = [];

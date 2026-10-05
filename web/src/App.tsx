@@ -6,6 +6,7 @@ import { ConnectionsDialog } from "./ConnectionsDialog";
 import { HeaderMenu } from "./HeaderMenu";
 import { BugIcon, ChatIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
 import { Inbox } from "./Inbox";
+import { UsagePill } from "./UsagePill";
 import { anyLayerOpen } from "./layers";
 import { Board, boardOrder } from "./Board";
 import { NewTicketDialog } from "./NewTicketDialog";
@@ -452,6 +453,7 @@ export function App() {
             {running}/{profile.maxParallel} running
           </span>
         )}
+        <UsagePill />
         {restart.pending && (
           <span className="pill warn" title="The daemon restarts once every active run (on any board) has finished. Until then nothing new starts: queued tickets, chat replies and Planning interviews wait.">
             Restart pending{restart.waiting > 0 ? ` · waiting for ${restart.waiting} ${restart.waiting === 1 ? "run" : "runs"}` : ""}

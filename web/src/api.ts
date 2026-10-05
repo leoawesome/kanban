@@ -1,3 +1,4 @@
+import type { UsageResult } from "./usage";
 export type Status = "backlog" | "planning" | "ready" | "in_progress" | "review" | "done";
 export type Outcome = null | "done" | "blocked" | "failed" | "stopped" | "needs_input";
 export type TicketMode = "interview" | "auto";
@@ -380,6 +381,8 @@ export const api = {
   claudeProjects: () => req<ClaudeProject[]>("GET", "/api/claude/projects"),
   claudeDefaults: () => req<{ model: string | null }>("GET", "/api/claude/defaults"),
   pickFolder: () => req<{ path: string | null }>("POST", "/api/pick-folder"),
+  /** Claude plan usage (5h / weekly windows) or a plain-words error. */
+  usage: () => req<UsageResult>("GET", "/api/usage"),
   version: () => req<{ version: string; latest: string | null; updateAvailable: boolean; url: string | null }>("GET", "/api/version"),
   health: () => req<Health>("GET", "/api/health"),
   /** pending: a daemon restart holds new runs until the `waiting` active runs finish. */
