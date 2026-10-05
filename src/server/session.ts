@@ -58,6 +58,8 @@ export type BlockKind = "questions" | "proposal" | "tickets";
 
 /** Marker Claude adds when a Review message only asked for planning; the board moves the card. */
 export const MOVE_TO_PLANNING_RE = /<ckanban-move\s+to="planning"\s*\/?>(?:\s*<\/ckanban-move>)?/;
+/** A Review/Done chat reply that only proposed tickets: the card stays in its column. */
+export const STAY_RE = /<ckanban-stay\s*\/?>(?:\s*<\/ckanban-stay>)?/;
 
 const CONTEXT_TAG = "<ckanban-context";
 
@@ -155,6 +157,7 @@ function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" |
     moved = "planning";
     out = out.replace(MOVE_TO_PLANNING_RE, "");
   }
+  out = out.replace(STAY_RE, "");
   let unreadable: BlockKind | undefined;
   /** Parse one block and cut it from the text; an unreadable block stays visible and is flagged. */
   const take = <T>(tag: string, kind: BlockKind, parse: (v: unknown) => T | null): T | undefined => {

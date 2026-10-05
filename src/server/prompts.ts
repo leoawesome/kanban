@@ -272,6 +272,9 @@ If the message only asks you to plan, audit, review, list ideas, propose or disc
 If you need decisions from the user, ask with the ask_questions tool.
 ${bugReportRule(t)}
 
+If the message asks for new or follow-up tickets from this ticket: do not modify any files or start that work. Write each description from what you know here (files, decisions, what shipped), so the new ticket's Claude needs no other context. ${TICKETS_FORMAT}
+If proposing tickets was all the message asked for, put <ckanban-stay/> on its own line before the result line: the card then stays in its column.
+
 ${targetDesignRule(outputDir)}${QUESTIONS_FORMAT}
 
 ${artifactRule()}

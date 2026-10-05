@@ -180,6 +180,11 @@ test("move marker is hidden from text and exposed as moved", () => {
   expect(s.entries[0].moved).toBe("planning");
 });
 
+test("stay marker is hidden from text", () => {
+  const s = parseSession(asst([{ type: "text", text: "Proposed 1 ticket.\n<ckanban-stay/>" }], "2026-09-29T04:00:00Z"));
+  expect(s.entries[0].text).toBe("Proposed 1 ticket.");
+});
+
 test("parseSession: <ckanban-tickets> becomes newTickets, stripped from the text", () => {
   const block = '<ckanban-tickets>[{"title":"A","description":"## Goal\\nDo A"},{"title":"B"},{"description":"no title"}]</ckanban-tickets>';
   const s = parseSession(asst([{ type: "text", text: `Here is the split.\n\n${block}\n\nApply what you like.` }], "1"));

@@ -739,6 +739,24 @@ test("planning-only message in Review: Claude marks it and the card moves to Pla
   expect(prompt).toContain('<ckanban-move to="planning"/>');
 });
 
+test("tickets-only message in Done: Claude marks it and the card stays in Done", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.whenIdle();
+  await board.updateTicket("p", t.id, { status: "done" });
+  process.env.FAKE_EXTRA = "\nProposed a follow-up.\n<ckanban-stay/>";
+  try {
+    await board.chat("p", t.id, "create a follow-up ticket for the docs");
+    await board.whenIdle();
+  } finally {
+    delete process.env.FAKE_EXTRA;
+  }
+  const got = store.getTicket("p", t.id)!;
+  expect(got.status).toBe("done");
+  expect(got.outcome).toBe("done");
+  expect(readArgs().at(-1)!.prompt).toContain("<ckanban-stay/>");
+});
+
 test("normal Review chat still lands back in Review", async () => {
   await setup();
   const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });

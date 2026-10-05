@@ -138,7 +138,7 @@ test("a scheduled ticket's first run is told its schedule", () => {
   expect(firstRunPrompt(ticket, { isGit: true, outputDir: "/out" })).not.toContain("schedule");
 });
 
-test("only the planning chat can propose new tickets", () => {
+test("planning and Review/Done chats can propose new tickets, first runs can't", () => {
   const t = { ...ticket, runCount: 1 } as Ticket;
   const refine = chatPrompt(t, "split it", "refine", "/o");
   expect(refine).toContain("<ckanban-tickets>");
@@ -147,8 +147,12 @@ test("only the planning chat can propose new tickets", () => {
   for (const tool of ["ask_questions", "propose_ticket", "propose_tickets"]) expect(refine).toContain(`\`${tool}\` tool`);
   expect(refine.indexOf("`propose_tickets` tool")).toBeLessThan(refine.indexOf("<ckanban-tickets>"));
   expect(refine).toContain("Only if the ckanban tools aren't available");
-  expect(chatPrompt(t, "hi", "act", "/o")).not.toContain("ckanban-tickets");
-  expect(chatPrompt(t, "hi", "act", "/o")).not.toContain("propose_tickets");
+  expect(refine).not.toContain("ckanban-stay");
+  const act = chatPrompt(t, "create a follow-up ticket", "act", "/o");
+  expect(act).toContain("`propose_tickets` tool");
+  expect(act).toContain("list_tickets");
+  expect(act).toContain("follow-up tickets from this ticket");
+  expect(act).toContain("<ckanban-stay/>");
   expect(firstRunPrompt(t, { isGit: true, outputDir: "/o" })).not.toContain("ckanban-tickets");
 });
 

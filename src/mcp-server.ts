@@ -396,7 +396,7 @@ const PLANNING_TOOLS: Tool[] = [
   {
     name: "propose_tickets",
     description:
-      "Board planning chat only: propose splitting the work into new tickets, with this ticket as the planner. Call list_tickets first to avoid duplicates. " +
+      "Board ticket chat (any column): propose new tickets, e.g. splitting the work or follow-ups, linked to this ticket as their parent. Call list_tickets first to avoid duplicates. " +
       "The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket. " +
       "Each description must be self-contained (goal, context with relevant files, acceptance criteria). " +
       "key is a short unique name; dependsOn lists keys that must be finished first: give one to tickets that build on each other or likely edit the same files. " +

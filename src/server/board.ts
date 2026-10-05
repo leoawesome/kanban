@@ -6,7 +6,7 @@ import { deleteAttachments, localizeImages, referencedAttachments } from "./atta
 import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, resolveBaseBranch, worktreeDir } from "./git";
-import { MOVE_TO_PLANNING_RE } from "./session";
+import { MOVE_TO_PLANNING_RE, STAY_RE } from "./session";
 import { saveMockups } from "./mockups";
 import { chatPrompt, firstRunPrompt, interruptedPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
 import {
@@ -52,8 +52,9 @@ interface ActiveRun {
    * Set for runs started from the ticket chat (not the Ready queue). raw: text is the full prompt (planner wake-ups);
    * returnTo: the column such a run goes back to, since a wake-up is housekeeping, not new work to review.
    * quiet: a reply to another ticket's Claude; the card, outcome and run count stay as they were.
+   * from: the column the card was in when the message was sent (a reply that only proposed tickets goes back there).
    */
-  chat?: { text: string; mode: ChatMode; raw?: boolean; returnTo?: Status; quiet?: boolean };
+  chat?: { text: string; mode: ChatMode; raw?: boolean; returnTo?: Status; quiet?: boolean; from?: Pick<Ticket, "status" | "outcome"> };
   /** Queued messages (ticket.queued) written to this claude process, keyed by id, with the text it was given. */
   inFlight: Map<string, string>;
   /** Queued message this chat run was started with; it leaves the queue once Claude reads the prompt. */
@@ -82,8 +83,9 @@ export function chatModeFor(status: Status): ChatMode {
 }
 
 /** How a chat run handles a queued message: a peer message (from another ticket's Claude) is sent as-is, quietly. */
-function chatFor(status: Status, msg: { text: string; peer?: boolean }): NonNullable<ActiveRun["chat"]> {
-  return msg.peer ? { text: msg.text, mode: chatModeFor(status), raw: true, quiet: true } : { text: msg.text, mode: chatModeFor(status) };
+function chatFor(t: Pick<Ticket, "status" | "outcome">, msg: { text: string; peer?: boolean }): NonNullable<ActiveRun["chat"]> {
+  const mode = chatModeFor(t.status);
+  return msg.peer ? { text: msg.text, mode, raw: true, quiet: true } : { text: msg.text, mode, from: { status: t.status, outcome: t.outcome } };
 }
 
 const ACTIVITY_THROTTLE_MS = 1000;
@@ -187,7 +189,7 @@ export class Board {
       const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued", ...(opts.peer ? { peer: true } : {}) };
       return this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
     }
-    this.start(slug, id, chatFor(t.status, { text, peer: opts.peer }));
+    this.start(slug, id, chatFor(t, { text, peer: opts.peer }));
     return this.store.getTicket(slug, id)!;
   }
 
@@ -299,7 +301,7 @@ export class Board {
         this.patch(run.slug, run.id, { queued: (t.queued ?? []).map((m) => (m.state === "queued" ? { ...m, state: "unsent" } : m)) });
         return;
       }
-      run.chat = chatFor(t.status, next);
+      run.chat = chatFor(t, next);
       run.promptMsgId = next.id;
       run.inFlight = new Map();
       run.handle = null;
@@ -456,6 +458,12 @@ export class Board {
         ...base, status: "planning",
         outcome: null, error: null, refineStarted: true, lastActivity: null,
       });
+      return;
+    }
+    // A Review/Done message that only asked for new tickets: the card goes back where it was, outcome unchanged.
+    const from = run.chat?.from;
+    if (run.chat?.mode === "act" && !run.chat.raw && !run.targetStatus && from && from.status !== "in_progress" && result?.status !== "blocked" && STAY_RE.test(finalText)) {
+      this.patch(slug, id, { ...base, status: from.status, outcome: from.outcome, error: null, lastActivity: null });
       return;
     }
     const current = this.store.getTicket(slug, id)!;
@@ -976,7 +984,7 @@ export class Board {
       for (const t of this.store.listTickets(p.slug)) {
         const next = this.waiting(p.slug, t.id)[0];
         if (!next || this.isRunning(p.slug, t.id) || t.status === "ready" || t.error?.startsWith("corrupt")) continue;
-        this.start(p.slug, t.id, chatFor(t.status, next), next.id);
+        this.start(p.slug, t.id, chatFor(t, next), next.id);
       }
     }
   }
