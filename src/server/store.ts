@@ -1,5 +1,5 @@
 import {
-  appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -15,7 +15,7 @@ export function defaultRoot(): string {
   return process.env.CKANBAN_HOME ?? join(homedir(), ".claude-kanban");
 }
 
-function atomicWrite(file: string, content: string) {
+export function atomicWrite(file: string, content: string) {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${newId()}`;
   writeFileSync(tmp, content);
@@ -189,6 +189,12 @@ export class Store {
     const dir = join(this.ticketDir(slug, id), "outputs");
     mkdirSync(dir, { recursive: true });
     return dir;
+  }
+
+  /** Give a branched ticket its own copy of the source's deliverables. */
+  copyOutputs(slug: string, from: string, to: string): void {
+    const src = join(this.ticketDir(slug, from), "outputs");
+    if (existsSync(src)) cpSync(src, join(this.ticketDir(slug, to), "outputs"), { recursive: true });
   }
 
   listOutputs(slug: string, id: string): OutputFile[] {

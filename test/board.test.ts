@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Board } from "../src/server/board";
 import { Bus } from "../src/server/events";
@@ -947,3 +947,118 @@ test("requested restart gives up waiting after the timeout", async () => {
   await Bun.sleep(1000);
   expect(restarted).toBe(true);
 }, 15000);
+
+// ---- Branching ----
+
+/** A Claude session transcript for `sid` that ran in `cwd`, under a temp CLAUDE_CONFIG_DIR. */
+function fakeSession(configDir: string, cwd: string, sid: string, text: string): string {
+  const dir = join(configDir, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${sid}.jsonl`);
+  writeFileSync(file, [
+    { type: "user", uuid: "u1", sessionId: sid, cwd, timestamp: "2026-10-06T01:00:00Z", message: { role: "user", content: text } },
+    { type: "assistant", uuid: "a1", sessionId: sid, cwd: `${cwd}/src`, timestamp: "2026-10-06T01:00:01Z", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } },
+  ].map((l) => JSON.stringify(l)).join("\n") + "\n");
+  return file;
+}
+
+test("branchTicket copies the conversation, committed code, outputs and images into a new Planning ticket", async () => {
+  const configDir = tempDir("ck-claude-");
+  process.env.CLAUDE_CONFIG_DIR = configDir;
+  try {
+    await setup();
+    const src = await board.createTicket("p", { title: "Add export", body: "", status: "ready", mode: "auto" });
+    await board.whenIdle();
+    let s = store.getTicket("p", src.id)!;
+    // Committed work on the source branch, plus one uncommitted file.
+    writeFileSync(join(s.worktree!, "export.ts"), "x\n");
+    await run(["git", "add", "."], s.worktree!);
+    await run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "export"], s.worktree!);
+    writeFileSync(join(s.worktree!, "wip.txt"), "wip\n");
+    const img = "a".repeat(32) + ".png";
+    mkdirSync(store.attachmentsDir, { recursive: true });
+    writeFileSync(join(store.attachmentsDir, img), "png");
+    s = store.updateTicket("p", src.id, { body: `See ![x](/api/attachments/${img})` });
+    fakeSession(configDir, s.worktree!, s.sessionId!, `look at /api/attachments/${img}`);
+    writeFileSync(join(store.outputsDir("p", src.id), "report.md"), "# r\n");
+
+    const { ticket: b, warning } = await board.branchTicket("p", src.id);
+    expect(warning).toBe("Uncommitted changes in the source were not copied.");
+    expect(b).toMatchObject({ title: "Branch: Add export", status: "planning", mode: "auto", branchedFrom: src.id, sessionStarted: true, runCount: 0 });
+    expect(b.branchPoint?.sourceTitle).toBe("Add export");
+    expect(b.sessionId).not.toBe(s.sessionId);
+    expect(b.branch).toBe(`ck/${b.id}-branch-add-export`);
+    expect(existsSync(join(b.worktree!, "export.ts"))).toBe(true);
+    expect(existsSync(join(b.worktree!, "wip.txt"))).toBe(false);
+    // Images: the branch has its own copies.
+    const newImg = b.body.match(/attachments\/([0-9a-f]{32}\.png)/)![1];
+    expect(newImg).not.toBe(img);
+    // The session now lives in the branch's folder under the new id, with ids, cwd and images rewritten.
+    const file = join(configDir, "projects", b.worktree!.replace(/[^a-zA-Z0-9]/g, "-"), `${b.sessionId}.jsonl`);
+    const lines = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(lines.map((l) => l.sessionId)).toEqual([b.sessionId, b.sessionId]);
+    expect(lines.map((l) => l.cwd)).toEqual([b.worktree, `${b.worktree}/src`]);
+    expect(lines[0].message.content).toBe(`look at /api/attachments/${newImg}`);
+    expect(readFileSync(join(store.outputsDir("p", b.id), "report.md"), "utf8")).toBe("# r\n");
+    // The source is untouched.
+    expect(store.getTicket("p", src.id)).toEqual(s);
+
+    // The next chat resumes the copied session in the branch's worktree; no interview starts on its own.
+    expect(board.isRunning("p", b.id)).toBe(false);
+    await board.chat("p", b.id, "try another way");
+    await board.whenIdle();
+    const call = readArgs().at(-1)!;
+    expect(call.args).toContain("--resume");
+    expect(call.args).toContain(b.sessionId!);
+    expect(call.cwd).toBe(b.worktree!);
+
+    // Deleting the source keeps the branch's images.
+    await board.deleteTicket("p", src.id);
+    expect(existsSync(join(store.attachmentsDir, newImg))).toBe(true);
+    expect(existsSync(join(store.attachmentsDir, img))).toBe(false);
+  } finally {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  }
+});
+
+test("branchTicket refuses while Claude works, and without a conversation", async () => {
+  const configDir = tempDir("ck-claude-");
+  process.env.CLAUDE_CONFIG_DIR = configDir;
+  try {
+    await setup({ git: false });
+    const fresh = await board.createTicket("p", { title: "New", body: "", status: "backlog" });
+    await expect(board.branchTicket("p", fresh.id)).rejects.toThrow("no Claude conversation");
+    process.env.FAKE_MODE = "slow";
+    const t = await board.createTicket("p", { title: "Busy", body: "", status: "ready" });
+    await Bun.sleep(300);
+    const sid = store.getTicket("p", t.id)!.sessionId!;
+    fakeSession(configDir, store.getProfile("p")!.path, sid, "hi");
+    await expect(board.branchTicket("p", t.id)).rejects.toThrow("branch it once Claude is done");
+    expect(store.listTickets("p")).toHaveLength(2);
+  } finally {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  }
+});
+
+test("branchTicket of a ticket that ran in place stays in the project folder", async () => {
+  const configDir = tempDir("ck-claude-");
+  process.env.CLAUDE_CONFIG_DIR = configDir;
+  try {
+    const p = await setup({ git: false });
+    const src = await board.createTicket("p", { title: "Notes", body: "", status: "ready" });
+    await board.whenIdle();
+    const s = store.getTicket("p", src.id)!;
+    fakeSession(configDir, p.path, s.sessionId!, "hi");
+    const { ticket: b, warning } = await board.branchTicket("p", src.id);
+    expect(warning).toBeNull();
+    expect(b.worktree).toBeNull();
+    expect(b.branch).toBeNull();
+    expect(existsSync(join(configDir, "projects", p.path.replace(/[^a-zA-Z0-9]/g, "-"), `${b.sessionId}.jsonl`))).toBe(true);
+    await board.chat("p", b.id, "go on");
+    await board.whenIdle();
+    expect(readArgs().at(-1)!.cwd).toBe(p.path);
+    expect(readArgs().at(-1)!.args).toContain("--resume");
+  } finally {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  }
+});

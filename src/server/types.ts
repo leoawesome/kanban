@@ -51,6 +51,10 @@ export interface Ticket {
   planKey?: string | null;
   /** Siblings (ticket id or planKey) that must be done before a running plan starts this ticket. */
   dependsOn?: string[];
+  /** Ticket this one was branched from (a copy of its conversation and committed code). Not a plan parent. */
+  branchedFrom?: string | null;
+  /** When the branch was made: conversation entries before this are the copied history. */
+  branchPoint?: BranchPoint | null;
   /** Set on a planner ticket once its plan was started: the board runs its children unattended. */
   plan?: Plan | null;
   /** Chat messages sent while Claude was working that it has not read yet, oldest first. */
@@ -60,6 +64,12 @@ export interface Ticket {
   createdAt: string;
   updatedAt: string;
   body: string;
+}
+
+export interface BranchPoint {
+  at: string;
+  /** Source title at branch time (shown if the source is deleted later). */
+  sourceTitle: string;
 }
 
 /** Recurring ticket template: on each cron tick the board creates a ticket from it and runs it. */

@@ -424,3 +424,16 @@ test("inside a board run only a running plan's planner may change tickets, and o
   expect(r.status).toBe(403);
   await post(`${tickets}/${planner.id}/plan`, { action: "pause" });
 });
+
+test("POST .../branch: refused inside a board run, 400 without a conversation", async () => {
+  const path = tempDir("ck-plain-");
+  const p = (await (await fetch(`${base}/api/profiles`, json("POST", { name: "Branchy", path }))).json()) as any;
+  const tickets = `${base}/api/profiles/${p.slug}/tickets`;
+  const t = (await (await fetch(tickets, json("POST", { title: "Hello", body: "b" }))).json()) as any;
+  let r = await fetch(`${tickets}/${t.id}/branch`, { method: "POST", headers: { "content-type": "application/json", "x-ckanban-run": `${p.slug}/${t.id}` }, body: "{}" });
+  expect(r.status).toBe(403);
+  expect(((await r.json()) as any).error).toContain("propose_branch");
+  r = await fetch(`${tickets}/${t.id}/branch`, json("POST", {}));
+  expect(r.status).toBe(400);
+  expect(((await r.json()) as any).error).toContain("no Claude conversation");
+});

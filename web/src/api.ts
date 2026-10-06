@@ -100,6 +100,10 @@ export interface Ticket {
   scheduleId?: string | null;
   /** Planner ticket whose chat proposed this one. */
   parentId?: string | null;
+  /** Ticket this one was branched from (copy of its conversation and committed code). */
+  branchedFrom?: string | null;
+  /** When it was branched: conversation entries before this are the copied history. */
+  branchPoint?: { at: string; sourceTitle: string } | null;
   /** Short name siblings use in dependsOn. */
   planKey?: string | null;
   /** Siblings (ticket id or planKey) a running plan finishes before starting this one. */
@@ -185,6 +189,8 @@ export interface SessionEntry {
   questions?: Question[];
   proposal?: { title: string; description: string };
   newTickets?: NewTicketDraft[];
+  /** Claude offered to branch this ticket (Branch button). */
+  branch?: { reason: string };
   /** Mockups Claude sent in this reply, saved as outputs/mockups/<name>. */
   mockups?: string[];
   moved?: "planning";
@@ -404,6 +410,7 @@ export const api = {
   ticket: (slug: string, id: string) => req<Ticket>("GET", t(slug, id)),
   quickChat: (slug: string) => req<QuickChat>("GET", `/api/profiles/${encodeURIComponent(slug)}/claude/session`),
   sessions: (slug: string) => req<ClaudeSession[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/sessions`),
+  branchTicket: (slug: string, id: string) => req<{ ticket: Ticket; warning: string | null }>("POST", `${t(slug, id)}/branch`),
   linkSession: (slug: string, id: string, sessionId: string | null) =>
     req<Ticket>("POST", `${t(slug, id)}/link-session`, { sessionId }),
   outputs: (slug: string, id: string) => req<OutputFile[]>("GET", `${t(slug, id)}/outputs`),

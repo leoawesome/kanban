@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, subscribe, type NewTicketDraft, type SessionEntry, type Ticket } from "./api";
 import { autoGrow } from "./autoGrow";
-import { ArrowDownIcon, CloseIcon, FileCodeIcon } from "./icons";
+import { branchTicket } from "./branch";
+import { BranchCard } from "./BranchCard";
+import { ArrowDownIcon, BranchIcon, CloseIcon, FileCodeIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { NewTicketsCard } from "./NewTicketsCard";
 import { ProposalCard } from "./ProposalCard";
@@ -14,12 +16,16 @@ import { usePersistentState } from "./usePersistentState";
 
 type Block = { kind: "entry"; e: SessionEntry; index: number } | { kind: "tools"; items: SessionEntry[] };
 
-function group(entries: SessionEntry[]): Block[] {
+/** Copied history of a branched ticket: entries from before the branch point (at = the branch time). */
+const before = (e: SessionEntry, at: string | undefined) => !!at && !!e.at && e.at < at;
+
+/** Tool calls in a row fold into one block; a branch point (splitAt) starts a new one. */
+function group(entries: SessionEntry[], splitAt?: string): Block[] {
   const out: Block[] = [];
   entries.forEach((e, index) => {
     const prev = out.at(-1);
     if (e.kind === "tool") {
-      if (prev?.kind === "tools") prev.items.push(e);
+      if (prev?.kind === "tools" && before(prev.items[0], splitAt) === before(e, splitAt)) prev.items.push(e);
       else out.push({ kind: "tools", items: [e] });
     } else out.push({ kind: "entry", e, index });
   });
@@ -269,6 +275,96 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
     }
   };
 
+  /** One block of the conversation; old = copied history of a branched ticket (shown dimmed). */
+  const renderBlock = (b: Block, old: boolean) => {
+          if (b.kind === "tools") {
+            return (
+              <details key={b.items[0].uuid} className={`conv-tools${old ? " inherited" : ""}`}>
+                <summary>{b.items.length === 1 ? b.items[0].text : `${b.items.length} tool calls · ${b.items.at(-1)!.text}`}</summary>
+                <ul>{b.items.map((t) => <li key={t.uuid}>{t.text}</li>)}</ul>
+              </details>
+            );
+          }
+          const e = b.e;
+          if (e.kind === "board") {
+            return <div key={e.uuid} className={`chat-note${old ? " inherited" : ""}`}>{e.text}{e.at && <span title={fullTime(e.at)}> · {timeAgo(e.at)}</span>}</div>;
+          }
+          if (e.peer) {
+            return (
+              <div key={e.uuid} className={`conv-msg peer ${e.peer.dir}${old ? " inherited" : ""}`}>
+                <div className="conv-head">
+                  <b>{peerLabel(e.peer.dir, e.peer.ticketId)}</b>
+                  {e.at && <time className="muted small" dateTime={e.at} title={fullTime(e.at)}>{timeAgo(e.at)}</time>}
+                </div>
+                <Markdown text={e.text} />
+              </div>
+            );
+          }
+          return (
+            <div key={e.uuid} className={`conv-msg ${e.role}${old ? " inherited" : ""}`}>
+              <div className="conv-head">
+                <b>{e.role === "user" ? "You" : "Claude"}</b>
+                {e.at && <time className="muted small" dateTime={e.at} title={fullTime(e.at)}>{timeAgo(e.at)}</time>}
+              </div>
+              {e.text && <Markdown text={e.text.replace(/^.*CKANBAN_RESULT:.*$/m, "").trim()} />}
+              {e.questions && (
+                <QuestionsForm questions={e.questions} answered={answeredAfter(b.index)} disabled={running} onSubmit={send}
+                  onPreview={onOpenOutput && ((m) => onOpenOutput(`mockups/${m}`))}
+                  storageKey={formKey(slug, ticket.id, e.uuid)} />
+              )}
+              {e.proposal && (
+                <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)} onApply={() => applyProposal(e.proposal!)} />
+              )}
+              {e.newTickets && (
+                <NewTicketsCard drafts={e.newTickets} created={childFor} onCreate={createChild} onOpen={onOpenTicket} />
+              )}
+              {e.branch && (
+                <BranchCard reason={e.branch.reason} here={old} running={running} onOpen={onOpenTicket}
+                  branch={tickets.find((t) => t.branchedFrom === ticket.id && !!t.branchPoint && t.branchPoint.at > e.at)}
+                  onBranch={() => branchTicket(slug, ticket, onOpenTicket).then(() => {}, (err) => onError(err.message))} />
+              )}
+              {e.mockups && (
+                <div className="chat-mockups">
+                  {e.mockups.map((m) => (
+                    <button key={m} className="chat-mockup" onClick={() => onOpenOutput?.(`mockups/${m}`)} title="Preview in the Outputs tab">
+                      <FileCodeIcon size={13} /> Mockup <b>{m}</b>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {e.unreadable && (
+                <div className="chat-unreadable" role="status">
+                  <span>Couldn't read Claude's {UNREADABLE[e.unreadable]}.</span>
+                  {!answeredAfter(b.index) && (
+                    <button className="btn small" disabled={running} onClick={() => send(RESEND[e.unreadable!])}>Resend</button>
+                  )}
+                </div>
+              )}
+              {e.moved === "planning" && (
+                <div className="chat-moved">
+                  Moved to <b>Planning</b>: this was a planning request, so nothing was changed. Answer or refine here, then
+                  drag the card to In Progress when you want Claude to do it.
+                </div>
+              )}
+            </div>
+          );
+  };
+
+  // A branched ticket: a divider marks where the copied conversation ends.
+  const bp = ticket.branchPoint ?? undefined;
+  const branchedFrom = ticket.branchedFrom ? tickets.find((t) => t.id === ticket.branchedFrom) : undefined;
+  const blocks = group(entries, bp?.at);
+  // Divider before the first block after the branch point (after all of them while nothing new was said yet).
+  const firstNew = bp ? blocks.findIndex((b) => !before(b.kind === "tools" ? b.items[0] : b.e, bp.at)) : -1;
+  const dividerAt = !bp || page === null || page.start > 0 && firstNew === 0 ? -1 : firstNew < 0 ? blocks.length : firstNew;
+  const divider = bp && (
+    <div key={`branch-${bp.at}`} className="branch-divider" role="separator">
+      <BranchIcon size={12} /> branched from {branchedFrom
+        ? <button className="link-btn" onClick={() => onOpenTicket(branchedFrom.id)}>{branchedFrom.title}</button>
+        : bp.sourceTitle} · <time dateTime={bp.at} title={fullTime(bp.at)}>{new Date(bp.at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</time>
+    </div>
+  );
+
   return (
     <div className="chat">
       <div className="chat-log" ref={scroller}
@@ -313,74 +409,11 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
             )}
           </div>
         )}
-        {group(entries).map((b) => {
-          if (b.kind === "tools") {
-            return (
-              <details key={b.items[0].uuid} className="conv-tools">
-                <summary>{b.items.length === 1 ? b.items[0].text : `${b.items.length} tool calls · ${b.items.at(-1)!.text}`}</summary>
-                <ul>{b.items.map((t) => <li key={t.uuid}>{t.text}</li>)}</ul>
-              </details>
-            );
-          }
-          const e = b.e;
-          if (e.kind === "board") {
-            return <div key={e.uuid} className="chat-note">{e.text}{e.at && <span title={fullTime(e.at)}> · {timeAgo(e.at)}</span>}</div>;
-          }
-          if (e.peer) {
-            return (
-              <div key={e.uuid} className={`conv-msg peer ${e.peer.dir}`}>
-                <div className="conv-head">
-                  <b>{peerLabel(e.peer.dir, e.peer.ticketId)}</b>
-                  {e.at && <time className="muted small" dateTime={e.at} title={fullTime(e.at)}>{timeAgo(e.at)}</time>}
-                </div>
-                <Markdown text={e.text} />
-              </div>
-            );
-          }
-          return (
-            <div key={e.uuid} className={`conv-msg ${e.role}`}>
-              <div className="conv-head">
-                <b>{e.role === "user" ? "You" : "Claude"}</b>
-                {e.at && <time className="muted small" dateTime={e.at} title={fullTime(e.at)}>{timeAgo(e.at)}</time>}
-              </div>
-              {e.text && <Markdown text={e.text.replace(/^.*CKANBAN_RESULT:.*$/m, "").trim()} />}
-              {e.questions && (
-                <QuestionsForm questions={e.questions} answered={answeredAfter(b.index)} disabled={running} onSubmit={send}
-                  onPreview={onOpenOutput && ((m) => onOpenOutput(`mockups/${m}`))}
-                  storageKey={formKey(slug, ticket.id, e.uuid)} />
-              )}
-              {e.proposal && (
-                <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)} onApply={() => applyProposal(e.proposal!)} />
-              )}
-              {e.newTickets && (
-                <NewTicketsCard drafts={e.newTickets} created={childFor} onCreate={createChild} onOpen={onOpenTicket} />
-              )}
-              {e.mockups && (
-                <div className="chat-mockups">
-                  {e.mockups.map((m) => (
-                    <button key={m} className="chat-mockup" onClick={() => onOpenOutput?.(`mockups/${m}`)} title="Preview in the Outputs tab">
-                      <FileCodeIcon size={13} /> Mockup <b>{m}</b>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {e.unreadable && (
-                <div className="chat-unreadable" role="status">
-                  <span>Couldn't read Claude's {UNREADABLE[e.unreadable]}.</span>
-                  {!answeredAfter(b.index) && (
-                    <button className="btn small" disabled={running} onClick={() => send(RESEND[e.unreadable!])}>Resend</button>
-                  )}
-                </div>
-              )}
-              {e.moved === "planning" && (
-                <div className="chat-moved">
-                  Moved to <b>Planning</b>: this was a planning request, so nothing was changed. Answer or refine here, then
-                  drag the card to In Progress when you want Claude to do it.
-                </div>
-              )}
-            </div>
-          );
+        {blocks.map((b, i) => {
+          const first = b.kind === "tools" ? b.items[0] : b.e;
+          return <Fragment key={first.uuid}>{i === dividerAt && divider}{renderBlock(b, before(first, bp?.at))}</Fragment>;
         })}
+        {dividerAt === blocks.length && divider}
         {/* Replies sent while Claude wasn't working are part of the timeline: plain bubbles, before Claude's reply. */}
         {pending.filter((p) => !p.steer).map((p, i) => (
           <div key={i} className="conv-msg user">

@@ -652,6 +652,17 @@ export function createServer(deps: ServerDeps) {
         throw new HttpError(400, (e as Error).message);
       }
     }
+    // Branch: a new ticket with a copy of this one's conversation and committed code (the user's call, not a run's).
+    if (m === "POST" && action === "branch") {
+      if (req.headers.get(RUN_HEADER)) throw new HttpError(403, "branching is disabled inside a board run; use the propose_branch tool so the user can click Branch");
+      try {
+        const r = await board.branchTicket(slug, id);
+        return json({ ticket: view(profile, r.ticket), warning: r.warning }, 201);
+      } catch (e) {
+        if (e instanceof ConflictError) throw e;
+        throw new HttpError(400, (e as Error).message);
+      }
+    }
     if (m === "POST" && action === "stop") {
       const planner = plannerFor(req, slug, store.getTicket(slug, id)!);
       const stopped = board.stop(slug, id);

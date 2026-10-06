@@ -33,6 +33,9 @@ export const TICKETS_FORMAT = `When the user wants to split the work into separa
 Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. "key" is a short unique name; "dependsOn" lists the keys that must be finished first. Give a dependency to tickets that build on each other or likely edit the same files, so they don't run at the same time and conflict. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket, and can then press Start plan: the board runs the tickets in dependency order and wakes you only when one needs a decision. You cannot create tickets yourself here. If the tool returns an error, fix the input and call it again.
 Only if the ckanban tools aren't available: put the same JSON array in ONE <ckanban-tickets>[...]</ckanban-tickets> block in your message instead. ${BLOCK_RULE}`;
 
+/** How a ticket chat offers to branch the ticket; the user's click on the card does the branching. */
+export const BRANCH_FORMAT = `If the user asks to branch this ticket (fork the conversation, try another direction in parallel without losing this one), call the \`propose_branch\` tool ${TOOL_NOTE} with a one-line reason. The board shows a Branch button; the user's click creates "Branch: <title>" in Planning with a copy of this conversation and its own git branch off this ticket's branch (committed work only). Don't create tickets or start the other direction yourself; after the call, end your turn.`;
+
 function context(note: string, body: string, attrs: Record<string, string> = {}): string {
   const extra = Object.entries(attrs).map(([k, v]) => ` ${k}="${v.replace(/"/g, "'")}"`).join("");
   return `<ckanban-context note="${note.replace(/"/g, "'")}"${extra}>\n${body}\n</ckanban-context>`;
@@ -272,7 +275,9 @@ ${QUESTIONS_FORMAT}
 
 ${TICKET_FORMAT}
 
-${TICKETS_FORMAT}`)}`;
+${TICKETS_FORMAT}
+
+${BRANCH_FORMAT}`)}`;
   }
   return `${typed}
 
@@ -283,7 +288,8 @@ If you need decisions from the user, ask with the ask_questions tool.
 ${bugReportRule(t)}
 
 If the message asks for new or follow-up tickets from this ticket: do not modify any files or start that work. Write each description from what you know here (files, decisions, what shipped), so the new ticket's Claude needs no other context. ${TICKETS_FORMAT}
-If proposing tickets was all the message asked for, put <ckanban-stay/> on its own line before the result line: the card then stays in its column.
+${BRANCH_FORMAT}
+If proposing tickets or a branch was all the message asked for, put <ckanban-stay/> on its own line before the result line: the card then stays in its column.
 
 ${targetDesignRule(outputDir)}${QUESTIONS_FORMAT}
 

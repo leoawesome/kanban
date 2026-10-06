@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Images pasted into descriptions and chat. Stored flat under <data root>/attachments/. */
@@ -85,4 +85,16 @@ export function localizeImages(prompt: string, dir: string): string {
 
 export function deleteAttachments(dir: string, names: string[]): void {
   for (const n of names) if (isAttachmentName(n)) rmSync(join(dir, n), { force: true });
+}
+
+/** Copy attachments under new names (old name → new name), skipping ones that are gone. */
+export function copyAttachments(dir: string, names: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const n of names) {
+    if (!isAttachmentName(n) || !existsSync(join(dir, n))) continue;
+    const copy = `${crypto.randomUUID().replace(/-/g, "")}.${n.split(".").pop()}`;
+    copyFileSync(join(dir, n), join(dir, copy));
+    out[n] = copy;
+  }
+  return out;
 }

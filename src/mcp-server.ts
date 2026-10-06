@@ -476,6 +476,24 @@ const PLANNING_TOOLS: Tool[] = [
     },
   },
   {
+    name: "propose_branch",
+    description:
+      "Board ticket chat (any column): offer to branch this ticket, like Claude Code's /branch. Use it when the user asks to branch, fork, " +
+      "or try another direction in parallel without losing this one. The board shows a card with a Branch button; the user's click creates " +
+      "\"Branch: <title>\" in Planning with a copy of this conversation and its own git branch off this ticket's branch (committed work only). " +
+      "Nothing is created by the call; don't start the other direction yourself.",
+    inputSchema: {
+      type: "object",
+      properties: { reason: { type: "string", description: "One short line: what the branch is for (e.g. try SQLite instead of Postgres)." } },
+    },
+    annotations: { readOnlyHint: true },
+    changes: false,
+    async run(args) {
+      if (args?.reason !== undefined && typeof args.reason !== "string") throw new ClientError("reason must be a string. Fix it and call propose_branch again.");
+      return SHOWN;
+    },
+  },
+  {
     name: "propose_tickets",
     description:
       "Board ticket chat (any column): propose new tickets, e.g. splitting the work or follow-ups, linked to this ticket as their parent. Call list_tickets first to avoid duplicates. " +
@@ -817,7 +835,7 @@ export async function handleMessage(msg: JsonRpc, ctx: ToolContext): Promise<obj
           "Tools for the user's local ckanban board. Use them when the user asks to put work on the board, " +
           "find what to do next, or check on, start or steer tickets. Tickets you create land in Backlog in interview mode by default. " +
           "Schedules (create_schedule etc.) make the board create and run a ticket on a cron, for work the user wants done regularly. " +
-          "ask_questions, propose_ticket and propose_tickets are for the board's planning chat: they show a form or cards to the user. " +
+          "ask_questions, propose_ticket, propose_tickets and propose_branch are for the board's ticket chats: they show a form or cards to the user. " +
           "read_artifact and publish_artifact read, update and publish claude.ai artifacts where the Artifact tool isn't available.",
       });
     }

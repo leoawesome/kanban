@@ -23,6 +23,7 @@ export const FileCodeIcon = (p: IconProps) => svg(<><path d="M9 2H4.8c-.7 0-1.3.
 export const FileImageIcon = (p: IconProps) => svg(<><path d="M9 2H4.8c-.7 0-1.3.6-1.3 1.3v9.4c0 .7.6 1.3 1.3 1.3h6.4c.7 0 1.3-.6 1.3-1.3V5.5L9 2z" /><path d="M5 12l2-2.5 1.5 1.5 1-1L11 12" /></>, p);
 export const FolderIcon = (p: IconProps) => svg(<path d="M2.5 4.3c0-.7.6-1.3 1.3-1.3h2.6l1.4 1.5h4.4c.7 0 1.3.6 1.3 1.3v5.9c0 .7-.6 1.3-1.3 1.3H3.8c-.7 0-1.3-.6-1.3-1.3V4.3z" />, p);
 export const FolderOpenIcon = (p: IconProps) => svg(<path d="M2.5 11.7V4.3c0-.7.6-1.3 1.3-1.3h2.6l1.4 1.5h4c.7 0 1.3.6 1.3 1.3V7M2.5 11.7L4.3 7.6c.2-.4.6-.6 1-.6h8.4c.5 0 .8.5.6.9L12.5 12c-.2.4-.6.6-1 .6H3.4c-.6 0-1-.5-.9-.9z" />, p);
+export const BranchIcon = (p: IconProps) => svg(<><circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="5" r="1.5" /><path d="M4.5 5v6M11.5 6.5c0 2.5-2 3.5-7 4.5" /></>, p);
 export const ChevronRightIcon = (p: IconProps) => svg(<path d="M6 3.5L10.5 8 6 12.5" />, p);
 export const ChevronDownIcon = (p: IconProps) => svg(<path d="M3.5 6L8 10.5 12.5 6" />, p);
 export const ChevronUpIcon = (p: IconProps) => svg(<path d="M3.5 10L8 5.5 12.5 10" />, p);

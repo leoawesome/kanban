@@ -314,6 +314,13 @@ test("parseSession: planning tool calls become forms and cards keyed by the tool
   expect(more.openQuestions).toBe(0);
 });
 
+test("parseSession: propose_branch shows a Branch card", () => {
+  const s = parseSession(asst([{ type: "tool_use", id: "toolu_b", name: "mcp__ckanban__propose_branch", input: { reason: " Try SQLite " } }], "2026-10-06T01:00:00Z"));
+  expect(s.entries).toEqual([{ uuid: "toolu_b", at: "2026-10-06T01:00:00Z", role: "assistant", kind: "text", text: "", branch: { reason: "Try SQLite" } }]);
+  expect(s.lastMessage?.text).toBe("Offered to branch this ticket");
+  expect(parseSession(asst([{ type: "tool_use", id: "b2", name: "propose_branch", input: {} }], "1")).entries[0].branch).toEqual({ reason: "" });
+});
+
 test("parseSession: an unreadable planning tool call falls back to a tool line", () => {
   const s = parseSession(asst([{ type: "tool_use", id: "x", name: "mcp__ckanban__propose_tickets", input: { tickets: "nope" } }], "1"));
   expect(s.entries[0].kind).toBe("tool");

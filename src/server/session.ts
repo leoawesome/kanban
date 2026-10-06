@@ -44,6 +44,8 @@ export interface SessionEntry {
   proposal?: TicketProposal;
   /** New tickets Claude proposed splitting the work into (rendered with Create buttons). */
   newTickets?: NewTicketDraft[];
+  /** Claude offered to branch this ticket (rendered with a Branch button). */
+  branch?: { reason: string };
   /** Mockups Claude sent as blocks (saved to outputs/mockups; the chat links to them). */
   mockups?: string[];
   /** Claude asked the board to move the ticket (a planning-only request arrived in Review). */
@@ -292,10 +294,11 @@ const REPLY_TOOL = /(?:^|__)reply_ticket$/;
 const QUESTIONS_TOOL = /(?:^|__)ask_questions$/;
 const PROPOSAL_TOOL = /(?:^|__)propose_ticket$/;
 const TICKETS_TOOL = /(?:^|__)propose_tickets$/;
+const BRANCH_TOOL = /(?:^|__)propose_branch$/;
 const REPLY_HEAD = /^Reply from ticket (\S+) .*:\n\n/;
 
 /** The form or card a planning-chat tool call shows, or null for other tools (or input that can't be read). */
-function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "newTickets"> | null {
+function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "newTickets" | "branch"> | null {
   const name = String(block.name ?? "");
   if (QUESTIONS_TOOL.test(name)) {
     const questions = parseQuestions(block.input?.questions);
@@ -309,6 +312,7 @@ function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "n
     const newTickets = parseNewTickets(block.input?.tickets);
     return newTickets && { newTickets };
   }
+  if (BRANCH_TOOL.test(name)) return { branch: { reason: typeof block.input?.reason === "string" ? block.input.reason.trim() : "" } };
   return null;
 }
 
@@ -407,10 +411,11 @@ export function parseSession(raw: string): ParsedSession {
   }
 
   if (failed.size) entries.splice(0, entries.length, ...entries.filter((e) => !failed.has(e.uuid)));
-  const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal || e.newTickets));
+  const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal || e.newTickets || e.branch));
   const lastText = !last ? "" : last.text
     || (last.questions ? `Asked ${last.questions.length} question${last.questions.length > 1 ? "s" : ""}`
-      : last.newTickets ? `Proposed ${last.newTickets.length} new ticket${last.newTickets.length > 1 ? "s" : ""}` : "Proposed an updated ticket");
+      : last.newTickets ? `Proposed ${last.newTickets.length} new ticket${last.newTickets.length > 1 ? "s" : ""}`
+      : last.branch ? "Offered to branch this ticket" : "Proposed an updated ticket");
   return {
     title: customTitle ?? aiTitle,
     entries,

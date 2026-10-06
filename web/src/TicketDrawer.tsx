@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, COLUMNS, safeHref, startWorkTarget, subscribe, type ClaudeSession, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
+import { branchTicket } from "./branch";
 import { BugReportDialog } from "./BugReportDialog";
 import { Chat, useStop } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -188,6 +189,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const slug = profile.slug;
   const parent = ticket.parentId ? tickets.find((t) => t.id === ticket.parentId) : undefined;
   const children = tickets.filter((t) => t.parentId === ticket.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const branchedFrom = ticket.branchedFrom ? tickets.find((t) => t.id === ticket.branchedFrom) : undefined;
+  const branches = tickets.filter((t) => t.branchedFrom === ticket.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const siblings = ticket.parentId ? tickets.filter((t) => t.parentId === ticket.parentId && t.id !== ticket.id) : [];
   const deps = (ticket.dependsOn ?? []).map((ref) => siblings.find((s) => s.id === ref || s.planKey === ref) ?? ref);
   const [title, setTitle] = useState(ticket.title);
@@ -209,6 +212,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [reportingBug, setReportingBug] = useState(false);
   const [confirmStart, setConfirmStart] = useState(false);
+  const [confirmBranch, setConfirmBranch] = useState(false);
   const [picking, setPicking] = useState(false);
   const [linked, setLinked] = useState<ClaudeSession | null>(null);
   const [detailsOpen, setDetailsOpenState] = useState(() => {
@@ -239,7 +243,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const titleRef = useRef<HTMLInputElement>(null);
   // Leaving for the neighbouring ticket: keep a title edit, and don't drop an unsaved description edit.
   const step = (id: string | null | undefined) => {
-    if (!id || !nav || editing || confirmDelete || confirmStart || picking || reportingBug) return;
+    if (!id || !nav || editing || confirmDelete || confirmStart || confirmBranch || picking || reportingBug) return;
     if (title !== ticket.title) saveTitle();
     nav.go(id);
   };
@@ -372,6 +376,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
           )}
           <TicketMenu ticket={ticket} working={working} live={!!(ticket.terminalOpen || linked?.live)}
             linkedLabel={ticket.workdir && ticket.sessionId ? (linked ? sessionLabel(linked) : ticket.sessionId.slice(0, 8)) : null}
+            onBranch={() => setConfirmBranch(true)}
             onPickSession={() => setPicking(true)}
             onUnlink={() => act(() => api.linkSession(slug, ticket.id, null))}
             onCheckPr={() => act(() => api.checkPr(slug, ticket.id))}
@@ -414,6 +419,24 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                   ) : (
                     <span className="muted small">Planner ticket was deleted</span>
                   )}
+                </div>
+              )}
+              {ticket.branchedFrom && (
+                <div className="field-row">
+                  <span className="field-key" title="This ticket started as a copy of that one's conversation and code">Branched from</span>
+                  {branchedFrom ? (
+                    <button className="link-btn ticket-link" onClick={() => onOpenTicket(branchedFrom.id)}>{branchedFrom.title}</button>
+                  ) : (
+                    <span className="muted small">Source ticket was deleted</span>
+                  )}
+                </div>
+              )}
+              {branches.length > 0 && (
+                <div className="field-row">
+                  <span className="field-key" title="Tickets branched from this one">Branches</span>
+                  <span className="dep-list">
+                    {branches.map((b) => <button key={b.id} className="link-btn ticket-link" onClick={() => onOpenTicket(b.id)}>{b.title}</button>)}
+                  </span>
                 </div>
               )}
               {deps.length > 0 && (
@@ -519,6 +542,13 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
             onCancel={() => setConfirmStart(false)}
             onConfirm={async () => { await api.updateTicket(slug, ticket.id, { status: "ready" }); setConfirmStart(false); }}>
             <p>Claude will work on this on its own. When working: <b>{ticket.mode === "interview" ? "Interview me first" : "Just do it"}</b>.</p>
+          </ConfirmDialog>
+        )}
+        {confirmBranch && (
+          <ConfirmDialog title="Branch this ticket?" confirmLabel="Branch ticket" busyLabel="Branching…" tone="primary"
+            onCancel={() => setConfirmBranch(false)}
+            onConfirm={async () => { await branchTicket(slug, ticket, onOpenTicket); setConfirmBranch(false); }}>
+            <p>Creates <b>Branch: {ticket.title}</b> in Planning with a copy of this conversation{ticket.branch ? <>, on its own branch off <code>{ticket.branch}</code> (committed work only)</> : ""}. Then take it in another direction; this ticket stays as it is.</p>
           </ConfirmDialog>
         )}
         {reportingBug && (

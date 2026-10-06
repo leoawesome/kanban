@@ -163,6 +163,15 @@ test("planning and Review/Done chats can propose new tickets, first runs can't",
   expect(firstRunPrompt(t, { isGit: true, outputDir: "/o" })).not.toContain("ckanban-tickets");
 });
 
+test("every ticket chat can offer a branch; first runs can't", () => {
+  const t = { ...ticket, runCount: 1 } as Ticket;
+  expect(chatPrompt(t, "branch this", "refine", "/o")).toContain("`propose_branch` tool");
+  const act = chatPrompt(t, "branch this", "act", "/o");
+  expect(act).toContain("`propose_branch` tool");
+  expect(act).toContain("proposing tickets or a branch was all");
+  expect(firstRunPrompt(t, { isGit: true, outputDir: "/o" })).not.toContain("propose_branch");
+});
+
 test("planner wake-ups: events or final check, scoped rights, one visible line first", () => {
   const t = { ...ticket, id: "t_plan", title: "Big plan" } as Ticket;
   const ev = orchestratorPrompt(t, { kind: "event", events: ['t_1 "A" failed (review)'], table: "- t_1 \"A\": review; failed", board: "kanban", outputDir: "/o" });

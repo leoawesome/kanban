@@ -51,4 +51,7 @@ test("the tools return an error Claude can fix, or tell it to wait; nothing touc
   expect((await callTool("propose_ticket", { title: "T", description: "D" }, ctx)).content[0].text).toContain("End your turn");
   expect((await callTool("propose_tickets", { tickets: [{ key: "a", title: "A", description: "D" }] }, ctx)).isError).toBeUndefined();
   expect((await callTool("propose_tickets", { tickets: [{ key: "a", title: "A", description: "D", dependsOn: ["b"] }] }, ctx)).isError).toBe(true);
+  expect((await callTool("propose_branch", { reason: "try B" }, ctx)).content[0].text).toContain("End your turn");
+  expect((await callTool("propose_branch", {}, ctx)).isError).toBeUndefined();
+  expect((await callTool("propose_branch", { reason: 3 }, ctx)).isError).toBe(true);
 });

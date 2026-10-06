@@ -2,11 +2,12 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { extractFinalText, summarizeEvent } from "./activity";
-import { deleteAttachments, localizeImages, referencedAttachments } from "./attachments";
+import { copyAttachments, deleteAttachments, localizeImages, referencedAttachments } from "./attachments";
 import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, isGitRepo, removeWorktree, resolveBaseBranch, worktreeDir } from "./git";
 import { MOVE_TO_PLANNING_RE, STAY_RE } from "./session";
+import { forkSessionFile } from "./fork";
 import { saveMockups } from "./mockups";
 import { chatPrompt, firstRunPrompt, interruptedPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
 import {
@@ -862,6 +863,65 @@ export class Board {
       ? { sessionId: null, workdir: null }
       // Linked work already exists and the next step is the user's: land in Review ("Your turn").
       : { sessionId, workdir: profile.path, worktree: null, runCount: 0, lastRunAt: new Date().toISOString(), status: "review" });
+  }
+
+  /**
+   * Branch a ticket, like Claude Code's --fork-session: a new "Branch: <title>" ticket in Planning with a copy of
+   * the conversation (new session id) and its own git branch off the source's branch. The source is untouched.
+   * warning: something the user should know (uncommitted changes weren't copied, the source branch was gone).
+   */
+  async branchTicket(slug: string, id: string): Promise<{ ticket: Ticket; warning: string | null }> {
+    const profile = this.store.getProfile(slug);
+    const src = this.store.getTicket(slug, id);
+    if (!profile || !src) throw new Error(`ticket ${id} not found`);
+    if (src.error?.startsWith("corrupt")) throw new Error("ticket file is corrupt");
+    if (this.isRunning(slug, id)) throw new ConflictError("Claude is working on this ticket; branch it once Claude is done");
+    const srcFile = src.sessionId ? claudeSessionFile(src.sessionId) : null;
+    if (!src.sessionId || !srcFile) throw new Error("this ticket has no Claude conversation to branch yet");
+    if (src.workdir && !existsSync(src.workdir)) throw new Error(`linked session folder no longer exists: ${src.workdir}`);
+
+    const title = `Branch: ${src.title}`;
+    const t = this.store.createTicket(slug, { title, body: src.body, status: "planning", mode: src.mode });
+    const warnings: string[] = [];
+    let worktree: string | null = null;
+    try {
+      const patch: Partial<Ticket> = {
+        sessionId: crypto.randomUUID(), sessionStarted: true, refineStarted: true, interviewed: src.interviewed,
+        branchedFrom: src.id, branchPoint: { at: nowIso(), sourceTitle: src.title },
+      };
+      // Same folder setup as the source: its linked folder, its own worktree branch, or the project folder.
+      if (src.workdir) patch.workdir = src.workdir;
+      else if (src.branch && (await isGitRepo(profile.path))) {
+        const dir = worktreeDir(profile, t.id);
+        const branch = `ck/${t.id}-${slugify(title)}`;
+        const hasBranch = (await runCmd(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${src.branch}`], profile.path)).code === 0;
+        let base: string | null = src.branch;
+        if (!hasBranch) {
+          base = await resolveBaseBranch(profile.path, profile.baseBranch);
+          if (base === null) throw new Error(`branch ${src.branch} no longer exists and the repo has nothing to branch from`);
+          warnings.push(`The source branch ${src.branch} no longer exists, so the branch starts from ${base}.`);
+        } else if (src.worktree && existsSync(src.worktree)) {
+          const st = await runCmd(["git", "status", "--porcelain"], src.worktree);
+          if (st.code === 0 && st.stdout.trim()) warnings.push("Uncommitted changes in the source were not copied.");
+        }
+        await addWorktree(profile.path, dir, branch, base);
+        worktree = dir;
+        Object.assign(patch, { worktree: dir, branch });
+      }
+      const fromCwd = src.workdir ?? src.worktree ?? (src.branch ? worktreeDir(profile, src.id) : profile.path);
+      const toCwd = patch.workdir ?? worktree ?? profile.path;
+      // The branch gets its own copies of pasted images, so deleting either ticket can't break the other.
+      const rename = copyAttachments(this.store.attachmentsDir, referencedAttachments(src.body, readFileSync(srcFile, "utf8")));
+      for (const [from, to] of Object.entries(rename)) patch.body = (patch.body ?? src.body).split(from).join(to);
+      forkSessionFile(srcFile, { fromId: src.sessionId, toId: patch.sessionId!, fromCwd, toCwd, rename });
+      this.store.copyOutputs(slug, src.id, t.id);
+      const out = this.patch(slug, t.id, patch);
+      return { ticket: out, warning: warnings.join(" ") || null };
+    } catch (e) {
+      if (worktree) await removeWorktree(profile.path, worktree).catch(() => {});
+      this.store.deleteTicket(slug, t.id);
+      throw e;
+    }
   }
 
   addComment(slug: string, id: string, text: string) {

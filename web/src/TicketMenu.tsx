@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { copy, type Ticket } from "./api";
-import { BugIcon, CheckIcon, CloseIcon, CopyIcon, MoreIcon, RefreshIcon, TerminalIcon, TrashIcon } from "./icons";
+import { BranchIcon, BugIcon, CheckIcon, CloseIcon, CopyIcon, MoreIcon, RefreshIcon, TerminalIcon, TrashIcon } from "./icons";
 import { useLayer } from "./layers";
 
 /**
  * "⋯" menu in the ticket panel header: the session (resume command, branch, ID, linked session),
  * then Report a bug and Delete. ↑↓ move, Esc closes only the menu.
  */
-export function TicketMenu({ ticket, working, live, linkedLabel, onPickSession, onUnlink, onCheckPr, onReportBug, onDelete }: {
+export function TicketMenu({ ticket, working, live, linkedLabel, onBranch, onPickSession, onUnlink, onCheckPr, onReportBug, onDelete }: {
   ticket: Ticket;
   working: boolean;
   /** The session is open in a terminal right now. */
   live: boolean;
   /** Label of the linked Claude session, when there is one. */
   linkedLabel: string | null;
+  /** Branch the ticket (copy of its conversation + committed code); only offered once it has a conversation. */
+  onBranch: () => void;
   onPickSession: () => void;
   onUnlink: () => void;
   onCheckPr: () => void;
@@ -101,6 +103,15 @@ export function TicketMenu({ ticket, working, live, linkedLabel, onPickSession, 
             <span className="menu-label">{copied === "id" ? "Copied ✓" : "Copy ticket ID"}</span>
             <span className="menu-value">{ticket.id}</span>
           </button>
+          {ticket.session && (
+            <button role="menuitem" className="menu-item" disabled={working}
+              title={working ? "Wait until Claude is done" : "New ticket in Planning with a copy of this conversation and its own branch off this one's committed code"}
+              onClick={pick(onBranch)}>
+              <span className="menu-icon" aria-hidden><BranchIcon size={14} /></span>
+              <span className="menu-label">Branch ticket…</span>
+              <span className="menu-hint">{working ? "Wait until Claude is done" : "copy chat + code"}</span>
+            </button>
+          )}
           {hasSession && !working && (
             <>
               <button role="menuitem" className="menu-item" onClick={pick(onPickSession)}>
