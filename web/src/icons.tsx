@@ -47,3 +47,20 @@ export const SparkIcon = ({ size = 11, ...rest }: IconProps) => (
     <path d="M8 0c.5 3.9 2.1 5.5 6 6-3.9.5-5.5 2.1-6 6-.5-3.9-2.1-5.5-6-6 3.9-.5 5.5-2.1 6-6Z" fill="currentColor" />
   </svg>
 );
+
+/** App logo: an L of cards on an accent tile, the last card sliding into place. Same shape as the favicon in index.html and docs/assets/logo.svg. */
+export function Logo({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden focusable="false" className="logo">
+      <rect width="32" height="32" rx="8" style={{ fill: "var(--accent)" }} />
+      <g fill="#fff">
+        <rect x="6" y="6.5" width="5.5" height="5.5" rx="1.4" />
+        <rect x="6" y="13.25" width="5.5" height="5.5" rx="1.4" />
+        <rect x="6" y="20" width="5.5" height="5.5" rx="1.4" />
+        <rect x="13.25" y="20" width="5.5" height="5.5" rx="1.4" />
+        <rect x="20.5" y="20" width="5.5" height="5.5" rx="1.4" opacity=".25" />
+        <rect x="20.5" y="14.2" width="6" height="6" rx="1.5" transform="rotate(-14 23.5 17)" />
+      </g>
+    </svg>
+  );
+}

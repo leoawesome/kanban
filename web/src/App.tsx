@@ -4,7 +4,7 @@ import { avatarColor, avatarLetter } from "./avatar";
 import { BugReportDialog } from "./BugReportDialog";
 import { ConnectionsDialog } from "./ConnectionsDialog";
 import { HeaderMenu } from "./HeaderMenu";
-import { BugIcon, ChatIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
+import { BugIcon, ChatIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, Logo, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
 import { Inbox } from "./Inbox";
 import { UsagePill } from "./UsagePill";
 import { anyLayerOpen } from "./layers";
@@ -233,7 +233,7 @@ export function App() {
 
   const needYou = inbox.length;
   useEffect(() => {
-    document.title = needYou ? `(${needYou}) Claude Kanban` : "Claude Kanban";
+    document.title = needYou ? `(${needYou}) ckanban` : "ckanban";
   }, [needYou]);
 
   useEffect(() => {
@@ -408,12 +408,9 @@ export function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="logo" aria-hidden>
-            <i />
-            <i />
-            <i />
-          </span>
-          <span className="brand-name">Claude Kanban</span>
+          <Logo />
+          <span className="brand-name">ckanban</span>
+          <span className="brand-tagline">Kanban for Claude Code</span>
         </div>
         {profiles && profiles.length > 0 && (
           <Select
@@ -479,33 +476,31 @@ export function App() {
           </button>
         )}
         {profile && (
-          <button className="btn ghost icon-label" onClick={() => setSchedulesOpen(true)} aria-label="Schedules"
-            title={scheduleErrors ? `${scheduleErrors} schedule${scheduleErrors === 1 ? "" : "s"} could not start their last run` : "Recurring tickets on a cron schedule"}>
-            <ClockIcon /><span className="label">Schedules</span>
-            {schedules && schedules.length > 0 && !scheduleErrors && <span className="muted small">{schedules.filter((s) => s.enabled).length}</span>}
-            {scheduleErrors > 0 && <span className="need-chip">{scheduleErrors}</span>}
-          </button>
-        )}
-        <button className="btn ghost icon-label" onClick={() => setConnections(true)} aria-label="Connections"
-          title={mcpAttention ? `${mcpAttention} MCP server${mcpAttention === 1 ? "" : "s"} failed or need you to log in again` : "Claude Code MCP servers"}>
-          <PlugIcon /><span className="label">Connections</span>
-          {mcpAttention > 0 && <span className="need-chip">{mcpAttention}</span>}
-        </button>
-        {profile && (
           <button className="btn primary" onClick={() => setNewTicket(true)} title="New ticket (N)">
             New ticket
           </button>
         )}
-        <HeaderMenu items={[
+        <HeaderMenu alert={scheduleErrors > 0 || mcpAttention > 0} items={[
+          ...(profile ? [{
+            label: "Schedules", icon: <ClockIcon />, onSelect: () => setSchedulesOpen(true),
+            title: scheduleErrors ? `${scheduleErrors} schedule${scheduleErrors === 1 ? "" : "s"} could not start their last run` : "Recurring tickets on a cron schedule",
+            badge: scheduleErrors > 0 ? <span className="need-chip">{scheduleErrors}</span>
+              : schedules && schedules.length > 0 ? <span className="muted small">{schedules.filter((s) => s.enabled).length} active</span> : null,
+          }] : []),
+          {
+            label: "Connections", icon: <PlugIcon />, onSelect: () => setConnections(true), separator: true,
+            title: mcpAttention ? `${mcpAttention} MCP server${mcpAttention === 1 ? "" : "s"} failed or need you to log in again` : "Claude Code MCP servers",
+            badge: mcpAttention > 0 ? <span className="need-chip">{mcpAttention}</span> : null,
+          },
           ...(profile ? [{ label: "Board settings", icon: <GearIcon />, onSelect: () => setProfileDialog("edit") }] : []),
           { label: "Keyboard shortcuts", hint: "?", icon: <KeyboardIcon />, onSelect: () => setShortcuts(true) },
           { label: "Report a bug", icon: <BugIcon />, onSelect: () => setBugReport(true) },
-        ]} footer={version && version.version !== "dev" ? `Claude Kanban v${version.version}` : null} />
+        ]} footer={version && version.version !== "dev" ? `ckanban v${version.version} · by Leo` : "by Leo"} />
       </header>
 
       {version?.updateAvailable && !dismissed.has(updateKey) && (
         <div className="banner info" role="status">
-          <span>Claude Kanban v{version.latest} is available (you have v{version.version}). Run <code>ckanban update</code> in a terminal.</span>
+          <span>ckanban v{version.latest} is available (you have v{version.version}). Run <code>ckanban update</code> in a terminal.</span>
           <button className="icon-btn" aria-label="Dismiss" title="Hide until next time" onClick={() => dismiss(updateKey)}><CloseIcon size={12} /></button>
         </div>
       )}

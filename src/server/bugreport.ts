@@ -176,7 +176,7 @@ export function buildIssueBody(input: BugReportInput, opts: { dataRoot?: string;
       ? `<details><summary>${b.label}</summary>\n\n\`\`\`text\n${text.replace(/```/g, "ˋˋˋ")}\n\`\`\`\n\n</details>`
       : `### ${b.label}\n\n${text}`);
   }
-  parts.push(`<sub>Reported from ${FROM[input.source]} (Claude Kanban ${VERSION}).</sub>`);
+  parts.push(`<sub>Reported from ${FROM[input.source]} (ckanban ${VERSION}).</sub>`);
   return { body: scrub(parts.join("\n\n"), opts), screenshots };
 }
 

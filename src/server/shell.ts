@@ -35,7 +35,7 @@ export interface ChatProfile {
  */
 export function quickChatArgs(profile: ChatProfile, serverArgv: string[] = [...helperArgv(), "mcp"]): string[] {
   const note = [
-    `You are running in the quick Claude chat of Claude Kanban (ckanban), a local kanban board that runs tickets through Claude.`,
+    `You are running in the quick Claude chat of ckanban, a local kanban board that runs tickets through Claude.`,
     `This chat belongs to the board (profile) "${profile.name}" (slug: ${profile.slug}), whose folder is ${profile.path}.`,
     `For board work (making, finding, updating or moving tickets) use the ckanban MCP tools: create_ticket, list_tickets, get_ticket, update_ticket, move_ticket, comment_ticket.`,
     `Use profile "${profile.slug}" unless the user names another board. New tickets land in Backlog.`,

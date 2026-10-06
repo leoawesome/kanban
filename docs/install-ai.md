@@ -1,6 +1,6 @@
-# Installing Claude Kanban — guide for AI assistants
+# Installing ckanban — guide for AI assistants
 
-You are helping a user install **Claude Kanban**: a local web kanban board where tickets are worked by headless Claude Code sessions. Follow these steps in order. Run each command, check its result, and only move on when the check passes. Tell the user briefly what you did at the end.
+You are helping a user install **ckanban**: a local web kanban board where tickets are worked by headless Claude Code sessions. Follow these steps in order. Run each command, check its result, and only move on when the check passes. Tell the user briefly what you did at the end.
 
 Supported: **macOS only** (Apple Silicon or Intel). If `uname -s` is not `Darwin`, stop and tell the user it is not supported yet.
 

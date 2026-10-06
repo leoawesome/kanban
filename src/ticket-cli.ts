@@ -17,7 +17,7 @@ export const TICKET_USAGE = `  ckanban profiles     List boards (profiles) and t
   ckanban ticket stop <id>
   ckanban ticket delete <id>
   ckanban ticket report-bug [<id>] --title <t> [--body <md> | --body-file <f>] [--no-logs]
-                       File a Claude Kanban bug as a GitHub issue (with <id>: attach that
+                       File a ckanban bug as a GitHub issue (with <id>: attach that
                        ticket's details and last run log). Needs gh, else prints a link.
                        Ticket commands act on the board whose folder contains the current
                        directory; --profile <slug> picks another. --json prints raw JSON.

@@ -127,10 +127,10 @@ export function TicketMenu({ ticket, working, live, linkedLabel, onPickSession, 
             </button>
           )}
           <div className="menu-sep" role="separator" />
-          <button role="menuitem" className="menu-item" title="Something wrong with Claude Kanban on this ticket? File a GitHub issue with its details attached"
+          <button role="menuitem" className="menu-item" title="Something wrong with ckanban on this ticket? File a GitHub issue with its details attached"
             onClick={pick(onReportBug)}>
             <span className="menu-icon" aria-hidden><BugIcon size={14} /></span>
-            <span className="menu-label">Report a bug in Claude Kanban</span>
+            <span className="menu-label">Report a bug in ckanban</span>
           </button>
           <button role="menuitem" className="menu-item danger" onClick={pick(onDelete)}>
             <span className="menu-icon" aria-hidden><TrashIcon size={14} /></span>

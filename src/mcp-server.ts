@@ -269,7 +269,7 @@ const SCHEDULE_TOOLS: Tool[] = [
     description:
       "Create a schedule: at each cron time the board creates a ticket from it and Claude starts working on it right away, unattended. " +
       "Use it when the user wants something done regularly (nightly audit, weekly changelog, daily CI check). " +
-      "Runs happen only while the Claude Kanban daemon is running; one missed run is caught up when it starts. " +
+      "Runs happen only while the ckanban daemon is running; one missed run is caught up when it starts. " +
       "Returns the schedule id and its next run times.",
     inputSchema: { type: "object", properties: { profile: PROFILE, ...SCHEDULE_FIELDS }, required: ["name", "title", "body", "cron"] },
     changes: true,
@@ -746,7 +746,7 @@ export const TOOLS: Tool[] = [
   {
     name: "report_bug",
     description:
-      `File a bug in Claude Kanban (ckanban) itself as a GitHub issue on ${REPO}. ` +
+      `File a bug in ckanban itself as a GitHub issue on ${REPO}. ` +
       "Only use it when the user asks to report a ckanban bug, never on your own initiative. " +
       "Before calling, show the user the title and description you will send and wait for a yes. " +
       "Write the description in markdown with: what happened, steps to reproduce (numbered), expected vs actual. " +
@@ -814,7 +814,7 @@ export async function handleMessage(msg: JsonRpc, ctx: ToolContext): Promise<obj
         capabilities: { tools: {} },
         serverInfo: { name: "ckanban", version: VERSION },
         instructions:
-          "Tools for the user's local Claude Kanban board. Use them when the user asks to put work on the board, " +
+          "Tools for the user's local ckanban board. Use them when the user asks to put work on the board, " +
           "find what to do next, or check on, start or steer tickets. Tickets you create land in Backlog in interview mode by default. " +
           "Schedules (create_schedule etc.) make the board create and run a ticket on a cron, for work the user wants done regularly. " +
           "ask_questions, propose_ticket and propose_tickets are for the board's planning chat: they show a form or cards to the user. " +

@@ -125,7 +125,7 @@ export function SchedulesDialog({ profile, schedules, tickets, onOpenTicket, onC
         <div className="mcp-toolbar">
           <span className="muted small">
             Recurring tickets. At each time a schedule fires, a new ticket is created on this board and Claude starts it right away.
-            Times are this computer's local time; runs happen only while Claude Kanban is running (one missed run is caught up on start).
+            Times are this computer's local time; runs happen only while ckanban is running (one missed run is caught up on start).
           </span>
           <div className="spacer" />
           <button className="btn small primary" onClick={() => setEditing((e) => (e === "new" ? null : "new"))}>

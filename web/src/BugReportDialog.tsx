@@ -14,7 +14,7 @@ const TEMPLATE = `**What happened**
 `;
 
 /**
- * Report a Claude Kanban bug: the user's text plus context they can untick, filed as a GitHub issue
+ * Report a ckanban bug: the user's text plus context they can untick, filed as a GitHub issue
  * with gh. With a ticket, its details and last run log come along. Screenshots can't be uploaded by gh,
  * so the done view shows them with a tip to drag them into the issue.
  */
@@ -82,7 +82,7 @@ export function BugReportDialog({ ticket, onClose }: {
       guard={!busy && (!!title.trim() || description.trim() !== TEMPLATE.trim())}>
       <form className="form bug-form" onSubmit={submit}>
         <p className="muted small">
-          Something wrong with Claude Kanban? This opens an issue on GitHub for the maintainer. Check the text below first: it is posted publicly.
+          Something wrong with ckanban? This opens an issue on GitHub for the maintainer. Check the text below first: it is posted publicly.
         </p>
         <label>
           Title

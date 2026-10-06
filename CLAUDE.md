@@ -1,4 +1,4 @@
-# Claude Kanban
+# ckanban
 
 Local kanban web UI (Bun + TypeScript server in `src/`, React + Vite UI in `web/`) that runs tickets through headless `claude -p` sessions. Data lives in `~/.claude-kanban/`.
 

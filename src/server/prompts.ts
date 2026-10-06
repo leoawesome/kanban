@@ -222,9 +222,9 @@ ${artifactRule()}
 ${RESULT_RULE}`);
 }
 
-/** Ticket chats can file Claude Kanban bugs on the user's request (report_bug tool or the CLI). */
+/** Ticket chats can file ckanban bugs on the user's request (report_bug tool or the CLI). */
 export function bugReportRule(t: Ticket): string {
-  return `If the user asks to report a bug in Claude Kanban itself (this board app, not their project): draft a title and a markdown description (what happened, numbered steps to reproduce, expected vs actual), show it and wait for their yes, then file it with the ckanban \`report_bug\` tool (ticketId "${t.id}") or \`${helperCommand()} ticket report-bug ${t.id} --title "<title>" --body-file -\` (description on stdin), and reply with the issue URL or the fallback link it prints.`;
+  return `If the user asks to report a bug in ckanban itself (this board app, not their project): draft a title and a markdown description (what happened, numbered steps to reproduce, expected vs actual), show it and wait for their yes, then file it with the ckanban \`report_bug\` tool (ticketId "${t.id}") or \`${helperCommand()} ticket report-bug ${t.id} --title "<title>" --body-file -\` (description on stdin), and reply with the issue URL or the fallback link it prints.`;
 }
 
 export type ChatMode = "refine" | "act";
