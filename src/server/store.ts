@@ -191,6 +191,11 @@ export class Store {
     return dir;
   }
 
+  /** Absolute path of the outputs folder, without creating it (shown in the Share menu). */
+  outputsPath(slug: string, id: string): string {
+    return join(this.ticketDir(slug, id), "outputs");
+  }
+
   /** Give a branched ticket its own copy of the source's deliverables. */
   copyOutputs(slug: string, from: string, to: string): void {
     const src = join(this.ticketDir(slug, from), "outputs");

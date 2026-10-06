@@ -5,12 +5,13 @@ import { branchTicket } from "./branch";
 import { BugReportDialog } from "./BugReportDialog";
 import { Chat, useStop } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, ExternalIcon, FileTextIcon, SparkIcon } from "./icons";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, ExternalIcon, FileTextIcon, LinkIcon, SparkIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { useFocusTrap, useLayer } from "./layers";
 import { complete, PlanPanel, PlanSummary } from "./PlanPanel";
 import { Outputs } from "./Outputs";
 import { Select } from "./Select";
+import { useShareNotices } from "./share";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
 import { TicketMenu } from "./TicketMenu";
 import { missingPctReason, UsagePanel, usageChipText, useTicketUsage } from "./UsagePanel";
@@ -208,6 +209,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const ticketUsage = useTicketUsage(slug, ticket.id);
   const usage = ticketUsage.usage;
   const hasUsage = !!usage?.runs.length;
+  useShareNotices(ticket);
   // A file to show when the Outputs tab opens (a mockup clicked in the chat).
   const [outputFocus, setOutputFocus] = useState<string | null>(null);
   const [titleSave, setTitleSave] = useState<"saving" | "saved" | null>(null);
@@ -457,7 +459,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
 
               {children.length > 0 && <PlanSummary ticket={ticket} children={children} onOpen={() => setTab("plan")} />}
 
-              {(!!ticket.session?.artifacts.length || outputCount > 0 || hasUsage) && (
+              {(!!ticket.session?.artifacts.length || !!ticket.shareLinks?.length || outputCount > 0 || hasUsage) && (
                 <div className="result-chips" aria-label="Results">
                   {usage && hasUsage && (
                     <button className="result-chip usage-chip" onClick={() => setTab("usage")}
@@ -470,6 +472,11 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                   )}
                   {ticket.session?.artifacts.slice().reverse().map((a) => (
                     <a key={a.url} className="result-chip" href={safeHref(a.url)} target="_blank" rel="noreferrer" title={a.url}><ExternalIcon size={12} /> {a.label}</a>
+                  ))}
+                  {ticket.shareLinks?.filter((l) => !ticket.session?.artifacts.some((a) => a.url === l.url)).slice().reverse().map((l) => (
+                    <a key={l.url} className="result-chip" href={safeHref(l.url)} target="_blank" rel="noreferrer" title={`Share link for ${l.file}: ${l.url}`}>
+                      <LinkIcon size={12} /> {l.file.slice(l.file.lastIndexOf("/") + 1)}
+                    </a>
                   ))}
                 </div>
               )}
@@ -540,7 +547,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
             ) : tab === "usage" ? (
               <div className="panel-scroll panel-usage"><UsagePanel usage={usage} error={ticketUsage.error} /></div>
             ) : tab === "outputs" ? (
-              <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} focus={outputFocus} /></div>
+              <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticket={ticket} onCount={setOutputCount} focus={outputFocus} /></div>
             ) : (
               <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError}
                 onOpenOutput={(name) => { setOutputFocus(name); setTab("outputs"); }} />

@@ -71,9 +71,18 @@ export interface Ticket {
   queued?: QueuedMessage[];
   /** A chat reply the daemon cut off by restarting (or held back while a restart waited); recover() resumes it. */
   interrupted?: Interrupted | null;
+  /** Output files the user published as claude.ai pages from the Outputs tab, one link per file. */
+  shareLinks?: ShareLink[];
   createdAt: string;
   updatedAt: string;
   body: string;
+}
+
+export interface ShareLink {
+  /** Path relative to the outputs folder. */
+  file: string;
+  url: string;
+  at: string;
 }
 
 export interface BranchPoint {

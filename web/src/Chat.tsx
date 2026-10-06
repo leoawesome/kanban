@@ -1,13 +1,15 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, subscribe, type NewTicketDraft, type SessionEntry, type Ticket } from "./api";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { api, subscribe, type NewTicketDraft, type OutputFile, type SessionEntry, type Ticket } from "./api";
 import { autoGrow } from "./autoGrow";
 import { branchTicket } from "./branch";
 import { BranchCard } from "./BranchCard";
-import { ArrowDownIcon, BranchIcon, CloseIcon, FileCodeIcon } from "./icons";
+import { ArrowDownIcon, BranchIcon, CloseIcon, FileCodeIcon, FileTextIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { NewTicketsCard } from "./NewTicketsCard";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
+import { filesByReply } from "./fileCards";
+import { baseName, copyFile, downloadFile } from "./share";
 import { draftKey, formKey } from "./drafts";
 import { fullTime, timeAgo, useNow } from "./time";
 import { toast } from "./toast";
@@ -84,6 +86,10 @@ const RESEND = {
 } as const;
 
 const REFINE = (s: Ticket["status"]) => s === "backlog" || s === "planning";
+
+function kb(n: number): string {
+  return n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
 
 // Image links reach the session as local file paths, so compare by file name.
 const norm = (s: string) => s.trim().replace(/\S*\/attachments\/([0-9a-f]{32}\.\w+)/g, "$1");
@@ -200,6 +206,12 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   }, [ticket.queued]);
 
   const entries = page?.entries ?? [];
+  // Output files for the cards under replies; refreshed whenever the conversation is.
+  const [files, setFiles] = useState<OutputFile[]>([]);
+  useEffect(() => {
+    if (page) api.outputs(slug, ticket.id).then(setFiles).catch(() => {});
+  }, [slug, ticket.id, page, running]);
+  const cards = useMemo(() => filesByReply(entries, files), [entries, files]);
   // Drop optimistic bubbles once the session file contains the message.
   useEffect(() => {
     if (pending.some((p) => delivered(entries, p.text))) setPending((ps) => ps.filter((p) => !delivered(entries, p.text)));
@@ -359,6 +371,18 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
                   ))}
                 </div>
               )}
+              {e.role === "assistant" && cards.get(e.uuid)?.map((f) => (
+                <div key={f.name} className="chat-file">
+                  <FileTextIcon size={14} />
+                  <b title={f.name}>{baseName(f.name)}</b>
+                  <span className="muted small">{kb(f.size)}</span>
+                  <span className="chat-file-actions">
+                    <button className="btn small" onClick={() => onOpenOutput?.(f.name)}>View</button>
+                    {ticket.canCopyFile && <button className="btn small" onClick={() => copyFile(slug, ticket.id, f.name)}>Copy file</button>}
+                    <button className="btn small" onClick={() => downloadFile(slug, ticket.id, f.name)}>Download</button>
+                  </span>
+                </div>
+              ))}
               {e.unreadable && (
                 <div className="chat-unreadable" role="status">
                   <span>Couldn't read Claude's {UNREADABLE[e.unreadable]}.</span>

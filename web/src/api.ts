@@ -126,7 +126,18 @@ export interface Ticket {
   session?: SessionSummary | null;
   /** Why the ticket is waiting on you ("Your turn"), computed by the server. */
   attention?: { kind: AttentionKind; label: string } | null;
+  /** Output files published as claude.ai pages from the Share menu, one link per file. */
+  shareLinks?: ShareLink[];
+  /** Share menu publishes in progress (or the last one's error), per output file. */
+  shareJobs?: ShareJob[];
+  /** Absolute path of the ticket's outputs folder. */
+  outputDir?: string;
+  /** The daemon can put a file on the system clipboard (macOS). */
+  canCopyFile?: boolean;
 }
+
+export interface ShareLink { file: string; url: string; at: string }
+export interface ShareJob { file: string; state: "publishing" | "failed"; error?: string; at: string }
 
 export type PlanState = "running" | "paused" | "finishing" | "done" | "stuck";
 
@@ -417,6 +428,10 @@ export const api = {
     req<Ticket>("POST", `${t(slug, id)}/link-session`, { sessionId }),
   outputs: (slug: string, id: string) => req<OutputFile[]>("GET", `${t(slug, id)}/outputs`),
   outputUrl: (slug: string, id: string, name: string) => `${t(slug, id)}/outputs/${name.split("/").map(encodeURIComponent).join("/")}`,
+  outputDownloadUrl: (slug: string, id: string, name: string) => `${api.outputUrl(slug, id, name)}?download=1`,
+  /** Share menu: reveal in Finder, copy the file to the clipboard, or start publishing it as a claude.ai page. */
+  outputAction: (slug: string, id: string, name: string, action: "reveal" | "copy" | "publish") =>
+    req<unknown>("POST", `${api.outputUrl(slug, id, name)}?action=${action}`),
   outputText: async (slug: string, id: string, name: string) => {
     const r = await fetch(api.outputUrl(slug, id, name));
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);

@@ -1,22 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, subscribe, type OutputFile } from "./api";
+import { api, subscribe, type OutputFile, type Ticket } from "./api";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileCodeIcon, FileIcon, FileImageIcon, FileTextIcon, FolderIcon, FolderOpenIcon } from "./icons";
 import { fullTime, timeAgo, useNow } from "./time";
 import { Markdown } from "./Transcript";
+import { baseName, BINARY, dragFile, HTML, IMAGE, MARKDOWN } from "./share";
+import { ShareMenu } from "./ShareMenu";
 
 function kb(n: number): string {
   return n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`;
 }
 
-/** Raster images the server serves with their real type (SVG stays text there, so it is not previewed). */
-const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
-const BINARY = /\.(ico|bmp|tiff?|psd|pdf|zip|gz|tgz|tar|7z|rar|mp3|wav|m4a|ogg|mp4|mov|webm|avi|woff2?|ttf|otf|eot|exe|dll|so|dylib|bin|dat|db|sqlite|wasm|pyc|class|jar|heic|avif)$/i;
-const MARKDOWN = /\.(md|markdown)$/i;
-const HTML = /\.html?$/i;
 /** Show the filter once the list gets long. */
 const FILTER_MIN = 10;
 
-const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 /** Folder paths containing a file: "a/b/c.png" -> ["a", "a/b"]. */
 const ancestors = (path: string) => path.split("/").slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join("/"));
 
@@ -71,13 +67,14 @@ function openInTab(name: string, html: string) {
 }
 
 /** Deliverables Claude saved in the ticket's outputs folder; markdown is rendered, images and HTML previewed, other text shown raw. */
-export function Outputs({ slug, ticketId, onCount, focus }: {
+export function Outputs({ slug, ticket, onCount, focus }: {
   slug: string;
-  ticketId: string;
+  ticket: Ticket;
   onCount?: (n: number) => void;
   /** File to show first (path relative to outputs), e.g. a mockup clicked in the chat. */
   focus?: string | null;
 }) {
+  const ticketId = ticket.id;
   const [files, setFiles] = useState<OutputFile[] | null>(null);
   const [open, setOpen] = useState<string | null>(focus ?? null);
   const [text, setText] = useState<string | null>(null);
@@ -148,15 +145,19 @@ export function Outputs({ slug, ticketId, onCount, focus }: {
         </div>
       ))}
       {d.files.map((f) => (
-        <button key={f.name} className={`tree-row output-file${f.name === open ? " selected" : ""}`} style={pad(depth)} title={f.name}
-          role="treeitem" aria-selected={f.name === open} onClick={() => setOpen(f.name)}>
-          <span className="tree-caret" aria-hidden />
-          <span className="tree-icon" aria-hidden>{fileIcon(f.name)}</span>
-          <span className="output-label">
-            <span className="output-name">{baseName(f.name)}</span>
-            <span className="output-meta muted" title={fullTime(f.updatedAt)}>{kb(f.size)} · {timeAgo(f.updatedAt)}</span>
-          </span>
-        </button>
+        <div key={f.name} className={`output-row${f.name === open ? " selected" : ""}`} role="none">
+          <button className={`tree-row output-file${f.name === open ? " selected" : ""}`} style={pad(depth)} title={f.name}
+            role="treeitem" aria-selected={f.name === open} onClick={() => setOpen(f.name)}
+            draggable onDragStart={(e) => dragFile(e, slug, ticketId, f.name)}>
+            <span className="tree-caret" aria-hidden />
+            <span className="tree-icon" aria-hidden>{fileIcon(f.name)}</span>
+            <span className="output-label">
+              <span className="output-name">{baseName(f.name)}</span>
+              <span className="output-meta muted" title={fullTime(f.updatedAt)}>{kb(f.size)} · {timeAgo(f.updatedAt)}</span>
+            </span>
+          </button>
+          <ShareMenu slug={slug} ticket={ticket} name={f.name} variant="dots" text={f.name === open ? text : undefined} />
+        </div>
       ))}
     </>
   );
@@ -181,13 +182,19 @@ export function Outputs({ slug, ticketId, onCount, focus }: {
         <nav className="file-tree output-files" aria-label="Outputs" role="tree">
           {shown.length ? renderFolder(tree, 0) : <div className="tree-note muted small">No matches</div>}
         </nav>
+        {"chrome" in window && <div className="output-hint muted">Tip: drag a file into Slack or Finder</div>}
       </div>
       <div className={`output-view${kind === "html" ? " html" : ""}`}>
-        {kind === "html" && open && (
-          <div className="output-html-bar">
-            <button className="link-btn small" disabled={text === null} onClick={() => text !== null && openInTab(open, text)}>Open in new tab</button>
+        {open && (
+          <div className="output-bar">
+            <span className="output-bar-name" title={ticket.outputDir ? `${ticket.outputDir}/${open}` : open}>{baseName(open)}</span>
+            {kind === "html" && (
+              <button className="link-btn small" disabled={text === null} onClick={() => text !== null && openInTab(open, text)}>Open in new tab</button>
+            )}
+            <ShareMenu slug={slug} ticket={ticket} name={open} variant="button" text={kind === "text" || kind === "html" ? text : undefined} />
           </div>
         )}
+        <div className="output-body">
         {kind === "html" ? (
           text === null ? <div className="muted output-html-note">Loading…</div>
             : <iframe className="output-html" sandbox="allow-scripts" srcDoc={text} title={`Preview of ${open}`} />
@@ -198,6 +205,7 @@ export function Outputs({ slug, ticketId, onCount, focus }: {
           : text.slice(0, 8000).includes("\0") ? binaryNote
           : open && MARKDOWN.test(open) ? <Markdown text={text} />
           : <pre>{text.length > 200_000 ? text.slice(0, 200_000) + "\n…(truncated)" : text}</pre>}
+        </div>
       </div>
     </div>
   );

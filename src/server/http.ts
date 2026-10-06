@@ -1,5 +1,6 @@
-import { existsSync, statSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, join, normalize } from "node:path";
+import { runArtifactJob, type ArtifactJob, type ArtifactOutcome } from "./artifact";
 import { ConflictError, type Board } from "./board";
 import { claudeDefaults, listClaudeProjects, listSessions, liveSessionMatch, pickFolder, processCommands } from "./claude";
 import type { Bus, BusEvent } from "./events";
@@ -19,6 +20,7 @@ import { AGENT_IDS, AgentError, AgentRegistry, type AgentId } from "./agents";
 import { SessionCache } from "./session";
 import { ptySupported, ShellManager, type PtyKind, type Shell } from "./shell";
 import type { TerminalWatcher } from "./terminals";
+import { attachmentHeader, canCopyFile, copyFileToClipboard, markdownPage, markdownTitle, revealFile, ShareError } from "./share";
 import { UpdateChecker } from "./update";
 import { ClaudeLogIndex, readWindows, recordWindow, ticketRuns, ticketUsage, UsageCache, windowsNeeded } from "./ticket-usage";
 import { fetchUsage, type UsageResult } from "./usage";
@@ -50,6 +52,16 @@ export interface ServerDeps {
   usage?: () => Promise<UsageResult>;
   /** Machine-wide Claude Code cost, for a ticket's share of the 5h window (tests pass one on a fixture folder). */
   claudeLogs?: ClaudeLogIndex;
+  /** Publishes output files as claude.ai pages (tests pass a fake). */
+  publishArtifact?: (job: ArtifactJob) => Promise<ArtifactOutcome>;
+}
+
+/** A Share menu publish in progress, or the error of the last one, per output file. Not persisted. */
+interface ShareJob {
+  file: string;
+  state: "publishing" | "failed";
+  error?: string;
+  at: string;
 }
 
 interface ShellSocket {
@@ -119,6 +131,9 @@ export function createServer(deps: ServerDeps) {
   const windowsFile = join(store.root, "usage-windows.json");
   const usage = new UsageCache(deps.usage ?? fetchUsage, (r) => recordWindow(windowsFile, r));
   const claudeLogs = deps.claudeLogs ?? new ClaudeLogIndex();
+  const publishArtifact = deps.publishArtifact ?? ((job: ArtifactJob) => runArtifactJob(job));
+  // "<profile>/<ticket>" -> jobs by output file.
+  const shareJobs = new Map<string, Map<string, ShareJob>>();
 
   const profileOr404 = (slug: string): Profile => {
     const p = store.getProfile(slug);
@@ -174,6 +189,10 @@ export function createServer(deps: ServerDeps) {
       running,
       resumeCommand: t.sessionId ? resumeCommand(t.workdir ?? t.worktree ?? p.path, t.sessionId) : null,
       session,
+      /** Absolute outputs folder, so the Share menu can show where a file is. */
+      outputDir: store.outputsPath(p.slug, t.id),
+      shareJobs: [...(shareJobs.get(`${p.slug}/${t.id}`)?.values() ?? [])],
+      canCopyFile: canCopyFile() || !!process.env.CKANBAN_OSASCRIPT_BIN,
       /** Linked session is open in a terminal right now (board chat still works, UI warns). */
       terminalOpen: deps.terminals?.isOpen(p.slug, t.id) ?? false,
       attention: attentionFor(t, session, running, {
@@ -183,6 +202,61 @@ export function createServer(deps: ServerDeps) {
       }),
     };
   };
+
+  const emitTicket = (slug: string, id: string) => {
+    const t = store.getTicket(slug, id);
+    if (t) bus.emit({ type: "ticket.updated", profile: slug, ticket: t });
+  };
+
+  /**
+   * Publish an output file as a claude.ai page in the background (the helper takes a minute or two).
+   * Markdown is rendered to a standalone page first. Publishing the same file again updates its link.
+   */
+  function startPublish(slug: string, id: string, name: string, file: string): ShareJob {
+    const key = `${slug}/${id}`;
+    const jobs = shareJobs.get(key) ?? new Map<string, ShareJob>();
+    shareJobs.set(key, jobs);
+    if (jobs.get(name)?.state === "publishing") throw new HttpError(409, "this file is already being published");
+    const job: ShareJob = { file: name, state: "publishing", at: nowIso() };
+    jobs.set(name, job);
+    emitTicket(slug, id);
+    const fail = (error: string) => {
+      jobs.set(name, { file: name, state: "failed", error, at: nowIso() });
+      emitTicket(slug, id);
+    };
+    (async () => {
+      let tmp: string | null = null;
+      try {
+        const existing = store.getTicket(slug, id)?.shareLinks?.find((l) => l.file === name)?.url;
+        let page = file;
+        let title: string | undefined;
+        if (/\.(md|markdown)$/i.test(name)) {
+          const md = readFileSync(file, "utf8");
+          const dir = join(store.root, "share-tmp");
+          mkdirSync(dir, { recursive: true });
+          tmp = page = join(dir, `${crypto.randomUUID()}.html`);
+          writeFileSync(tmp, markdownPage(md, name));
+          title = markdownTitle(md, name);
+        } else if (!/\.html?$/i.test(name)) {
+          return fail("only Markdown and HTML files can be published");
+        }
+        const r = await publishArtifact({ kind: "publish", file: page, ...(existing ? { url: existing } : {}), ...(title ? { title } : {}) });
+        if (!r.ok) return fail(r.error);
+        if (r.kind !== "publish") return fail("unexpected helper result");
+        const t = store.getTicket(slug, id);
+        if (!t) return;
+        const links = (t.shareLinks ?? []).filter((l) => l.file !== name);
+        jobs.delete(name);
+        store.updateTicket(slug, id, { shareLinks: [...links, { file: name, url: r.url, at: nowIso() }] });
+        emitTicket(slug, id);
+      } catch (e) {
+        fail(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (tmp) rmSync(tmp, { force: true });
+      }
+    })();
+    return job;
+  }
 
   async function api(req: Request, url: URL): Promise<Response | undefined> {
     const parts = url.pathname.split("/").filter(Boolean).slice(1).map(decodeURIComponent);
@@ -597,10 +671,29 @@ export function createServer(deps: ServerDeps) {
         activity, windows, machineCost: (a, b) => claudeLogs.costBetween(a, b), windowError: "error" in plan ? plan.error : null,
       }));
     }
+    if (action === "outputs" && m === "POST" && parts.length > 5) {
+      // Share menu actions; the user's alone, a board run has no business with the clipboard or Finder.
+      if (req.headers.get(RUN_HEADER)) throw new HttpError(403, "sharing outputs is disabled inside a board run");
+      const name = parts.slice(5).join("/");
+      const file = store.outputPath(slug, id, name);
+      if (!file) throw new HttpError(404, "output not found");
+      const what = url.searchParams.get("action");
+      try {
+        if (what === "reveal") await revealFile(file);
+        else if (what === "copy") await copyFileToClipboard(file);
+        else if (what === "publish") return json(startPublish(slug, id, name, file), 202);
+        else throw new HttpError(400, "action must be reveal, copy or publish");
+      } catch (e) {
+        if (e instanceof ShareError) throw new HttpError(e.status, e.message);
+        throw e;
+      }
+      return json({ ok: true });
+    }
     if (action === "outputs" && m === "GET") {
       if (parts.length === 5) return json(store.listOutputs(slug, id));
       const file = store.outputPath(slug, id, parts.slice(5).join("/"));
       if (!file) throw new HttpError(404, "output not found");
+      const download = url.searchParams.get("download") === "1" ? { "content-disposition": attachmentHeader(basename(file)) } : {};
       // Plain text + sandbox: files are written by Claude and must never run as HTML on this origin.
       // Only raster images get their real type so the viewer can preview them; SVG stays text (it can carry scripts).
       const image = OUTPUT_IMAGE_TYPES[file.slice(file.lastIndexOf(".") + 1).toLowerCase()];
@@ -609,6 +702,7 @@ export function createServer(deps: ServerDeps) {
           "content-type": image ?? "text/plain; charset=utf-8",
           "x-content-type-options": "nosniff",
           "content-security-policy": "sandbox",
+          ...download,
         },
       });
     }
