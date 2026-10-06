@@ -271,7 +271,7 @@ export class Board {
         // Tell the UI the run is over (earlier updates were sent while it was still registered).
         const now = this.store.getTicket(slug, id);
         if (now && !this.shuttingDown) {
-          if (now.runStartedAt || now.interrupted) this.patch(slug, id, { runStartedAt: null, interrupted: null });
+          if (now.runStartedAt || now.interrupted || now.waitingOn) this.patch(slug, id, { runStartedAt: null, interrupted: null, waitingOn: null });
           else this.emitTicket(slug, now);
         }
         // When the user moved the card, updateTicket() writes the new status and dispatches itself.
@@ -282,10 +282,10 @@ export class Board {
 
   private begin(run: ActiveRun) {
     this.patch(run.slug, run.id, run.chat?.quiet
-      ? { error: null, lastActivity: "Claude is replying…", runStartedAt: nowIso() }
+      ? { error: null, lastActivity: "Claude is replying…", runStartedAt: nowIso(), waitingOn: null }
       : run.chat?.mode === "refine"
-      ? { error: null, lastActivity: "Claude is replying…", refineStarted: true, runStartedAt: nowIso() }
-      : { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…", runStartedAt: nowIso() });
+      ? { error: null, lastActivity: "Claude is replying…", refineStarted: true, runStartedAt: nowIso(), waitingOn: null }
+      : { status: "in_progress", outcome: null, error: null, lastActivity: "Starting…", runStartedAt: nowIso(), waitingOn: null });
   }
 
   /** One claude run, then a chat reply for each message that came in too late for it. */
@@ -414,6 +414,12 @@ export class Board {
           pendingActivity = null;
           this.patch(slug, id, { lastActivity: s });
         }
+      },
+      onWaiting: (tasks) => {
+        if (run.stopRequested || this.shuttingDown) return;
+        const what = !tasks ? null : tasks.length === 1 ? `Waiting for background task: ${tasks[0].description}` : `Waiting for ${tasks.length} background tasks`;
+        if (what) pendingActivity = null;
+        this.patch(slug, id, { waitingOn: tasks, ...(what ? { lastActivity: what } : {}) });
       },
     });
 

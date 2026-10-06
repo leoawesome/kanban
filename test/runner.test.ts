@@ -131,3 +131,42 @@ test("buildArgs passes the board's MCP server so every run has the ckanban tools
   expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
   expect(JSON.parse(mcpConfig()).mcpServers.ckanban.args.at(-1)).toBe("mcp");
 });
+
+test("a background task keeps the run open until Claude picks its result up", withMode("background", async () => {
+  const waits: (string[] | null)[] = [];
+  const h = startRun({
+    bin: FAKE, cwd: tempDir(), args: STREAM, input: "scan the logs", onEvent: () => {},
+    onWaiting: (tasks) => waits.push(tasks && tasks.map((t) => t.description)),
+  });
+  const r = await h.done;
+  expect(r.code).toBe(0);
+  const results = r.events.filter((e) => e.type === "result");
+  expect(results.length).toBe(2);
+  expect(results[1].result).toContain("Background result: completed");
+  expect(r.events.some((e) => e.subtype === "task_notification" && e.status === "killed")).toBe(false);
+  expect(waits).toEqual([["Count timeouts"], null]);
+}));
+
+test("input still ends if Claude starts no turn after its last background task", withMode("bgsilent", async () => {
+  const t0 = Date.now();
+  const r = await startRun({ bin: FAKE, cwd: tempDir(), args: STREAM, input: "scan", onEvent: () => {}, graceMs: 200 }).done;
+  expect(r.code).toBe(0);
+  expect(r.events.filter((e) => e.type === "result").length).toBe(1);
+  expect(r.events.find((e) => e.subtype === "task_notification")?.status).toBe("completed");
+  expect(Date.now() - t0).toBeLessThan(5000);
+}));
+
+test("stop while waiting on a background task ends the run", withMode("background", async () => {
+  process.env.FAKE_BG_MS = "30000";
+  try {
+    const waits: unknown[] = [];
+    const h = startRun({ bin: FAKE, cwd: tempDir(), args: STREAM, input: "scan", onEvent: () => {}, onWaiting: (t) => waits.push(t) });
+    while (!waits.length) await Bun.sleep(20);
+    h.stop();
+    await h.done;
+    expect(h.stopped).toBe(true);
+    expect(waits.at(-1)).toBeNull();
+  } finally {
+    delete process.env.FAKE_BG_MS;
+  }
+}), 10000);

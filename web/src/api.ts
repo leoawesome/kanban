@@ -92,6 +92,8 @@ export interface Ticket {
   lastRunAt: string | null;
   /** When the current run or chat reply started (live elapsed time on the card). */
   runStartedAt?: string | null;
+  /** Claude ended its turn and waits for these background tasks; it resumes when they finish. */
+  waitingOn?: { id: string; description: string; startedAt: string }[] | null;
   runCount: number;
   error: string | null;
   /** Non-fatal heads-up about how the ticket runs (e.g. no worktree yet); dismissible. */

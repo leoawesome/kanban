@@ -15,6 +15,14 @@ export interface Profile {
   createdAt: string;
 }
 
+/** A tool Claude left running in the background (a long Bash call, a subagent). */
+export interface BackgroundTask {
+  id: string;
+  description: string;
+  /** When the board first saw it. */
+  startedAt: string;
+}
+
 export interface Ticket {
   id: string;
   title: string;
@@ -39,6 +47,8 @@ export interface Ticket {
   lastRunAt: string | null;
   /** When the current run or chat reply started; null when Claude is not working. Missing on old tickets. */
   runStartedAt?: string | null;
+  /** Claude ended its turn and waits for these background tasks; it resumes when they finish. */
+  waitingOn?: BackgroundTask[] | null;
   runCount: number;
   error: string | null;
   /** Non-fatal heads-up about how the ticket runs (e.g. no worktree yet); the user can dismiss it. */

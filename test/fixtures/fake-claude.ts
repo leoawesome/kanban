@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Fake `claude` CLI for tests. Behaviour controlled by env:
-// FAKE_MODE=ok|fail|slow|partial|blocked|noresult, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
+// FAKE_MODE=ok|fail|slow|partial|blocked|noresult|background|bgsilent, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
 // With --input-format stream-json it reads user messages from stdin like the real CLI: messages that
 // arrive mid-run are picked up at the next step (replayed with --replay-user-messages), later ones
 // get their own turn, and it exits at end of input.
@@ -113,6 +113,11 @@ if (process.env.FAKE_OUTPUT && process.env.CKANBAN_OUTPUT_DIR) {
   writeFileSync(`${process.env.CKANBAN_OUTPUT_DIR}/report.md`, process.env.FAKE_OUTPUT);
 }
 
+// Leaves a task running in the background past its result, like a long Bash call Claude backgrounded.
+const bgMs = Number(process.env.FAKE_BG_MS ?? 300);
+const background = mode === "background" || mode === "bgsilent";
+if (background) emit({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "bg1", task_type: "local_bash", description: "Count timeouts" }] });
+
 drain();
 const steered = heard.slice(1);
 const status = mode === "blocked" ? "blocked" : mode === "questions" ? "questions" : "done";
@@ -125,6 +130,22 @@ for (const chunk of ["Work ", "complete."]) {
 }
 emit({ type: "assistant", message: { content: [{ type: "text", text }] } });
 emit({ type: "result", subtype: "success", is_error: false, result: text, total_cost_usd: 0.01, duration_ms: 100, session_id: sessionId });
+
+// The real CLI kills background tasks at end of input; otherwise it starts a turn when one finishes
+// (bgsilent: it doesn't, so the board has to end input itself).
+if (background) {
+  const t0 = Date.now();
+  while (!eof && Date.now() - t0 < bgMs) await Bun.sleep(10);
+  const status = eof ? "killed" : "completed";
+  emit({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+  emit({ type: "system", subtype: "task_notification", task_id: "bg1", status });
+  if (!eof && mode === "background") {
+    emit({ type: "system", subtype: "init", session_id: sessionId, cwd: process.cwd() });
+    const reply = `Background result: ${status}\nCKANBAN_RESULT: ${JSON.stringify({ status: "done", prUrl: pr, summary: "bg done" })}`;
+    emit({ type: "assistant", message: { content: [{ type: "text", text: reply }] } });
+    emit({ type: "result", subtype: "success", is_error: false, result: reply, session_id: sessionId });
+  }
+}
 
 // Messages that arrive after the turn ended get a turn of their own.
 while (streamIn) {

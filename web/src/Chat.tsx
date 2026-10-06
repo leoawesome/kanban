@@ -14,6 +14,33 @@ import { toast } from "./toast";
 import { Markdown } from "./Transcript";
 import { usePersistentState } from "./usePersistentState";
 
+/** m:ss (h:mm:ss past an hour) since `iso`. */
+function clock(iso: string, now: number): string {
+  const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
+  const mm = String(Math.floor((s % 3600) / 60)), ss = String(s % 60).padStart(2, "0");
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${mm.padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
+}
+
+/** Claude ended its turn to wait for background tasks; the run stays open and it resumes when they finish. */
+function WaitingCard({ tasks }: { tasks: NonNullable<Ticket["waitingOn"]> }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div className="waiting-card" aria-live="polite">
+      <div className="waiting-title"><span className="spinner" /> Waiting for {tasks.length === 1 ? "1 background task" : `${tasks.length} background tasks`}</div>
+      <ul>
+        {tasks.map((t) => (
+          <li key={t.id}><span>{t.description}</span><span className="waiting-time" title={`Started ${fullTime(t.startedAt)}`}>{clock(t.startedAt, now)}</span></li>
+        ))}
+      </ul>
+      <div className="waiting-note">Claude continues automatically when they finish.</div>
+    </div>
+  );
+}
+
 type Block = { kind: "entry"; e: SessionEntry; index: number } | { kind: "tools"; items: SessionEntry[] };
 
 /** Copied history of a branched ticket: entries from before the branch point (at = the branch time). */
@@ -433,7 +460,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
             {liveView(live).preparing && <div className="chat-typing"><span className="spinner" /> {liveView(live).preparing}</div>}
           </div>
         )}
-        {running && !live && (
+        {running && !live && !!ticket.waitingOn?.length && <WaitingCard tasks={ticket.waitingOn} />}
+        {running && !live && !ticket.waitingOn?.length && (
           <div className="chat-typing"><span className="spinner" /> {ticket.lastActivity && ticket.lastActivity !== "Starting…" ? ticket.lastActivity : "Claude is working…"}</div>
         )}
         {pending.filter((p) => p.steer && !queued.some((q) => q.text === p.text)).map((p, i) => (

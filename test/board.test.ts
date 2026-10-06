@@ -1062,3 +1062,26 @@ test("branchTicket of a ticket that ran in place stays in the project folder", a
     delete process.env.CLAUDE_CONFIG_DIR;
   }
 });
+
+test("a run waiting on a background task shows it on the ticket, then finishes with Claude's later turn", async () => {
+  await setup();
+  process.env.FAKE_MODE = "background";
+  process.env.FAKE_BG_MS = "400";
+  try {
+    const t = await board.createTicket("p", { title: "Scan logs", body: "desc", status: "ready" });
+    let seen: any = null;
+    for (let i = 0; i < 200 && !seen; i++) {
+      seen = store.getTicket("p", t.id)?.waitingOn ?? null;
+      await Bun.sleep(10);
+    }
+    expect(seen?.map((x: any) => x.description)).toEqual(["Count timeouts"]);
+    expect(store.getTicket("p", t.id)!.lastActivity).toBe("Waiting for background task: Count timeouts");
+    await board.whenIdle();
+    const got = store.getTicket("p", t.id)!;
+    expect(got.waitingOn ?? null).toBeNull();
+    expect(got.outcome).toBe("done");
+    expect(store.listComments("p", t.id).at(-1)!.text).toBe("bg done");
+  } finally {
+    delete process.env.FAKE_BG_MS;
+  }
+});
