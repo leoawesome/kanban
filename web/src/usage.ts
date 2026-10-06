@@ -52,3 +52,47 @@ export function resetText(iso: string | null, now = Date.now()): string | null {
   if (ms < 24 * 3600_000) return `Resets ${time} (in ${inWords(ms)})`;
   return `Resets ${at.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
 }
+
+// ---------- per-ticket usage (Usage tab) ----------
+
+export type RunKind = "work" | "planning" | "chat" | "reply" | "run";
+
+export interface TicketUsage {
+  runs: { run: number; kind: RunKind; startedAt: string; model: string | null; tokens: number; costUsd: number; pct5h: number | null }[];
+  totals: { costUsd: number; tokens: number; pctCurrentWindow: number | null; pctLifetime: number | null };
+  window: { utilization: number; resetsAt: string; seenAt: string } | null;
+  windowError: string | null;
+}
+
+/** "≈ 6%", "≈ <1%", "–" when unknown. */
+export function approxPct(p: number | null): string {
+  if (p === null) return "–";
+  if (p > 0 && p < 1) return "≈ <1%";
+  return `≈ ${Math.round(p)}%`;
+}
+
+/** "$4.12", "<$0.01". */
+export function costText(usd: number): string {
+  if (usd > 0 && usd < 0.01) return "<$0.01";
+  return `$${usd.toFixed(2)}`;
+}
+
+/** "2.1M", "340k", "820". */
+export function tokenText(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
+  return String(Math.round(n));
+}
+
+/** "claude-opus-5-5[1m]" → "Opus 5.5", "claude-haiku-4-5-20251001" → "Haiku 4.5". */
+export function modelName(id: string | null): string {
+  if (!id) return "–";
+  const m = /(opus|sonnet|haiku|fable|mythos)(?:-(\d+))?(?:-(\d{1,2}))?(?=$|[-[])/i.exec(id.replace(/\[.*\]$/, ""));
+  if (!m) return id;
+  const name = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+  return [name, [m[2], m[3]].filter(Boolean).join(".")].filter(Boolean).join(" ");
+}
+
+export const RUN_KIND_LABEL: Record<RunKind, string> = {
+  work: "Work run", planning: "Planning chat", chat: "Chat", reply: "Reply to a ticket", run: "Run",
+};

@@ -13,6 +13,8 @@ import { Outputs } from "./Outputs";
 import { Select } from "./Select";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
 import { TicketMenu } from "./TicketMenu";
+import { missingPctReason, UsagePanel, usageChipText, useTicketUsage } from "./UsagePanel";
+import { approxPct } from "./usage";
 import { Markdown } from "./Transcript";
 
 // v2: widths saved under the old 80% default are dropped once so the new default shows.
@@ -199,10 +201,13 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const images = useImagePaste(setBody);
   // Body the current edit started from; the server rejects the save if the file changed meanwhile.
   const [baseBody, setBaseBody] = useState(ticket.body);
-  const [tabPick, setTab] = useState<"chat" | "plan" | "outputs">("chat");
+  const [tabPick, setTab] = useState<"chat" | "plan" | "outputs" | "usage">("chat");
   // The Plan tab exists only while the ticket has children.
   const tab = tabPick === "plan" && !children.length ? "chat" : tabPick;
   const [outputCount, setOutputCount] = useState(0);
+  const ticketUsage = useTicketUsage(slug, ticket.id);
+  const usage = ticketUsage.usage;
+  const hasUsage = !!usage?.runs.length;
   // A file to show when the Outputs tab opens (a mockup clicked in the chat).
   const [outputFocus, setOutputFocus] = useState<string | null>(null);
   const [titleSave, setTitleSave] = useState<"saving" | "saved" | null>(null);
@@ -452,8 +457,14 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
 
               {children.length > 0 && <PlanSummary ticket={ticket} children={children} onOpen={() => setTab("plan")} />}
 
-              {(!!ticket.session?.artifacts.length || outputCount > 0) && (
+              {(!!ticket.session?.artifacts.length || outputCount > 0 || hasUsage) && (
                 <div className="result-chips" aria-label="Results">
+                  {usage && hasUsage && (
+                    <button className="result-chip usage-chip" onClick={() => setTab("usage")}
+                      title={usage.totals.pctCurrentWindow === null ? missingPctReason(usage) : "This ticket's ≈ share of the current 5h plan window, and its API-equivalent cost"}>
+                      {usageChipText(usage)}
+                    </button>
+                  )}
                   {outputCount > 0 && (
                     <button className="result-chip" onClick={() => setTab("outputs")}><FileTextIcon size={13} /> {outputCount} output file{outputCount > 1 ? "s" : ""}</button>
                   )}
@@ -518,11 +529,16 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               <button role="tab" aria-selected={tab === "outputs"} className={tab === "outputs" ? "active" : ""} onClick={() => { setOutputFocus(null); setTab("outputs"); }}>
                 Outputs{outputCount > 0 && <span className="tab-count">{outputCount}</span>}
               </button>
+              <button role="tab" aria-selected={tab === "usage"} className={tab === "usage" ? "active" : ""} onClick={() => { ticketUsage.reload(); setTab("usage"); }}>
+                Usage{usage && hasUsage && usage.totals.pctCurrentWindow !== null && <span className="tab-count">{approxPct(usage.totals.pctCurrentWindow).replace(" ", "")}</span>}
+              </button>
             </nav>
             {tab === "plan" ? (
               <div className="panel-scroll panel-plan">
                 <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
               </div>
+            ) : tab === "usage" ? (
+              <div className="panel-scroll panel-usage"><UsagePanel usage={usage} error={ticketUsage.error} /></div>
             ) : tab === "outputs" ? (
               <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticketId={ticket.id} onCount={setOutputCount} focus={outputFocus} /></div>
             ) : (

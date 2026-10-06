@@ -20,6 +20,7 @@ import { SessionCache } from "./session";
 import { ptySupported, ShellManager, type PtyKind, type Shell } from "./shell";
 import type { TerminalWatcher } from "./terminals";
 import { UpdateChecker } from "./update";
+import { ClaudeLogIndex, readWindows, recordWindow, ticketRuns, ticketUsage, UsageCache, windowsNeeded } from "./ticket-usage";
 import { fetchUsage, type UsageResult } from "./usage";
 import type { Store } from "./store";
 import { STATUSES, type Profile, type ScheduleEditor, type Status, type Ticket } from "./types";
@@ -47,6 +48,8 @@ export interface ServerDeps {
   gh?: GhRunner;
   /** Claude plan usage for the header pill (tests pass a fake). */
   usage?: () => Promise<UsageResult>;
+  /** Machine-wide Claude Code cost, for a ticket's share of the 5h window (tests pass one on a fixture folder). */
+  claudeLogs?: ClaudeLogIndex;
 }
 
 interface ShellSocket {
@@ -113,6 +116,9 @@ export function createServer(deps: ServerDeps) {
   const scheduler = deps.scheduler ?? new Scheduler(board, store, bus);
   const agents = deps.agents ?? new AgentRegistry();
   const questions = deps.questions ?? new Questions(store, board);
+  const windowsFile = join(store.root, "usage-windows.json");
+  const usage = new UsageCache(deps.usage ?? fetchUsage, (r) => recordWindow(windowsFile, r));
+  const claudeLogs = deps.claudeLogs ?? new ClaudeLogIndex();
 
   const profileOr404 = (slug: string): Profile => {
     const p = store.getProfile(slug);
@@ -224,7 +230,7 @@ export function createServer(deps: ServerDeps) {
 
     if (parts[0] === "events" && m === "GET") return sse(req);
     if (parts[0] === "version" && m === "GET") return json(await updates.status());
-    if (parts[0] === "usage" && m === "GET") return json(await (deps.usage ?? fetchUsage)());
+    if (parts[0] === "usage" && m === "GET") return json(await usage.get(0));
     if (parts[0] === "inbox" && m === "GET") {
       // Every board: tickets where Claude is waiting on the user (Review is left out on purpose).
       const out = [];
@@ -580,6 +586,17 @@ export function createServer(deps: ServerDeps) {
 
     const action = parts[4];
     if (action === "activity" && m === "GET") return json(store.readActivity(slug, id));
+    if (action === "usage" && m === "GET") {
+      // The usage endpoint rate-limits: a ticket view reuses an answer up to 5 minutes old.
+      const plan = await usage.get(5 * 60_000);
+      const activity = store.readActivity(slug, id);
+      const windows = readWindows(windowsFile);
+      const needed = windowsNeeded(ticketRuns(activity), windows);
+      if (needed.length) await claudeLogs.refresh(Math.min(...needed.map((w) => Date.parse(w.start))));
+      return json(ticketUsage({
+        activity, windows, machineCost: (a, b) => claudeLogs.costBetween(a, b), windowError: "error" in plan ? plan.error : null,
+      }));
+    }
     if (action === "outputs" && m === "GET") {
       if (parts.length === 5) return json(store.listOutputs(slug, id));
       const file = store.outputPath(slug, id, parts.slice(5).join("/"));

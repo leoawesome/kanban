@@ -1,4 +1,4 @@
-import type { UsageResult } from "./usage";
+import type { TicketUsage, UsageResult } from "./usage";
 export type Status = "backlog" | "planning" | "ready" | "in_progress" | "review" | "done";
 export type Outcome = null | "done" | "blocked" | "failed" | "stopped" | "needs_input";
 export type TicketMode = "interview" | "auto";
@@ -439,6 +439,8 @@ export const api = {
     req<{ entries: SessionEntry[]; start: number; total: number; title: string | null }>(
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),
   activity: (slug: string, id: string) => req<ActivityEntry[]>("GET", `${t(slug, id)}/activity`),
+  /** Cost, tokens and ≈ share of the 5h plan window per run. */
+  ticketUsage: (slug: string, id: string) => req<TicketUsage>("GET", `${t(slug, id)}/usage`),
   inbox: () => req<InboxItem[]>("GET", "/api/inbox"),
   schedules: (slug: string) => req<Schedule[]>("GET", sch(slug)),
   createSchedule: (slug: string, input: ScheduleInput) => req<Schedule>("POST", sch(slug), input),

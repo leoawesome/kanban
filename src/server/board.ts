@@ -378,6 +378,8 @@ export class Board {
       draftTimer = null;
       this.bus.emit({ type: "draft", profile: slug, id, text: draft.text });
     };
+    // Marks where this run starts in the log and what it was (the Usage tab lists runs by kind).
+    this.store.appendActivity(slug, id, runNo, { type: "ckanban_run", kind: refine ? "planning" : quiet ? "reply" : run.chat ? "chat" : "work" });
     run.handle = startRun({
       bin: this.opts.claudeBin,
       cwd: session.dir,

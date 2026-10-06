@@ -69,7 +69,10 @@ test("ready ticket runs to review with PR and AI comment", async () => {
   expect(call.args).toContain("--session-id");
   expect(call.args).toContain(got.sessionId!);
   expect(call.cwd).toBe(got.worktree!);
-  expect(store.readActivity("p", t.id).length).toBe(5);
+  const activity = store.readActivity("p", t.id);
+  // The run marker, then the fake claude's events.
+  expect(activity[0].event).toEqual({ type: "ckanban_run", kind: "work" });
+  expect(activity.length).toBe(6);
 });
 
 test("maxParallel limits concurrent runs", async () => {
