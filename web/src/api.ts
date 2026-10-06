@@ -115,6 +115,12 @@ export interface Ticket {
   planKey?: string | null;
   /** Siblings (ticket id or planKey) a running plan finishes before starting this one. */
   dependsOn?: string[];
+  /** Exclusive resources (e.g. emulator): tickets needing the same one never run at the same time, on any board. */
+  needs?: string[];
+  /** For tickets with needs: holds them now, or which ones another ticket holds while this one would start. */
+  resources?: { holding: boolean; waitingFor: string[] } | null;
+  /** A plan child waiting on the user (questions, a proposal to apply, in Planning); the plan won't start it. */
+  userWait?: string | null;
   /** Set once this ticket's plan was started: the board runs its children unattended. */
   plan?: Plan | null;
   /** Messages sent while Claude was working that it has not read yet; "unsent" ones were cut off by Stop. */
@@ -161,7 +167,7 @@ export interface Plan {
   reason?: string | null;
 }
 
-export type NewTicketDraft = { title: string; description: string; key?: string; dependsOn?: string[] };
+export type NewTicketDraft = { title: string; description: string; key?: string; dependsOn?: string[]; needs?: string[] };
 
 export interface QueuedMessage {
   id: string;
@@ -448,10 +454,11 @@ export const api = {
   },
   createTicket: (slug: string, input: {
     title: string; body: string; status: Status; sessionId?: string; mode?: TicketMode; parentId?: string; planKey?: string; dependsOn?: string[];
+    needs?: string[];
   }) => req<Ticket>("POST", t(slug), input),
   plan: (slug: string, id: string, action: "start" | "pause" | "resume" | "done" | "concurrency", maxConcurrent?: number) =>
     req<Ticket>("POST", `${t(slug, id)}/plan`, { action, maxConcurrent }),
-  updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice">> & { expectedBody?: string }) =>
+  updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice" | "needs">> & { expectedBody?: string }) =>
     req<Ticket>("PATCH", t(slug, id), patch),
   deleteTicket: (slug: string, id: string) => req<void>("DELETE", t(slug, id)),
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),

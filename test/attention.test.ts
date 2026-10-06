@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { attentionFor } from "../src/server/attention";
+import { attentionFor, userWaitReason } from "../src/server/attention";
 import type { SessionSummary } from "../src/server/session";
 import type { Ticket } from "../src/server/types";
 
@@ -67,4 +67,15 @@ test("a stuck plan needs the user, unless the ticket is done or every child is f
   expect(attentionFor(T({ status: "review", plan }), null, false)).toEqual({ kind: "blocked", label: "Plan stuck" });
   expect(attentionFor(T({ status: "done", plan }), null, false)).toBeNull();
   expect(attentionFor(T({ status: "review", outcome: "done", plan }), null, false, { planComplete: true })).toEqual({ kind: "review", label: "Ready for review" });
+});
+
+test("userWaitReason: plan children waiting on the user", () => {
+  expect(userWaitReason(T({ status: "backlog" }), null)).toBeNull();
+  expect(userWaitReason(T({ status: "planning" }), null)).toBe("in Planning");
+  expect(userWaitReason(T({ status: "backlog" }), S({ openQuestions: 2 }))).toBe("2 questions for you");
+  expect(userWaitReason(T({ status: "review", outcome: "needs_input" }), null)).toBe("has questions for you");
+  expect(userWaitReason(T({ status: "backlog" }), S({ pendingProposal: { title: "New", description: "d" } }))).toBe("proposal to apply");
+  // Applied already: the ticket matches the proposal.
+  expect(userWaitReason(T({ status: "backlog", title: "New", body: "d" }), S({ pendingProposal: { title: "New", description: "d" } }))).toBeNull();
+  expect(userWaitReason(T({ status: "done" }), S({ openQuestions: 1 }))).toBeNull();
 });

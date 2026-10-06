@@ -38,3 +38,18 @@ export function attentionFor(
   if (t.status === "planning" && s?.lastMessage?.role === "assistant" && !t.interrupted) return { kind: "reply", label: "Claude replied" };
   return null;
 }
+
+/**
+ * Why a plan child waits on the user, or null: a plan never starts it, the user has to answer or apply something
+ * first (or the planner answers its questions with chat_ticket). Done children never wait.
+ */
+export function userWaitReason(t: Ticket, s: SessionSummary | null): string | null {
+  if (t.status === "done") return null;
+  if (t.status === "planning") return "in Planning";
+  const q = s?.openQuestions ?? 0;
+  if (q > 0) return `${q} question${q === 1 ? "" : "s"} for you`;
+  if (t.outcome === "needs_input") return "has questions for you";
+  const p = s?.pendingProposal;
+  if (p && !((!p.title || p.title === t.title) && (!p.description || p.description.trim() === t.body.trim()))) return "proposal to apply";
+  return null;
+}

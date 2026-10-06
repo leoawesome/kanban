@@ -139,6 +139,11 @@ function fakeClient() {
     updateTicket: rec("updateTicket", (_s, _id, patch) => ticket(patch)),
     deleteTicket: rec("deleteTicket", () => undefined),
     chat: rec("chat", () => ticket({ running: true })),
+    adopt: rec("adopt", (_s, _id, ids: string[]) => ({
+      adopted: ids.filter((x) => x !== "t_x").map((id) => ticket({ id, title: `T ${id}` })),
+      skipped: ids.includes("t_x") ? [{ id: "t_x", reason: "belongs to plan t_other" }] : [],
+    })),
+    planAction: rec("planAction", (_s, id) => ticket({ id, plan: { state: "running", maxConcurrent: 2 } })),
     stop: rec("stop", () => ({ stopped: true })),
     comment: rec("comment", () => ({ id: "c2", author: "user", text: "x", at: "" })),
     reportBug: rec("reportBug", () => ({ url: "https://github.com/leoawesome/kanban/issues/7", fallbackUrl: "", error: null, screenshots: [] })),
@@ -460,7 +465,7 @@ test("schedule edits are allowed inside a board run and credited to it; run_sche
 test("planner-scoped ticket tools pass the run to the daemon instead of refusing", async () => {
   const { ctx, calls } = ctxWith({ CKANBAN_TICKET: "site/t_9" }, "/elsewhere");
   expect(TOOLS.filter((t) => t.plannerScope).map((t) => t.name).sort()).toEqual([
-    "chat_ticket", "comment_ticket", "create_ticket", "move_ticket", "stop_ticket", "update_ticket",
+    "adopt_tickets", "chat_ticket", "comment_ticket", "create_ticket", "move_ticket", "plan_control", "stop_ticket", "update_ticket",
   ]);
   await callTool("update_ticket", { id: "t_1", dependsOn: ["api", "t_2"] }, ctx);
   expect(calls.at(-1)).toEqual({ fn: "updateTicket", args: ["site", "t_1", { dependsOn: ["api", "t_2"] }, "site/t_9"] });
@@ -501,4 +506,30 @@ test("list_schedules and schedule_history format for Claude", async () => {
   expect(h).toContain("2026-10-01 09:05  updated body by ticket t_5\n    previous body: old prompt");
   expect(h).toContain('2026-10-01 09:00  fired (schedule): t_5 "Audit 2026-10-01" [review, done]');
   expect(h).toContain("2026-10-01 08:00  skipped (schedule): previous ticket t_4 still queued or running");
+});
+
+test("adopt_tickets and plan_control act on the run's own ticket and pass the run", async () => {
+  const { ctx, calls } = ctxWith({ CKANBAN_TICKET: "site/t_9" }, "/elsewhere");
+  const a = await callTool("adopt_tickets", { ids: ["t_1", "t_x"] }, ctx);
+  expect(a.isError).toBeUndefined();
+  expect(calls.at(-1)).toEqual({ fn: "adopt", args: ["site", "t_9", ["t_1", "t_x"], "site/t_9"] });
+  expect(a.content[0].text).toContain("Adopted 1:");
+  expect(a.content[0].text).toContain("t_x: belongs to plan t_other");
+  expect((await callTool("adopt_tickets", { ids: [] }, ctx)).isError).toBe(true);
+  const p = await callTool("plan_control", { action: "resume" }, ctx);
+  expect(calls.at(-1)).toEqual({ fn: "planAction", args: ["site", "t_9", "resume", "site/t_9"] });
+  expect(p.content[0].text).toContain("is running (2 at a time)");
+  expect((await callTool("plan_control", { action: "pause" }, ctx)).content[0].text).toContain("start or resume");
+  // Outside a run the ticket must be named.
+  const out = ctxWith({}, "/elsewhere");
+  expect((await callTool("plan_control", { profile: "site", action: "start" }, out.ctx)).content[0].text).toContain("id is required");
+});
+
+test("needs and release go through create_ticket and update_ticket", async () => {
+  const { ctx, calls } = ctxWith({ CKANBAN_TICKET: "site/t_9" }, "/elsewhere");
+  await callTool("create_ticket", { title: "Health", needs: [" Emulator "] }, ctx);
+  expect(calls.at(-1)?.args[1]).toMatchObject({ title: "Health", needs: ["emulator"] });
+  await callTool("update_ticket", { id: "t_1", needs: [], release: true }, ctx);
+  expect(calls.at(-1)).toEqual({ fn: "updateTicket", args: ["site", "t_1", { needs: [], parentId: null }, "site/t_9"] });
+  expect((await callTool("update_ticket", { id: "t_1", needs: "emulator" }, ctx)).content[0].text).toContain("needs must be a list");
 });

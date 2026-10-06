@@ -30,8 +30,16 @@ Only if the ckanban tools aren't available: put {"title":"...","description":"..
 
 /** How a planner ticket's chat proposes splitting the work into new tickets; the user creates them by clicking. */
 export const TICKETS_FORMAT = `When the user wants to split the work into separate tickets (this ticket as the planner), first call the ckanban \`list_tickets\` tool to avoid duplicates, then call the \`propose_tickets\` tool ${TOOL_NOTE}, e.g. tickets: [{"key":"api","title":"Short, specific title (under 80 characters)","description":"## Goal\\n...\\n\\n## Context\\n...\\n\\n## Acceptance criteria\\n- ..."},{"key":"ui","title":"...","description":"...","dependsOn":["api"]}]
-Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. "key" is a short unique name; "dependsOn" lists the keys that must be finished first. Give a dependency to tickets that build on each other or likely edit the same files, so they don't run at the same time and conflict. The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket, and can then press Start plan: the board runs the tickets in dependency order and wakes you only when one needs a decision. You cannot create tickets yourself here. If the tool returns an error, fix the input and call it again.
+Each description must be self-contained (goal, context with relevant files, acceptance criteria): another Claude session works on it later without this chat. "key" is a short unique name; "dependsOn" lists the keys that must be finished first. Give a dependency to tickets that build on each other or likely edit the same files, so they don't run at the same time and conflict. Optional "needs" lists exclusive resources a ticket's runs use, e.g. "needs":["emulator"] for tickets that test on a shared device: tickets with the same need never run at the same time, in any order (better than chaining dependsOn when order doesn't matter). The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket, and can then press Start plan: the board runs the tickets in dependency order and wakes you only when one needs a decision. You cannot create tickets yourself here. If the tool returns an error, fix the input and call it again.
 Only if the ckanban tools aren't available: put the same JSON array in ONE <ckanban-tickets>[...]</ckanban-tickets> block in your message instead. ${BLOCK_RULE}`;
+
+/** A ticket's chat can manage other tickets when the user asks for it there (see Board.plannerRights). */
+const MANAGE_RULE = `# Managing tickets (this ticket as manager)
+If the user asks you here to manage, run, control or take over tickets (existing ones, or the ones this ticket proposed), you can, because they asked in this chat:
+1. Find them with the ckanban \`list_tickets\` tool. To take over tickets that already exist, call \`adopt_tickets\` with their ids: they become this ticket's child tickets. Tickets that belong to another plan, finished ones and this ticket itself are skipped; tell the user what was adopted and what was skipped and why.
+2. Order them: \`update_ticket\` with dependsOn (sibling ticket ids) for tickets that build on each other or edit the same files, and needs (e.g. ["emulator"]) for tickets that share a device or other resource only one may use at a time. Leave independent tickets without either: they run in parallel.
+3. Start the plan with \`plan_control\` (action "start", or "resume" for a paused or stuck plan). The board then moves children through Ready, In progress and Review itself, a few at a time, one per resource, and wakes this ticket when one needs a decision. It never starts a child that waits on the user (open questions, a proposal to apply, in Planning). Don't move children to ready yourself unless the user asks.
+If the user only asked to create or adopt tickets, don't start the plan. You can also move, update, chat with, comment on, stop or release (update_ticket release: true) this ticket's own children; every other ticket is refused.`;
 
 /** How a ticket chat offers to branch the ticket; the user's click on the card does the branching. */
 export const BRANCH_FORMAT = `If the user asks to branch this ticket (fork the conversation, try another direction in parallel without losing this one), call the \`propose_branch\` tool ${TOOL_NOTE} with a one-line reason. The board shows a Branch button; the user's click creates "Branch: <title>" in Planning with a copy of this conversation and its own git branch off this ticket's branch (committed work only). Don't create tickets or start the other direction yourself; after the call, end your turn.`;
@@ -265,6 +273,7 @@ How to help:
 - Interview the user about what is still unclear: goal and why, who it is for, scope (must-haves vs nice-to-haves), constraints, how we know it's done. Ask only what matters for this ticket, in small rounds.
 - When you know enough (or the user asks), propose the improved ticket. After the user applies it they will move it to Ready and Claude will work on it autonomously, so make it self-contained.
 - Otherwise reply naturally and briefly, like in a normal chat.
+- If the user asks you to manage, run or take over tickets (adopt them, start the plan): this Planning chat is read-only and can't change the board. Tell them to move this ticket out of Backlog/Planning (e.g. to Review) and send the request again, or to press Start plan in the Plan tab.
 ${bugReportRule(t)}
 
 ${mockupsRule(outputDir)}
@@ -290,6 +299,9 @@ ${bugReportRule(t)}
 If the message asks for new or follow-up tickets from this ticket: do not modify any files or start that work. Write each description from what you know here (files, decisions, what shipped), so the new ticket's Claude needs no other context. ${TICKETS_FORMAT}
 ${BRANCH_FORMAT}
 If proposing tickets or a branch was all the message asked for, put <ckanban-stay/> on its own line before the result line: the card then stays in its column.
+
+${MANAGE_RULE}
+If managing tickets (adopting, ordering, starting the plan) was all the message asked for, also end with <ckanban-stay/>.
 
 ${targetDesignRule(outputDir)}${QUESTIONS_FORMAT}
 
@@ -342,7 +354,7 @@ Decide each event and act with the ckanban MCP tools, then end the run; the boar
 - Don't do a child's work yourself in this session; keep this reply short.`;
   return `${head}
 
-${context("Plan update from the board", `You are the planner (orchestrator) of ticket "${t.title}" (${t.id}) on board ${o.board}. The board runs this ticket's child tickets unattended, in dependency order, a few at a time, and wakes you only when a decision is needed. The user is not watching.
+${context("Plan update from the board", `You are the planner (orchestrator) of ticket "${t.title}" (${t.id}) on board ${o.board}. The board runs this ticket's child tickets unattended, in dependency order, a few at a time, one ticket per exclusive resource (needs) at a time, and wakes you only when a decision is needed. It never starts a child that waits on the user (open questions, a proposal to apply, in Planning). The user is not watching.
 
 # Child tickets
 ${o.table}
@@ -350,7 +362,8 @@ ${o.table}
 ${job}
 
 # Your board rights
-The ckanban MCP tools create_ticket, update_ticket (title, body, status, mode, dependsOn), move_ticket, chat_ticket, stop_ticket and comment_ticket work on THIS plan's child tickets only; everything else on the board is refused. create_ticket here always makes a child of this plan in Backlog (auto mode). Every change is logged on the child.
+The ckanban MCP tools create_ticket, update_ticket (title, body, status, mode, dependsOn, needs, release), move_ticket, chat_ticket, stop_ticket and comment_ticket work on THIS plan's child tickets only; everything else on the board is refused. create_ticket here always makes a child of this plan in Backlog (auto mode). Every change is logged on the child.
+Children that share a device or other resource only one may use at a time (e.g. the Android emulator) should have needs (e.g. ["emulator"]) instead of a dependsOn chain: the board then runs them one at a time, in any order, while the others keep going.
 
 # When you need the user
 End with status "blocked" (or "questions" after asking with the ask_questions tool) only when a human must decide or fix something. That pauses the plan and notifies the user. Otherwise end with "done".

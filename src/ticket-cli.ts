@@ -9,8 +9,8 @@ import { AGENT_IDS, AgentRegistry, type AgentId } from "./server/agents";
 export const TICKET_USAGE = `  ckanban profiles     List boards (profiles) and their folders
   ckanban ticket list [--status <s>]
   ckanban ticket show <id>
-  ckanban ticket create --title <t> [--body <md> | --body-file <f>] [--status <s>] [--mode interview|auto]
-  ckanban ticket update <id> [--title <t>] [--body <md> | --body-file <f>] [--status <s>] [--mode <m>]
+  ckanban ticket create --title <t> [--body <md> | --body-file <f>] [--status <s>] [--mode interview|auto] [--needs <r1,r2>]
+  ckanban ticket update <id> [--title <t>] [--body <md> | --body-file <f>] [--status <s>] [--mode <m>] [--needs <r1,r2>]
   ckanban ticket move <id> <status>
   ckanban ticket chat <id> <message>
   ckanban ticket comment <id> <text>
@@ -59,6 +59,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
   return { positional, flags };
+}
+
+/** --needs emulator,gpu → ["emulator", "gpu"]; --needs "" clears the list. */
+function needsFlag(p: ParsedArgs): string[] | undefined {
+  const v = flagStr(p, "needs");
+  if (v === undefined) return undefined;
+  return v.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
 }
 
 function flagStr(p: ParsedArgs, name: string): string | undefined {
@@ -142,6 +149,7 @@ export async function ticketCommand(argv: string[], io: CliIo = defaultIo()): Pr
         body: bodyFrom(p, io.stdin) ?? "",
         status: status ? parseStatus(status) : "backlog",
         mode: mode ? parseMode(mode) : "interview",
+        ...(needsFlag(p)?.length ? { needs: needsFlag(p) } : {}),
       });
       return print(t, `Created ${t.id} on ${slug} in ${t.status} (${t.mode} mode): ${t.title}`);
     }
@@ -159,7 +167,9 @@ export async function ticketCommand(argv: string[], io: CliIo = defaultIo()): Pr
         if (status) patch.status = parseStatus(status);
         const mode = flagStr(p, "mode");
         if (mode) patch.mode = parseMode(mode);
-        if (!Object.keys(patch).length) throw new ClientError("nothing to change: pass --title, --body, --status or --mode");
+        const needs = needsFlag(p);
+        if (needs) patch.needs = needs;
+        if (!Object.keys(patch).length) throw new ClientError("nothing to change: pass --title, --body, --status, --mode or --needs");
       }
       const t = await c.updateTicket(slug, tid, patch);
       return print(t, `Updated ${ticketLine(t)}`);

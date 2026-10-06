@@ -23,6 +23,13 @@ export function isComplete(t: Ticket): boolean {
   return t.status === "done" || (t.status === "review" && t.outcome === "done" && !t.prUrl);
 }
 
+/** Resource names as stored: trimmed, lowercase, no blanks or repeats. */
+export function normalizeNeeds(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out = v.filter((x): x is string => typeof x === "string").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  return [...new Set(out)];
+}
+
 /** A dependency names a sibling by ticket id or planKey. */
 export function resolveDeps(t: Ticket, siblings: Ticket[]): { deps: Ticket[]; missing: string[] } {
   const deps: Ticket[] = [];
@@ -89,6 +96,17 @@ export interface PlanStep {
   awaitingMerge: number;
   /** Nothing is running, nothing can start and not everything is done. */
   deadEnd: string | null;
+  /** Backlog children that could start but wait for a resource another ticket holds. */
+  resourceWait: { id: string; resources: string[] }[];
+  /** Open children waiting on the user (questions, a proposal to apply, in Planning); never started by the plan. */
+  userWait: { id: string; reason: string }[];
+}
+
+export interface PlanStepOptions {
+  /** Resources this ticket needs that another ticket (on any board) holds right now. */
+  held?: (t: Ticket) => string[];
+  /** Why this ticket waits on the user, or null. */
+  waitingOnUser?: (t: Ticket) => string | null;
 }
 
 function lastError(t: Ticket): string {
@@ -97,7 +115,7 @@ function lastError(t: Ticket): string {
 }
 
 /** What a running plan should do next, given its children (pure, so it is easy to test). */
-export function planStep(plan: Plan, children: Ticket[], running: (id: string) => boolean): PlanStep {
+export function planStep(plan: Plan, children: Ticket[], running: (id: string) => boolean, opts: PlanStepOptions = {}): PlanStep {
   const seen = plan.seen ?? {};
   const events: PlanEvent[] = [];
   let active = 0;
@@ -119,27 +137,55 @@ export function planStep(plan: Plan, children: Ticket[], running: (id: string) =
     else if (ev && t.prUrl && t.outcome === "done") awaitingMerge++;
   }
   const allComplete = children.length > 0 && children.every(isComplete);
+  const userWait: PlanStep["userWait"] = [];
+  for (const t of children) {
+    if (isComplete(t) || running(t.id) || t.status === "ready" || t.status === "in_progress") continue;
+    const reason = opts.waitingOnUser?.(t) ?? null;
+    if (reason) userWait.push({ id: t.id, reason });
+  }
   const start: string[] = [];
+  const resourceWait: PlanStep["resourceWait"] = [];
+  // Resources taken by children this step starts: two children needing the emulator don't both start.
+  const claimed = new Set<string>();
   const room = Math.max(1, plan.maxConcurrent) - active;
   for (const t of children) {
-    if (start.length >= room) break;
     if (t.status !== "backlog" || running(t.id)) continue;
+    if (userWait.some((w) => w.id === t.id)) continue;
     const { deps, missing } = resolveDeps(t, children);
-    if (!missing.length && deps.every(isComplete)) start.push(t.id);
+    if (missing.length || !deps.every(isComplete)) continue;
+    const busy = [...new Set([...(opts.held?.(t) ?? []), ...(t.needs ?? []).filter((r) => claimed.has(r))])];
+    if (busy.length) {
+      resourceWait.push({ id: t.id, resources: busy });
+      continue;
+    }
+    if (start.length >= room) continue;
+    start.push(t.id);
+    for (const r of t.needs ?? []) claimed.add(r);
   }
   let deadEnd: string | null = null;
-  if (!allComplete && !active && !start.length && !events.length && !awaitingMerge) {
-    const open = children.filter((t) => !isComplete(t)).map((t) => `"${t.title}" (${t.status}${t.outcome ? `, ${t.outcome}` : ""})`);
-    deadEnd = `nothing can run; not done yet: ${open.slice(0, 8).join(", ")}${open.length > 8 ? ` and ${open.length - 8} more` : ""}`;
+  // Waiting for a resource is not a dead end: whoever holds it finishes and the board checks again.
+  if (!allComplete && !active && !start.length && !events.length && !awaitingMerge && !resourceWait.length) {
+    const label = (t: Ticket) => `"${t.title}"`;
+    const you = userWait.map((w) => `${label(children.find((c) => c.id === w.id)!)} (${w.reason})`);
+    const open = children.filter((t) => !isComplete(t) && !userWait.some((w) => w.id === t.id))
+      .map((t) => `${label(t)} (${t.status}${t.outcome ? `, ${t.outcome}` : ""})`);
+    const list = (xs: string[]) => `${xs.slice(0, 8).join(", ")}${xs.length > 8 ? ` and ${xs.length - 8} more` : ""}`;
+    deadEnd = [
+      you.length ? `waiting for you: ${list(you)}` : null,
+      open.length ? `${you.length ? "also not done" : "nothing can run; not done yet"}: ${list(open)}` : null,
+    ].filter(Boolean).join("; ");
   }
-  return { start, events, allComplete, active, awaitingMerge, deadEnd };
+  return { start, events, allComplete, active, awaitingMerge, deadEnd, resourceWait, userWait };
 }
 
 /** One line per child for the planner's prompt. */
 export function planTable(children: Ticket[]): string {
   return children.map((t) => {
     const deps = resolveDeps(t, children).deps.map((d) => d.id);
-    const bits = [t.status, t.outcome, t.prUrl ? `PR ${t.prUrl}` : null, deps.length ? `waits for ${deps.join(", ")}` : null].filter(Boolean);
+    const bits = [
+      t.status, t.outcome, t.prUrl ? `PR ${t.prUrl}` : null, deps.length ? `waits for ${deps.join(", ")}` : null,
+      t.needs?.length ? `needs ${t.needs.join(", ")}` : null,
+    ].filter(Boolean);
     return `- ${t.id}${t.planKey ? ` [${t.planKey}]` : ""} "${t.title}": ${bits.join("; ")}`;
   }).join("\n");
 }

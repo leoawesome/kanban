@@ -17,6 +17,7 @@ import { TicketMenu } from "./TicketMenu";
 import { missingPctReason, UsagePanel, usageChipText, useTicketUsage } from "./UsagePanel";
 import { approxPct } from "./usage";
 import { Markdown } from "./Transcript";
+import { NeedsField } from "./Needs";
 
 // v2: widths saved under the old 80% default are dropped once so the new default shows.
 const WIDTH_KEY = "ckanban.panelWidth.v2";
@@ -420,7 +421,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
 
               {ticket.parentId && (
                 <div className="field-row">
-                  <span className="field-key" title="The planner ticket whose chat proposed this one">From</span>
+                  <span className="field-key" title="The planner ticket whose plan runs this one (it proposed or adopted it)">From</span>
                   {parent ? (
                     <button className="link-btn ticket-link" onClick={() => onOpenTicket(parent.id)}>{parent.title}</button>
                   ) : (
@@ -456,6 +457,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                   </span>
                 </div>
               )}
+
+              <NeedsField slug={slug} ticket={ticket} onError={onError} />
 
               {children.length > 0 && <PlanSummary ticket={ticket} children={children} onOpen={() => setTab("plan")} />}
 

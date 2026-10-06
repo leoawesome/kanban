@@ -38,6 +38,16 @@ export interface TicketInfo {
   runStartedAt?: string | null;
   error: string | null;
   scheduleId?: string | null;
+  /** Planner ticket whose plan runs this one. */
+  parentId?: string | null;
+  planKey?: string | null;
+  dependsOn?: string[];
+  /** Exclusive resources (e.g. emulator): tickets needing the same one never run at the same time. */
+  needs?: string[];
+  resources?: { holding: boolean; waitingFor: string[] } | null;
+  /** Plan child waiting on the user: the plan won't start it until then. */
+  userWait?: string | null;
+  plan?: { state: string; maxConcurrent: number } | null;
   createdAt: string;
   updatedAt: string;
   attention?: { kind: string } | null;
@@ -111,6 +121,14 @@ export interface TicketPatch {
   status?: Status;
   mode?: TicketMode;
   dependsOn?: string[];
+  needs?: string[];
+  /** null takes the ticket out of its plan. */
+  parentId?: null;
+}
+
+export interface AdoptReply {
+  adopted: TicketInfo[];
+  skipped: { id: string; reason: string }[];
 }
 
 export interface BugReportRequest {
@@ -174,8 +192,15 @@ export class BoardClient {
   listTickets = (slug: string) => this.req<TicketInfo[]>("GET", this.t(slug));
   getTicket = (slug: string, id: string) => this.req<TicketInfo>("GET", this.t(slug, id));
   // `run` (a board run's CKANBAN_TICKET): the daemon only lets a running plan's planner change its own children.
-  createTicket = (slug: string, input: { title: string; body?: string; status?: Status; mode?: TicketMode; planKey?: string; dependsOn?: string[] }, run?: string | null) =>
-    this.req<TicketInfo>("POST", this.t(slug), input, this.by(run));
+  createTicket = (
+    slug: string,
+    input: { title: string; body?: string; status?: Status; mode?: TicketMode; planKey?: string; dependsOn?: string[]; needs?: string[] },
+    run?: string | null,
+  ) => this.req<TicketInfo>("POST", this.t(slug), input, this.by(run));
+  // From a run, only the planner's own plan, and only with planner rights (see Board.plannerRights).
+  planAction = (slug: string, id: string, action: "start" | "resume", run?: string | null) =>
+    this.req<TicketInfo>("POST", `${this.t(slug, id)}/plan`, { action }, this.by(run));
+  adopt = (slug: string, id: string, ids: string[], run?: string | null) => this.req<AdoptReply>("POST", `${this.t(slug, id)}/adopt`, { ids }, this.by(run));
   updateTicket = (slug: string, id: string, patch: TicketPatch, run?: string | null) => this.req<TicketInfo>("PATCH", this.t(slug, id), patch, this.by(run));
   deleteTicket = (slug: string, id: string) => this.req<void>("DELETE", this.t(slug, id));
   chat = (slug: string, id: string, text: string, run?: string | null) => this.req<TicketInfo>("POST", `${this.t(slug, id)}/chat`, { text }, this.by(run));
@@ -315,7 +340,8 @@ function state(t: TicketInfo): string {
 }
 
 export function ticketLine(t: TicketInfo): string {
-  return `${t.id}  [${state(t)}]  ${t.title}`;
+  const extra = [t.parentId ? `in plan ${t.parentId}` : null, t.needs?.length ? `needs ${t.needs.join(", ")}` : null].filter(Boolean);
+  return `${t.id}  [${state(t)}]  ${t.title}${extra.length ? `  (${extra.join("; ")})` : ""}`;
 }
 
 export function ticketText(t: TicketInfo, comments: CommentInfo[] = []): string {
@@ -326,6 +352,14 @@ export function ticketText(t: TicketInfo, comments: CommentInfo[] = []): string 
     `mode: ${t.mode ?? "auto"}`,
   ];
   if (t.scheduleId) lines.push(`schedule: ${t.scheduleId} (created by this schedule; see list_schedules)`);
+  if (t.parentId) lines.push(`plan: child of ${t.parentId}${t.planKey ? ` (key ${t.planKey})` : ""}`);
+  if (t.dependsOn?.length) lines.push(`depends on: ${t.dependsOn.join(", ")}`);
+  if (t.needs?.length) {
+    const r = t.resources;
+    const now = r?.holding ? " (in use by this ticket)" : r?.waitingFor.length ? ` (waiting for ${r.waitingFor.join(", ")})` : "";
+    lines.push(`needs: ${t.needs.join(", ")}${now}`);
+  }
+  if (t.userWait) lines.push(`waiting on the user: ${t.userWait}`);
   if (t.branch) lines.push(`branch: ${t.branch}`);
   if (t.prUrl) lines.push(`pr: ${t.prUrl}`);
   if (t.lastActivity) lines.push(`activity: ${t.lastActivity}`);

@@ -29,6 +29,8 @@ export interface TicketProposal {
 export interface NewTicketDraft extends TicketProposal {
   key?: string;
   dependsOn?: string[];
+  /** Exclusive resources (e.g. emulator), see Ticket.needs. */
+  needs?: string[];
 }
 
 export interface SessionEntry {
@@ -145,6 +147,8 @@ export function parseNewTickets(v: any): NewTicketDraft[] | null {
     if (key) d.key = key;
     const deps = Array.isArray(x?.dependsOn) ? x.dependsOn.filter((k: unknown) => typeof k === "string" && k.trim()).map((k: string) => k.trim()) : [];
     if (deps.length) d.dependsOn = deps;
+    const needs = Array.isArray(x?.needs) ? x.needs.filter((k: unknown) => typeof k === "string" && k.trim()).map((k: string) => k.trim().toLowerCase()) : [];
+    if (needs.length) d.needs = needs;
     return d;
   }).filter((x) => x.title);
   return ts.length ? ts : null;

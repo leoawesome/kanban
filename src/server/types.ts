@@ -61,6 +61,11 @@ export interface Ticket {
   planKey?: string | null;
   /** Siblings (ticket id or planKey) that must be done before a running plan starts this ticket. */
   dependsOn?: string[];
+  /**
+   * Exclusive resources this ticket's runs use (e.g. "emulator"), lowercase. Tickets that need the same one never
+   * run at the same time, on any board of this machine; it adds no order (that is dependsOn).
+   */
+  needs?: string[];
   /** Ticket this one was branched from (a copy of its conversation and committed code). Not a plan parent. */
   branchedFrom?: string | null;
   /** When the branch was made: conversation entries before this are the copied history. */
@@ -145,6 +150,8 @@ export interface Interrupted {
   prompt?: { text: string; raw?: boolean };
   /** Held back while a restart waited, not cut off: resumed without the interruption note. */
   held?: boolean;
+  /** The reply answers a message the user typed (see ActiveRun.chat.user); the resumed run keeps its rights. */
+  user?: boolean;
 }
 
 export interface QueuedMessage {
@@ -158,6 +165,8 @@ export interface QueuedMessage {
    * a reply run it starts leaves the card, outcome and run count alone.
    */
   peer?: boolean;
+  /** Sent by a planner's run (chat_ticket), not typed by the user: the reply run gets no planner rights of its own. */
+  fromPlanner?: boolean;
 }
 
 /** A question one ticket's Claude asked another's (ask_ticket), kept per board in questions.json. */

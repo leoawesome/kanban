@@ -18,11 +18,11 @@ export async function startDaemon(): Promise<void> {
   const config = store.config();
   const port = Number(process.env.CKANBAN_PORT) || config.port;
   const bus = new Bus();
-  const board = new Board(store, bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
+  const sessions = new SessionCache();
+  const board = new Board(store, bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude", sessionSummary: (id) => sessions.summary(id) });
   const webDir = join(import.meta.dir, "..", "..", "web", "dist");
   const embedded = Object.keys(WEB_ASSETS).length > 0;
   if (!embedded && !existsSync(join(webDir, "index.html"))) console.warn("web UI not built yet: run `bun run build:web`");
-  const sessions = new SessionCache();
   const terminals = new TerminalWatcher(store, bus, sessions);
   const shells = new ShellManager();
   const mcp = new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude", seenFile: join(store.root, "mcp-seen.json") });

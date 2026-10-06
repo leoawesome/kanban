@@ -150,3 +150,132 @@ test("Mark plan done closes a stuck plan with open children, without waking the 
   expect(store.listComments("p", planner.id).at(-1)!.text).toBe("Plan marked done.");
   expect(() => board.markPlanDone("p", kids[0].id)).toThrow(/no plan/);
 });
+
+/** Tracks which tickets are In progress at once (by title). */
+function liveTracker() {
+  const live = new Set<string>();
+  const overlaps: string[][] = [];
+  bus.on((ev) => {
+    if (ev.type !== "ticket.updated") return;
+    if (ev.ticket.status === "in_progress") live.add(ev.ticket.title);
+    else live.delete(ev.ticket.title);
+    overlaps.push([...live].sort());
+  });
+  return overlaps;
+}
+
+test("children that need the emulator run one at a time; a child without needs runs alongside", async () => {
+  process.env.FAKE_STEP_MS = "60";
+  const planner = await board.createTicket("p", { title: "Plan", body: "", status: "backlog" });
+  const mk = (title: string, needs?: string[]) => board.createTicket("p", { title, body: "", status: "backlog", parentId: planner.id, needs });
+  const kids = [await mk("E1", ["Emulator "]), await mk("E2", ["emulator"]), await mk("E3", ["emulator"]), await mk("Free")];
+  expect(kids[0].needs).toEqual(["emulator"]);
+  const seen = liveTracker();
+  board.startPlan("p", planner.id, { maxConcurrent: 3 });
+  // Right away: E1 holds the emulator, E2 and E3 wait for it in Backlog.
+  expect(board.resourceState("p", store.getTicket("p", kids[1].id)!)).toEqual({ holding: false, waitingFor: ["emulator"] });
+  expect(store.getTicket("p", kids[1].id)!.status).toBe("backlog");
+  await settle();
+  const emu = (s: string[]) => s.filter((t) => t.startsWith("E")).length;
+  expect(Math.max(...seen.map(emu))).toBe(1);
+  expect(seen.some((s) => s.includes("Free") && emu(s) === 1)).toBe(true);
+  for (const k of kids) expect(store.getTicket("p", k.id)!.outcome).toBe("done");
+  expect(store.getTicket("p", planner.id)!.plan?.state).toBe("done");
+}, 30000);
+
+test("tickets on different boards that need the same resource never run at the same time", async () => {
+  process.env.FAKE_STEP_MS = "40";
+  const p2: Profile = { name: "Q", slug: "q", path: await makeRepo(), baseBranch: "main", maxParallel: 5, model: null, createdAt: new Date().toISOString() };
+  store.saveProfile(p2);
+  const seen = liveTracker();
+  const a = await board.createTicket("p", { title: "A", body: "", status: "ready", needs: ["emulator"] });
+  const b = await board.createTicket("q", { title: "B", body: "", status: "ready", needs: ["emulator"] });
+  const c = await board.createTicket("q", { title: "C", body: "", status: "ready" });
+  // B keeps its place in Ready while A has the emulator; C (no needs) starts anyway.
+  expect(board.isRunning("q", b.id)).toBe(false);
+  expect(board.resourceState("q", store.getTicket("q", b.id)!)).toEqual({ holding: false, waitingFor: ["emulator"] });
+  expect(board.isRunning("q", c.id)).toBe(true);
+  await settle();
+  expect(seen.some((s) => s.includes("A") && s.includes("B"))).toBe(false);
+  expect(store.getTicket("p", a.id)!.outcome).toBe("done");
+  expect(store.getTicket("q", b.id)!.outcome).toBe("done");
+}, 30000);
+
+test("a plan never starts a child waiting on the user, and stops naming it once nothing else is left", async () => {
+  (board as any).sessionSummary = (sid: string) => (sid === "s-asks" ? { openQuestions: 2, pendingProposal: null } : null);
+  const planner = await board.createTicket("p", { title: "Plan", body: "", status: "backlog" });
+  const asks = await board.createTicket("p", { title: "Asks", body: "", status: "backlog", parentId: planner.id });
+  store.updateTicket("p", asks.id, { sessionId: "s-asks" });
+  const ok = await board.createTicket("p", { title: "Ok", body: "", status: "backlog", parentId: planner.id });
+  board.startPlan("p", planner.id);
+  await settle();
+  expect(store.getTicket("p", asks.id)!.status).toBe("backlog");
+  expect(store.getTicket("p", ok.id)!.outcome).toBe("done");
+  const p = store.getTicket("p", planner.id)!;
+  expect(p.plan?.state).toBe("stuck");
+  expect(p.plan?.reason).toBe('waiting for you: "Asks" (2 questions for you)');
+}, 30000);
+
+test("adopting existing tickets: skip reasons, a growing plan, and releasing", async () => {
+  const grand = await board.createTicket("p", { title: "Grand", body: "", status: "backlog" });
+  const mgr = await board.createTicket("p", { title: "Manager", body: "", status: "review", parentId: grand.id });
+  const other = await board.createTicket("p", { title: "Other plan", body: "", status: "backlog" });
+  const a = await board.createTicket("p", { title: "A", body: "", status: "backlog", needs: ["emulator"] });
+  const b = await board.createTicket("p", { title: "B", body: "", status: "review" });
+  const taken = await board.createTicket("p", { title: "Taken", body: "", status: "backlog", parentId: other.id });
+  const fin = await board.createTicket("p", { title: "Fin", body: "", status: "done" });
+  const r = board.adoptTickets("p", mgr.id, [a.id, b.id, taken.id, fin.id, mgr.id, grand.id, "t_nope", a.id]);
+  expect(r.adopted.map((t) => t.title)).toEqual(["A", "B"]);
+  expect(r.skipped).toEqual([
+    { id: taken.id, reason: `belongs to plan ${other.id}` },
+    { id: fin.id, reason: "already done" },
+    { id: mgr.id, reason: "that is this ticket itself" },
+    { id: grand.id, reason: "it is a parent of this ticket (that would make a cycle)" },
+    { id: "t_nope", reason: "not found on board p" },
+  ]);
+  // Adopted tickets keep column and needs, and nothing starts.
+  expect(store.getTicket("p", a.id)).toMatchObject({ parentId: mgr.id, status: "backlog", needs: ["emulator"] });
+  expect(store.getTicket("p", b.id)!.status).toBe("review");
+  expect(store.listComments("p", a.id).at(-1)!.text).toContain(`Adopted by plan ${mgr.id}`);
+  expect(board.adoptTickets("p", mgr.id, [a.id]).skipped).toEqual([{ id: a.id, reason: "already in this plan" }]);
+
+  // B waits for A; A can't leave the plan while B depends on it.
+  await board.updateTicket("p", b.id, { dependsOn: [a.id] });
+  await expect(board.updateTicket("p", a.id, { parentId: null })).rejects.toThrow(/"B" depends on this ticket/);
+  await board.updateTicket("p", b.id, { parentId: null });
+  expect(store.getTicket("p", b.id)).toMatchObject({ parentId: null, dependsOn: [] });
+
+  // A plan under way counts adopted tickets toward its caps.
+  board.startPlan("p", mgr.id);
+  board.pausePlan("p", mgr.id);
+  const before = store.getTicket("p", mgr.id)!.plan!.originalCount;
+  const c = await board.createTicket("p", { title: "C", body: "", status: "backlog" });
+  board.adoptTickets("p", mgr.id, [c.id]);
+  expect(store.getTicket("p", mgr.id)!.plan!.originalCount).toBe(before + 1);
+}, 30000);
+
+test("planner rights: a reply to the user's own chat message, or any run of a running plan", async () => {
+  process.env.FAKE_STEP_MS = "100";
+  const mgr = await board.createTicket("p", { title: "Manager", body: "", status: "review" });
+  expect(board.plannerRights("p", mgr.id)).toBeNull();
+  await board.chat("p", mgr.id, "manage tickets A and B");
+  expect(board.userChatRun("p", mgr.id)).toBe(true);
+  expect(board.plannerRights("p", mgr.id)?.id).toBe(mgr.id);
+  await settle();
+  expect(board.plannerRights("p", mgr.id)).toBeNull();
+  // A message from a planner's run (chat_ticket) doesn't hand rights on.
+  await board.chat("p", mgr.id, "from the planner", { fromPlanner: true });
+  expect(board.isRunning("p", mgr.id)).toBe(true);
+  expect(board.plannerRights("p", mgr.id)).toBeNull();
+  await settle();
+  // An ordinary work run doesn't either.
+  const w = await board.createTicket("p", { title: "Work", body: "", status: "ready" });
+  expect(board.isRunning("p", w.id)).toBe(true);
+  expect(board.plannerRights("p", w.id)).toBeNull();
+  await settle();
+  // Nor a chat on a ticket whose plan is done.
+  store.updateTicket("p", mgr.id, { plan: { state: "done", maxConcurrent: 2, wakeups: 0, startedAt: "", originalCount: 1 } });
+  await board.chat("p", mgr.id, "again");
+  expect(board.plannerRights("p", mgr.id)).toBeNull();
+  await settle();
+}, 30000);

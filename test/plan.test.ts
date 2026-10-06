@@ -88,3 +88,40 @@ test("isComplete, wakeupCap, planTable", () => {
   const { a, b } = abcde();
   expect(planTable([a, b])).toBe(`- ${a.id} [a] "A": backlog\n- ${b.id} [b] "B": backlog; waits for ${a.id}`);
 });
+
+test("children that need the same resource start one at a time; others start in parallel", () => {
+  const e1 = T({ title: "E1", needs: ["emulator"] });
+  const e2 = T({ title: "E2", needs: ["emulator"] });
+  const e3 = T({ title: "E3", needs: ["emulator"] });
+  const free = T({ title: "Free" });
+  const s = planStep(plan({ maxConcurrent: 3 }), [e1, e2, e3, free], idle);
+  expect(s.start).toEqual([e1.id, free.id]);
+  expect(s.resourceWait).toEqual([{ id: e2.id, resources: ["emulator"] }, { id: e3.id, resources: ["emulator"] }]);
+  // Held elsewhere (another ticket, maybe on another board): nothing needing it starts, and that is not a dead end.
+  const held = planStep(plan({ maxConcurrent: 3 }), [e2, e3], idle, { held: (t) => (t.needs ?? []).filter((n) => n === "emulator") });
+  expect(held.start).toEqual([]);
+  expect(held.resourceWait.map((w) => w.id)).toEqual([e2.id, e3.id]);
+  expect(held.deadEnd).toBeNull();
+});
+
+test("children waiting on the user are never started; alone they end the plan with a reason naming them", () => {
+  const asks = T({ title: "Asks" });
+  const ok = T({ title: "Ok" });
+  const why = (t: Ticket) => (t.id === asks.id ? "2 questions for you" : null);
+  const s = planStep(plan(), [asks, ok], idle, { waitingOnUser: why });
+  expect(s.start).toEqual([ok.id]);
+  expect(s.userWait).toEqual([{ id: asks.id, reason: "2 questions for you" }]);
+  expect(s.deadEnd).toBeNull();
+  const done = { ...ok, status: "done" as const };
+  const end = planStep(plan(), [asks, done], idle, { waitingOnUser: why });
+  expect(end.start).toEqual([]);
+  expect(end.deadEnd).toBe('waiting for you: "Asks" (2 questions for you)');
+  // A child that depends on it is listed too.
+  const after = T({ title: "After", dependsOn: [asks.id] });
+  expect(planStep(plan(), [asks, done, after], idle, { waitingOnUser: why }).deadEnd)
+    .toBe('waiting for you: "Asks" (2 questions for you); also not done: "After" (backlog)');
+});
+
+test("planTable lists what a child needs", () => {
+  expect(planTable([T({ id: "t_e", title: "E", needs: ["emulator"] })])).toContain("needs emulator");
+});

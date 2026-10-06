@@ -58,6 +58,24 @@ function depList(args: any): string[] | undefined {
   return args.dependsOn.filter((d: unknown) => typeof d === "string" && d.trim()).map((d: string) => d.trim());
 }
 
+const NEEDS = {
+  type: "array", items: { type: "string" },
+  description:
+    "Exclusive resources this ticket's runs use, e.g. [\"emulator\"]: tickets that need the same one never run at the same time " +
+    "(on any board), in any order. Use it for a shared device instead of chaining dependsOn. Replaces the list; [] clears it.",
+};
+
+function needsList(args: any): string[] | undefined {
+  if (args?.needs === undefined) return undefined;
+  if (!Array.isArray(args.needs) || args.needs.some((n: unknown) => typeof n !== "string")) throw new ClientError("needs must be a list of resource names, e.g. [\"emulator\"]");
+  return args.needs.map((n: string) => n.trim().toLowerCase()).filter(Boolean);
+}
+
+/** The ticket a board run belongs to ("<profile>/<ticket id>" in CKANBAN_TICKET), or null outside runs. */
+function runTicketId(ctx: ToolContext): string | null {
+  return ctx.env[RUN_ENV]?.split("/")[1] || null;
+}
+
 const MODE = {
   type: "string",
   enum: ["interview", "auto"],
@@ -86,7 +104,7 @@ export interface ToolContext {
   client: Pick<BoardClient,
     | "listProfiles" | "listTickets" | "getTicket" | "createTicket" | "updateTicket" | "deleteTicket" | "chat" | "stop" | "listComments"
     | "comment" | "ask" | "pollQuestion" | "replyQuestion" | "reportBug" | "listSchedules" | "createSchedule" | "updateSchedule" | "deleteSchedule" | "runSchedule"
-    | "scheduleHistory" | "cronPreview">;
+    | "scheduleHistory" | "cronPreview" | "adopt" | "planAction">;
   cwd: string;
   env: Record<string, string | undefined>;
   main?: (dir: string) => string | null;
@@ -404,6 +422,10 @@ export function ticketsError(args: any): string | null {
     const bad = t.dependsOn.find((d: string) => !keys.has(d.trim()) || d.trim() === t.key.trim());
     if (bad !== undefined) return `ticket ${i + 1}: dependsOn "${bad}" is not the key of another ticket in this list (keys: ${[...keys].join(", ")})`;
   }
+  for (const [i, t] of ts.entries()) {
+    if (t.needs === undefined) continue;
+    if (!Array.isArray(t.needs) || t.needs.some((n: unknown) => typeof n !== "string")) return `ticket ${i + 1}: needs must be a list of resource names, e.g. ["emulator"]`;
+  }
   return null;
 }
 
@@ -500,6 +522,7 @@ const PLANNING_TOOLS: Tool[] = [
       "The board shows one card per ticket; the user clicks Create to add it to Backlog, linked to this ticket. " +
       "Each description must be self-contained (goal, context with relevant files, acceptance criteria). " +
       "key is a short unique name; dependsOn lists keys that must be finished first: give one to tickets that build on each other or likely edit the same files. " +
+      "needs lists exclusive resources (e.g. [\"emulator\"]): tickets that need the same one never run at the same time, in any order. " +
       "Nothing is created by the call.",
     inputSchema: {
       type: "object",
@@ -513,6 +536,7 @@ const PLANNING_TOOLS: Tool[] = [
               title: TITLE,
               description: { type: "string", description: "Markdown description." },
               dependsOn: { type: "array", items: { type: "string" }, description: "Keys of tickets in this list that must be finished first." },
+              needs: { type: "array", items: { type: "string" }, description: "Exclusive resources its runs use, e.g. [\"emulator\"]." },
             },
             required: ["key", "title", "description"],
           },
@@ -585,6 +609,7 @@ export const TOOLS: Tool[] = [
         mode: { ...MODE, description: `${MODE.description} Default: interview.` },
         key: { type: "string", description: "Planner only: short name siblings can use in dependsOn." },
         dependsOn: DEPENDS_ON,
+        needs: NEEDS,
       },
       required: ["title"],
     },
@@ -593,6 +618,7 @@ export const TOOLS: Tool[] = [
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
       const deps = depList(args);
+      const needs = needsList(args);
       const t = await ctx.client.createTicket(slug, {
         title: str(args, "title")!.trim(),
         body: typeof args?.body === "string" ? args.body : "",
@@ -600,6 +626,7 @@ export const TOOLS: Tool[] = [
         mode: args?.mode ? parseMode(args.mode) : "interview",
         ...(str(args, "key", false) ? { planKey: str(args, "key")!.trim() } : {}),
         ...(deps ? { dependsOn: deps } : {}),
+        ...(needs?.length ? { needs } : {}),
       }, ctx.env[RUN_ENV]);
       return `Created ${t.id} on board ${slug} in ${t.status} (${t.mode} mode): ${t.title}`;
     },
@@ -607,13 +634,15 @@ export const TOOLS: Tool[] = [
   {
     name: "update_ticket",
     description:
-      "Edit a ticket's title, description, column or mode. Moving it to ready starts a Claude run, " +
-      "moving it to planning starts the interview in the board chat (same as dragging it on the board).",
+      "Edit a ticket's title, description, column, mode, dependsOn or needs. Moving it to ready starts a Claude run, " +
+      "moving it to planning starts the interview in the board chat (same as dragging it on the board). " +
+      "A planner can take one of its children out of its plan with release: true.",
     inputSchema: {
       type: "object",
       properties: {
         profile: PROFILE, id: ID, title: { type: "string" }, body: { type: "string", description: "New markdown description (replaces the old one)." },
-        status: STATUS, mode: MODE, dependsOn: DEPENDS_ON,
+        status: STATUS, mode: MODE, dependsOn: DEPENDS_ON, needs: NEEDS,
+        release: { type: "boolean", description: "true: take the ticket out of its plan (it keeps its column; its dependsOn and key are cleared)." },
       },
       required: ["id"],
     },
@@ -628,7 +657,10 @@ export const TOOLS: Tool[] = [
       if (args?.mode) patch.mode = parseMode(args.mode);
       const deps = depList(args);
       if (deps) patch.dependsOn = deps;
-      if (!Object.keys(patch).length) throw new ClientError("nothing to change: pass title, body, status, mode or dependsOn");
+      const needs = needsList(args);
+      if (needs) patch.needs = needs;
+      if (args?.release === true) patch.parentId = null;
+      if (!Object.keys(patch).length) throw new ClientError("nothing to change: pass title, body, status, mode, dependsOn, needs or release");
       const t = await ctx.client.updateTicket(slug, str(args, "id")!, patch, ctx.env[RUN_ENV]);
       return `Updated ${t.id}: ${ticketLine(t)}`;
     },
@@ -643,6 +675,69 @@ export const TOOLS: Tool[] = [
       const slug = await slugFor(args, ctx);
       const t = await ctx.client.updateTicket(slug, str(args, "id")!, { status: parseStatus(str(args, "status")) }, ctx.env[RUN_ENV]);
       return `Moved ${t.id} to ${t.status}${t.running ? " (Claude is working on it)" : ""}.`;
+    },
+  },
+  {
+    name: "adopt_tickets",
+    description:
+      "Manager mode: make existing tickets on this board children of this ticket, so its plan runs them (use when the user asks you, in this " +
+      "ticket's chat, to manage, run or take over tickets). Find them with list_tickets first. Tickets in another plan, finished ones, this " +
+      "ticket and its parents are skipped with a reason. Adopted tickets keep their column, mode, dependsOn and needs; nothing starts until " +
+      "the plan starts (plan_control). Then set dependsOn (ticket ids) and needs with update_ticket. Tell the user what was adopted and skipped. " +
+      "Inside a board run it only works in a reply to the user's own message in this ticket's chat.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profile: PROFILE,
+        ids: { type: "array", items: { type: "string" }, description: "Ticket ids to adopt, e.g. [\"t_20261001_abcd\"]." },
+        id: { ...ID, description: "Adopting ticket. Default: the ticket of this board run." },
+      },
+      required: ["ids"],
+    },
+    changes: true,
+    plannerScope: true,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const id = str(args, "id", false) ?? runTicketId(ctx);
+      if (!id) throw new ClientError("id is required outside a board run");
+      if (!Array.isArray(args?.ids) || !args.ids.some((x: unknown) => typeof x === "string" && x.trim())) throw new ClientError("ids must be a non-empty list of ticket ids");
+      const r = await ctx.client.adopt(slug, id, args.ids.filter((x: unknown) => typeof x === "string"), ctx.env[RUN_ENV]);
+      const lines = [
+        r.adopted.length ? `Adopted ${r.adopted.length}:\n${r.adopted.map((t) => `- ${ticketLine(t)}`).join("\n")}` : "Adopted none.",
+        ...(r.skipped.length ? [`Skipped ${r.skipped.length}:\n${r.skipped.map((x) => `- ${x.id}: ${x.reason}`).join("\n")}`] : []),
+        "Nothing starts until the plan starts: set dependsOn / needs with update_ticket, then call plan_control.",
+      ];
+      return lines.join("\n\n");
+    },
+  },
+  {
+    name: "plan_control",
+    description:
+      "Start or resume this ticket's plan, so the board runs its child tickets unattended: in dependency order, a few at a time, one ticket per " +
+      "exclusive resource (needs) at a time, never a child waiting on the user. Use it when the user asked you to run, manage or take over the " +
+      "tickets. Pausing, finishing and how many run at once stay with the user (Plan tab). Inside a board run it works for the ticket's own plan " +
+      "only: in a reply to the user's message in this ticket's chat, or while the plan runs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profile: PROFILE,
+        action: { type: "string", enum: ["start", "resume"], description: "start a new plan, or resume a paused or stuck one (both work either way)." },
+        id: { ...ID, description: "Planner ticket. Default: the ticket of this board run." },
+      },
+      required: ["action"],
+    },
+    changes: true,
+    plannerScope: true,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const id = str(args, "id", false) ?? runTicketId(ctx);
+      if (!id) throw new ClientError("id is required outside a board run");
+      const action = args?.action === "resume" ? "resume" : args?.action === "start" ? "start" : null;
+      if (!action) throw new ClientError("action must be start or resume");
+      const t = await ctx.client.planAction(slug, id, action, ctx.env[RUN_ENV]);
+      const p = t.plan;
+      return `Plan of ${t.id} is ${p?.state ?? "not started"}${p ? ` (${p.maxConcurrent} at a time)` : ""}. ` +
+        "The board starts children itself and wakes this ticket when one needs a decision; end your reply now.";
     },
   },
   {

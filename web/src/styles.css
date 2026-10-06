@@ -1163,3 +1163,22 @@ button.pill:hover { color: var(--text); }
 .usage-mini i { display: block; height: 100%; background: var(--accent); }
 .usage-note { margin: 0; font-size: 11.5px; color: var(--muted); }
 .result-chip.usage-chip { color: var(--muted); }
+
+/* Exclusive resources (Ticket.needs): chips on cards and plan children, the drawer's Needs field */
+.badge.wait { background: var(--warn-soft); color: var(--warn); }
+.res-chip {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 520; padding: 0 7px;
+  border: 1px solid var(--border); border-radius: 99px; color: var(--muted); white-space: nowrap; vertical-align: 1px;
+}
+.res-chip.held { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.child-deps .res-chip { margin-right: 4px; }
+.needs-field { display: flex; flex-direction: column; gap: 5px; }
+.needs-field .field-help { margin: 0; }
+.needs-chips {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 6px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.needs-chips:focus-within { border-color: var(--accent); }
+.needs-chip { cursor: default; padding: 1px 4px 1px 9px; gap: 3px; }
+.needs-chip .link-btn { display: inline-flex; padding: 2px; color: var(--muted); }
+.needs-chips input { flex: 1; min-width: 90px; border: 0; background: transparent; outline: 0; font: inherit; font-size: 13px; color: var(--text); padding: 2px; }

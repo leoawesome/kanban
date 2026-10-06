@@ -68,6 +68,7 @@ export function NewTicketsCard({ drafts, created, onCreate, onOpen }: {
             {!!d.dependsOn?.length && (
               <span className="muted small">After: {d.dependsOn.map((k) => drafts.find((x) => x.key === k)?.title ?? k).join(", ")}</span>
             )}
+            {!!d.needs?.length && <span className="muted small">Needs: {d.needs.join(", ")} (one ticket at a time)</span>}
             {open.has(i) && d.description && <div className="proposal-body"><Markdown text={d.description} /></div>}
           </div>
         );

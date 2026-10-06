@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { safeHref, waitsForSlot, type Ticket } from "./api";
 import { ClockIcon } from "./icons";
+import { ResourceChip, resourceWait } from "./Needs";
 import { elapsed, fullTime, plainPreview, timeAgo, useNow } from "./time";
 
 /** Live running time: ticks every second for the first minute, then every 30s. */
@@ -40,7 +41,9 @@ export function outcomeBadge(t: Ticket) {
 export function Card({ ticket, onClick, dragging, queued, held }: { ticket: Ticket; onClick?: () => void; dragging?: boolean; queued?: number; held?: boolean }) {
   const working = (ticket.status === "in_progress" && !waitsForSlot(ticket)) || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
+  const waitFor = resourceWait(ticket);
   const badge = att ? null
+    : waitFor.length ? <span className="badge wait" title={`Waiting for ${waitFor.join(", ")}: another ticket is using it`}>waiting</span>
     : queued && !working ? (held
       ? <span className="badge queued" title="A daemon restart is pending; queued tickets start right after it">Waits for restart</span>
       : <span className="badge queued" title="Starts when a run slot is free">Queued · #{queued}</span>)
@@ -69,7 +72,7 @@ export function Card({ ticket, onClick, dragging, queued, held }: { ticket: Tick
           {plainPreview(last.text)}
         </div>
       )}
-      {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session || ticket.scheduleId || ticket.plan) && (
+      {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session || ticket.scheduleId || ticket.plan || ticket.needs?.length) && (
         <div className="card-meta">
           {ticket.plan && ticket.plan.state !== "done" && (
             <span className={`badge plan ${ticket.plan.state}`} title="This ticket runs a plan of child tickets">
@@ -81,6 +84,7 @@ export function Card({ ticket, onClick, dragging, queued, held }: { ticket: Tick
               <ClockIcon size={11} strokeWidth={1.8} />
             </span>
           )}
+          {ticket.needs?.map((n) => <ResourceChip key={n} name={n} held={!!ticket.resources?.holding} />)}
           {badge}
           {ticket.prUrl && (
             <a className="badge pr" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>

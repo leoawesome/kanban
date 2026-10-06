@@ -196,3 +196,14 @@ test("API connection retries show on the card instead of looking frozen", () => 
   expect(summarizeEvent({ type: "system", subtype: "api_retry", attempt: 1, max_retries: 10 })).toBeNull();
   expect(summarizeEvent({ type: "system", subtype: "api_retry", attempt: 4, max_retries: 10 })).toBe("Can't reach Claude's API, retrying (4/10)…");
 });
+
+test("ticket chats can manage tickets when the user asks; planners hear about needs", () => {
+  const act = chatPrompt(ticket, "manage A and B", "act", "/o");
+  for (const s of ["adopt_tickets", "plan_control", "needs (e.g. [\"emulator\"])", "If the user only asked to create or adopt tickets, don't start the plan"]) expect(act).toContain(s);
+  const refine = chatPrompt(ticket, "manage A and B", "refine", "/o");
+  expect(refine).toContain("this Planning chat is read-only and can't change the board");
+  expect(refine).toContain('"needs":["emulator"]');
+  const wake = orchestratorPrompt(ticket, { kind: "event", events: [], table: "", board: "kanban", outputDir: "/o" });
+  expect(wake).toContain("one ticket per exclusive resource (needs) at a time");
+  expect(wake).toContain("instead of a dependsOn chain");
+});

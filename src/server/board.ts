@@ -9,9 +9,11 @@ import { addWorktree, isGitRepo, removeWorktree, resolveBaseBranch, worktreeDir 
 import { MOVE_TO_PLANNING_RE, STAY_RE } from "./session";
 import { forkSessionFile } from "./fork";
 import { saveMockups } from "./mockups";
+import { userWaitReason } from "./attention";
+import type { SessionSummary } from "./session";
 import { chatPrompt, firstRunPrompt, interruptedPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
 import {
-  childrenOf, DEFAULT_MAX_CONCURRENT, findCycle, isComplete, planActive, planProblem, planStep, planTable, resolveDeps, wakeupCap,
+  childrenOf, DEFAULT_MAX_CONCURRENT, findCycle, isComplete, normalizeNeeds, planActive, planProblem, planStep, planTable, resolveDeps, wakeupCap,
 } from "./plan";
 import { run as runCmd } from "./git";
 import { parseResult } from "./result";
@@ -32,6 +34,8 @@ export interface BoardOptions {
   notify?: (title: string, body: string) => void;
   /** Child events that arrive within this window wake the planner once (default 3s). */
   planWakeDelayMs?: number;
+  /** The ticket's Claude session as the board UI sees it (open questions, pending proposal); a plan skips children waiting on the user. */
+  sessionSummary?: (sessionId: string) => SessionSummary | null;
 }
 
 /** macOS notification; silently nothing elsewhere or when osascript fails. */
@@ -54,8 +58,10 @@ interface ActiveRun {
    * returnTo: the column such a run goes back to, since a wake-up is housekeeping, not new work to review.
    * quiet: a reply to another ticket's Claude; the card, outcome and run count stay as they were.
    * from: the column the card was in when the message was sent (a reply that only proposed tickets goes back there).
+   * user: answers a message the user typed in this ticket's chat, so the run may manage the ticket's own children
+   * (see plannerRights); plan wake-ups, peer replies and messages from a planner's run don't.
    */
-  chat?: { text: string; mode: ChatMode; raw?: boolean; returnTo?: Status; quiet?: boolean; from?: Pick<Ticket, "status" | "outcome"> };
+  chat?: { text: string; mode: ChatMode; raw?: boolean; returnTo?: Status; quiet?: boolean; from?: Pick<Ticket, "status" | "outcome">; user?: boolean };
   /** Queued messages (ticket.queued) written to this claude process, keyed by id, with the text it was given. */
   inFlight: Map<string, string>;
   /** Queued message this chat run was started with; it leaves the queue once Claude reads the prompt. */
@@ -84,9 +90,21 @@ export function chatModeFor(status: Status): ChatMode {
 }
 
 /** How a chat run handles a queued message: a peer message (from another ticket's Claude) is sent as-is, quietly. */
-function chatFor(t: Pick<Ticket, "status" | "outcome">, msg: { text: string; peer?: boolean }): NonNullable<ActiveRun["chat"]> {
+function chatFor(t: Pick<Ticket, "status" | "outcome">, msg: { text: string; peer?: boolean; fromPlanner?: boolean }): NonNullable<ActiveRun["chat"]> {
   const mode = chatModeFor(t.status);
-  return msg.peer ? { text: msg.text, mode, raw: true, quiet: true } : { text: msg.text, mode, from: { status: t.status, outcome: t.outcome } };
+  return msg.peer
+    ? { text: msg.text, mode, raw: true, quiet: true }
+    : { text: msg.text, mode, from: { status: t.status, outcome: t.outcome }, ...(msg.fromPlanner ? {} : { user: true }) };
+}
+
+/** Queued-message flags from Board.chat options. */
+function flags(o: { peer?: boolean; fromPlanner?: boolean }): Pick<QueuedMessage, "peer" | "fromPlanner"> {
+  return { ...(o.peer ? { peer: true } : {}), ...(o.fromPlanner ? { fromPlanner: true } : {}) };
+}
+
+/** Holding a resource: Claude works on the ticket (In progress or a chat reply), or it is queued in Ready. */
+function holding(t: Ticket, running: boolean, withReady: boolean): boolean {
+  return running || t.status === "in_progress" || (withReady && t.status === "ready");
 }
 
 /**
@@ -129,7 +147,10 @@ export class Board {
   private isSessionLive: (id: string, title: string | null) => Promise<boolean>;
   private notify: (title: string, body: string) => void;
 
+  private sessionSummary: (sessionId: string) => SessionSummary | null;
+
   constructor(private store: Store, private bus: Bus, private opts: BoardOptions) {
+    this.sessionSummary = opts.sessionSummary ?? (() => null);
     this.sessionExists = opts.sessionExists ?? claudeSessionExists;
     this.isSessionLive = opts.isSessionLive ?? psSessionLive;
     this.notify = opts.notify ?? systemNotify;
@@ -144,9 +165,72 @@ export class Board {
   }
 
   private patch(slug: string, id: string, patch: Partial<Ticket>): Ticket {
+    const before = "needs" in patch ? this.store.getTicket(slug, id) : null;
     const t = this.store.updateTicket(slug, id, patch);
     this.emitTicket(slug, t);
+    const needs = [...(before?.needs ?? []), ...(t.needs ?? [])];
+    if (needs.length && ("status" in patch || "runStartedAt" in patch || "needs" in patch)) this.resourceChanged(needs);
     return t;
+  }
+
+  // ---- Exclusive resources (Ticket.needs): one ticket per resource at a time, across every board ----
+
+  private resourceDirty = new Set<string>();
+
+  /**
+   * A ticket started or stopped holding these resources: once the current change is done, refresh the cards that
+   * wait for them and let every board start what can start now (the holder may be on another board).
+   */
+  private resourceChanged(names: string[]): void {
+    const first = !this.resourceDirty.size;
+    for (const n of names) this.resourceDirty.add(n);
+    if (!first) return;
+    queueMicrotask(() => {
+      const dirty = new Set(this.resourceDirty);
+      this.resourceDirty.clear();
+      if (this.shuttingDown) return;
+      for (const p of this.store.listProfiles()) {
+        for (const t of this.store.listTickets(p.slug)) {
+          if (t.needs?.some((n) => dirty.has(n)) && !holding(t, this.isRunning(p.slug, t.id), false)) this.emitTicket(p.slug, t);
+        }
+        this.dispatch(p.slug);
+        this.advancePlans(p.slug);
+      }
+    });
+  }
+
+  /**
+   * Resources `t` needs that another ticket holds right now, on any board. withReady: a ticket queued in Ready
+   * counts as holding (when deciding what a plan moves to Ready); dispatch() leaves it out, Ready is the queue.
+   */
+  heldResources(slug: string, t: Ticket, withReady: boolean): string[] {
+    const want = t.needs ?? [];
+    if (!want.length) return [];
+    const busy = new Set<string>();
+    for (const p of this.store.listProfiles()) {
+      for (const o of this.store.listTickets(p.slug)) {
+        if ((p.slug === slug && o.id === t.id) || !o.needs?.length) continue;
+        if (!holding(o, this.isRunning(p.slug, o.id), withReady)) continue;
+        for (const n of o.needs) if (want.includes(n)) busy.add(n);
+      }
+    }
+    return want.filter((n) => busy.has(n));
+  }
+
+  /** For the card: whether the ticket holds its resources now, or which ones it waits for. */
+  resourceState(slug: string, t: Ticket): { holding: boolean; waitingFor: string[] } | null {
+    if (!t.needs?.length) return null;
+    const running = this.isRunning(slug, t.id);
+    if (holding(t, running, false)) return { holding: true, waitingFor: [] };
+    // Only cards the board would start soon can wait: Ready, or Backlog children of a running plan.
+    const parent = t.parentId ? this.store.getTicket(slug, t.parentId) : null;
+    if (t.status !== "ready" && !(t.status === "backlog" && planActive(parent?.plan))) return { holding: false, waitingFor: [] };
+    return { holding: false, waitingFor: this.heldResources(slug, t, t.status === "backlog") };
+  }
+
+  /** Why a plan child waits on the user (questions, a proposal to apply, in Planning), or null. */
+  userWait(t: Ticket): string | null {
+    return userWaitReason(t, t.sessionId ? this.sessionSummary(t.sessionId) : null);
   }
 
   /** Runs holding a maxParallel slot (see takesSlot). */
@@ -171,7 +255,7 @@ export class Board {
   }
 
   dispatch(slug: string): void {
-    if (this.restartPending) return; // Ready tickets start after the restart
+    if (this.restartPending || this.shuttingDown) return; // Ready tickets start after the restart
     const profile = this.store.getProfile(slug);
     if (!profile || !existsSync(profile.path)) return;
     const idle = this.store.listTickets(slug).filter((t) => !t.error?.startsWith("corrupt") && !this.isRunning(slug, t.id));
@@ -184,11 +268,13 @@ export class Board {
       }
       if (this.full(slug)) return;
       this.patch(slug, t.id, { slotWait: null });
-      this.start(slug, t.id, next.peer ? chatFor(t, next) : { text: next.text, mode: "act", from: t.slotWait!.from }, next.id);
+      this.start(slug, t.id, next.peer ? chatFor(t, next) : { ...chatFor(t, next), mode: "act", from: t.slotWait!.from }, next.id);
     }
     const ready = idle.filter((t) => t.status === "ready").sort((a, b) => a.order - b.order);
     for (const t of ready) {
       if (this.full(slug)) break;
+      // Its resource (e.g. the emulator) is in use: it keeps its place and the next ticket starts instead.
+      if (t.needs?.length && this.heldResources(slug, t, false).length) continue;
       this.start(slug, t.id);
     }
   }
@@ -217,7 +303,7 @@ export class Board {
    * While Claude is working the message steers the run instead: Claude reads it at its next step.
    * peer: the message comes from another ticket's Claude (see questions.ts) and is already a full prompt.
    */
-  async chat(slug: string, id: string, text: string, opts: { peer?: boolean } = {}): Promise<Ticket> {
+  async chat(slug: string, id: string, text: string, opts: { peer?: boolean; fromPlanner?: boolean } = {}): Promise<Ticket> {
     const t = this.store.getTicket(slug, id);
     if (!t) throw new Error(`ticket ${id} not found`);
     if (!text.trim()) throw new Error("message is empty");
@@ -226,20 +312,20 @@ export class Board {
     if (active) {
       if (active.stopRequested || this.shuttingDown) throw new ConflictError("Claude is stopping; send your message once it has stopped");
       // Saved on the ticket until Claude reads it, so closing the chat, Stop or a restart can't lose it.
-      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued", ...(opts.peer ? { peer: true } : {}) };
+      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued", ...flags(opts) };
       this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
       this.steer(active, msg);
       return this.store.getTicket(slug, id)!;
     }
     if (this.restartPending) {
       // Starts after the restart: recover() answers queued messages.
-      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued", ...(opts.peer ? { peer: true } : {}) };
+      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued", ...flags(opts) };
       return this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
     }
-    const chat = chatFor(t, { text, peer: opts.peer });
+    const chat = chatFor(t, { text, ...opts });
     if (takesSlot(chat) && (t.slotWait || this.full(slug))) {
       // Every run slot is busy: the reply waits on the ticket like a Ready ticket, but starts before them.
-      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued" };
+      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued", ...flags(opts) };
       this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
       this.waitForSlot(slug, id);
       this.dispatch(slug);
@@ -255,7 +341,7 @@ export class Board {
     if (!msg) throw new Error("message not found");
     if (msg.state !== "unsent") throw new ConflictError("message is already on its way to Claude");
     this.dropQueued(slug, id, [msgId]);
-    return this.chat(slug, id, msg.text, { peer: msg.peer });
+    return this.chat(slug, id, msg.text, { peer: msg.peer, fromPlanner: msg.fromPlanner });
   }
 
   discardQueued(slug: string, id: string, msgId: string): Ticket {
@@ -628,10 +714,13 @@ export class Board {
 
   async createTicket(
     slug: string,
-    input: { title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string; parentId?: string; planKey?: string; dependsOn?: string[] },
+    input: {
+      title: string; body: string; status: Status; mode?: TicketMode; scheduleId?: string; parentId?: string; planKey?: string; dependsOn?: string[];
+      needs?: string[];
+    },
   ): Promise<Ticket> {
     const status = input.status === "in_progress" ? "ready" : input.status;
-    const t = this.store.createTicket(slug, { ...input, status });
+    const t = this.store.createTicket(slug, { ...input, status, needs: normalizeNeeds(input.needs) });
     this.emitTicket(slug, t);
     // The planner's "Review proposal" badge depends on which of its proposed tickets exist.
     const parent = input.parentId ? this.store.getTicket(slug, input.parentId) : null;
@@ -645,7 +734,11 @@ export class Board {
   async updateTicket(
     slug: string,
     id: string,
-    patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice" | "dependsOn">> & { expectedBody?: string },
+    patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice" | "dependsOn" | "needs">> & {
+      expectedBody?: string;
+      /** null: take the ticket out of its plan (only clearing is allowed here; adoptTickets sets it). */
+      parentId?: null;
+    },
   ): Promise<Ticket> {
     let current = this.store.getTicket(slug, id);
     if (!current) throw new Error(`ticket ${id} not found`);
@@ -658,7 +751,18 @@ export class Board {
     if (patch.order !== undefined) clean.order = patch.order;
     if (patch.mode !== undefined) clean.mode = patch.mode;
     if (patch.notice !== undefined) clean.notice = patch.notice;
-    if (patch.dependsOn !== undefined) {
+    if (patch.needs !== undefined) clean.needs = normalizeNeeds(patch.needs);
+    if (patch.parentId === null && current.parentId) {
+      const plannerId = current.parentId;
+      const me = current;
+      const users = childrenOf(this.store.listTickets(slug), plannerId).filter((s) => s.id !== id && resolveDeps(s, [s, me]).deps.length);
+      if (users.length) {
+        throw new Error(`${users.map((u) => `"${u.title}"`).join(", ")} ${users.length === 1 ? "depends" : "depend"} on this ticket; change their dependsOn first`);
+      }
+      // Its dependencies and key named siblings of the plan it leaves.
+      Object.assign(clean, { parentId: null, planKey: null, dependsOn: [] });
+    }
+    if (patch.dependsOn !== undefined && clean.parentId !== null) {
       clean.dependsOn = patch.dependsOn;
       if (current.parentId) {
         const siblings = childrenOf(this.store.listTickets(slug), current.parentId).map((s) => (s.id === id ? { ...s, dependsOn: patch.dependsOn } : s));
@@ -696,7 +800,7 @@ export class Board {
   // ---- Plans: a planner ticket runs its children unattended (see plan.ts) ----
 
   /** Start (or resume) the planner's plan: children switch to auto mode and start in dependency order. */
-  startPlan(slug: string, id: string, opts: { maxConcurrent?: number } = {}): Ticket {
+  startPlan(slug: string, id: string, opts: { maxConcurrent?: number; byPlanner?: boolean } = {}): Ticket {
     const t = this.store.getTicket(slug, id);
     if (!t) throw new Error(`ticket ${id} not found`);
     const kids = childrenOf(this.store.listTickets(slug), id);
@@ -717,7 +821,8 @@ export class Board {
     // Unattended: children must not stop to interview the user.
     for (const k of kids) if (k.status === "backlog" && k.mode !== "auto") this.patch(slug, k.id, { mode: "auto" });
     const out = this.patch(slug, id, { plan, ...(t.outcome && t.outcome !== "done" ? { outcome: null } : {}) });
-    this.store.addComment(slug, id, "ai", resuming ? "Plan resumed." : `Plan started: ${kids.length} child tickets, ${plan.maxConcurrent} at a time.`);
+    const by = opts.byPlanner ? " by the planner" : "";
+    this.store.addComment(slug, id, "ai", resuming ? `Plan resumed${by}.` : `Plan started${by}: ${kids.length} child tickets, ${plan.maxConcurrent} at a time.`);
     this.advancePlans(slug);
     return this.store.getTicket(slug, id) ?? out;
   }
@@ -747,10 +852,59 @@ export class Board {
     return out;
   }
 
-  /** The planner ticket a run belongs to, if it is running a plan; used to scope its board rights. */
-  activePlanner(slug: string, runTicketId: string): Ticket | null {
+  /** The ticket's current run answers a message the user typed in its chat (see ActiveRun.chat.user). */
+  userChatRun(slug: string, id: string): boolean {
+    return !!this.runs.get(this.key(slug, id))?.chat?.user;
+  }
+
+  /**
+   * The planner ticket a run belongs to, if that run may manage the ticket's own children: any run of a running
+   * plan (wake-ups), or a reply to the user's chat message while the plan isn't done (or there is none yet).
+   */
+  plannerRights(slug: string, runTicketId: string): Ticket | null {
     const t = this.store.getTicket(slug, runTicketId);
-    return t && planActive(t.plan) ? t : null;
+    if (!t) return null;
+    if (planActive(t.plan)) return t;
+    return t.plan?.state !== "done" && this.userChatRun(slug, runTicketId) ? t : null;
+  }
+
+  /**
+   * Manager mode: make existing tickets children of this one, so its plan runs them. Tickets on another board, the
+   * ticket itself or its ancestors (a cycle), tickets in another plan and finished ones are skipped with a reason.
+   */
+  adoptTickets(slug: string, plannerId: string, ids: string[]): { adopted: Ticket[]; skipped: { id: string; reason: string }[] } {
+    const planner = this.store.getTicket(slug, plannerId);
+    if (!planner) throw new Error(`ticket ${plannerId} not found`);
+    const ancestors = new Set<string>();
+    for (let p = planner.parentId; p && !ancestors.has(p); p = this.store.getTicket(slug, p)?.parentId) ancestors.add(p);
+    const adopted: Ticket[] = [];
+    const skipped: { id: string; reason: string }[] = [];
+    for (const id of [...new Set(ids.map((x) => x.trim()).filter(Boolean))]) {
+      const t = this.store.getTicket(slug, id);
+      const reason = !t ? `not found on board ${slug}`
+        : t.id === plannerId ? "that is this ticket itself"
+        : ancestors.has(t.id) ? "it is a parent of this ticket (that would make a cycle)"
+        : t.parentId === plannerId ? "already in this plan"
+        : t.parentId ? `belongs to plan ${t.parentId}`
+        : t.status === "done" ? "already done"
+        : t.error?.startsWith("corrupt") ? "its ticket file is corrupt"
+        : null;
+      if (reason) {
+        skipped.push({ id, reason });
+        continue;
+      }
+      adopted.push(this.patch(slug, id, { parentId: plannerId }));
+      this.store.addComment(slug, id, "ai", `Adopted by plan ${plannerId} ("${planner.title}").`);
+    }
+    if (adopted.length) {
+      this.store.addComment(slug, plannerId, "ai", `Adopted ${adopted.length} ticket${adopted.length === 1 ? "" : "s"}: ${adopted.map((t) => `${t.id} "${t.title}"`).join(", ")}.`);
+      const p = this.store.getTicket(slug, plannerId)!;
+      // A plan under way grows with its new children: its create cap and wake-up budget count them.
+      if (p.plan && p.plan.state !== "done") this.patch(slug, plannerId, { plan: { ...p.plan, originalCount: p.plan.originalCount + adopted.length } });
+      else this.emitTicket(slug, p);
+      this.advancePlans(slug);
+    }
+    return { adopted, skipped };
   }
 
   /** The planner restarts a child that already ran: counted, and refused past MAX_RETRIES. */
@@ -824,7 +978,10 @@ export class Board {
       else if (!sameJson(plan, planner.plan)) this.patch(slug, planner.id, { plan });
       return false;
     }
-    const step = planStep(plan, kids, (id) => this.isRunning(slug, id));
+    const step = planStep(plan, kids, (id) => this.isRunning(slug, id), {
+      held: (t) => this.heldResources(slug, t, true),
+      waitingOnUser: (t) => this.userWait(t),
+    });
     for (const cid of step.start) this.patch(slug, cid, { status: "ready", mode: "auto", outcome: null, error: null });
     if (step.events.length) {
       plan.inbox = [...(plan.inbox ?? []), ...step.events.map((e) => e.line)];
@@ -1050,6 +1207,7 @@ export class Board {
     if (!r.handle && r.promptMsgId) return;
     const i: Interrupted = { at: nowIso(), mode: r.chat.mode };
     if (r.chat.quiet) i.quiet = true;
+    if (r.chat.user) i.user = true;
     if (r.draft?.text) i.partial = r.draft.text;
     // Claude never got the prompt: send it again rather than asking it to continue.
     if (!r.handle) i.prompt = r.chat.raw ? { text: r.chat.text, raw: true } : { text: r.chat.text };
@@ -1113,9 +1271,10 @@ export class Board {
         const i = t.interrupted;
         if (!i || this.isRunning(p.slug, t.id) || t.status === "in_progress" || t.error?.startsWith("corrupt")) continue;
         if (!i.held) this.store.addComment(p.slug, t.id, "ai", "Reply interrupted by daemon restart; resuming.");
-        if (i.prompt) this.start(p.slug, t.id, { text: i.prompt.text, mode: i.mode, raw: i.prompt.raw, quiet: i.quiet });
+        const user = i.user ? { user: true } : {};
+        if (i.prompt) this.start(p.slug, t.id, { text: i.prompt.text, mode: i.mode, raw: i.prompt.raw, quiet: i.quiet, ...user });
         // With a queued message waiting, the pass below answers it instead (one reply, not two).
-        else if (!this.waiting(p.slug, t.id).length) this.start(p.slug, t.id, { text: interruptedPrompt(), mode: i.mode, raw: true, quiet: i.quiet });
+        else if (!this.waiting(p.slug, t.id).length) this.start(p.slug, t.id, { text: interruptedPrompt(), mode: i.mode, raw: true, quiet: i.quiet, ...user });
       }
       // Messages a restarted chat run never got to: answer them in a chat reply now.
       for (const t of this.store.listTickets(p.slug)) {
