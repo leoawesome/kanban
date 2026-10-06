@@ -249,9 +249,10 @@ const TOOL_ARG_KEYS = ["file_path", "command", "url", "pattern", "query", "descr
 const PUBLISHED = /Published (\S+) at (https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9-]+)/g;
 
 const HELPER_PUBLISH = /\bartifact publish\b/;
+const PUBLISH_TOOL = /(?:^|__)publish_artifact$/;
 
 function isPublisher(block: any): boolean {
-  if (block.name === "Artifact") return true;
+  if (block.name === "Artifact" || PUBLISH_TOOL.test(String(block.name ?? ""))) return true;
   return block.name === "Bash" && typeof block.input?.command === "string" && HELPER_PUBLISH.test(block.input.command);
 }
 
@@ -369,7 +370,7 @@ export function parseSession(raw: string): ParsedSession {
             }
           }
           // Only real publishes: output of the Artifact tool, or of the `ckanban artifact publish`
-          // helper headless runs use. Other tools (e.g. Bash grepping a different session's file)
+          // helper / publish_artifact MCP tool headless runs use. Other tools (e.g. Bash grepping a different session's file)
           // can print the same text.
           if (b?.type !== "tool_result" || !publishers.has(b.tool_use_id)) continue;
           for (const m of resultText(b.content).matchAll(PUBLISHED)) {

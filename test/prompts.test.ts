@@ -129,6 +129,13 @@ test("run prompts point Claude at the artifact helper", () => {
   expect(chatPrompt(t, "hi", "refine", "/o")).not.toContain("artifact publish");
 });
 
+test("planning chats reach artifacts through the MCP tools, not the Bash helper", () => {
+  const p = chatPrompt({ ...ticket, mode: "auto" } as Ticket, "", "refine", "/o");
+  expect(p).toContain("`read_artifact`");
+  expect(p).toContain("`publish_artifact` with the full edited page and the same url");
+  expect(p).toContain("Publishing artifacts is allowed while planning");
+});
+
 test("a scheduled ticket's first run is told its schedule", () => {
   const t = { ...ticket, scheduleId: "s1" } as Ticket;
   const p = firstRunPrompt(t, { isGit: true, outputDir: "/out", schedule: { id: "s1", name: "Nightly audit", board: "kanban" } });

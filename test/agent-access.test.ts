@@ -216,11 +216,12 @@ test("inside a board run, changing tools are refused and read tools work", async
 });
 
 test("every tool advertises a profile argument; change tools are flagged", () => {
-  // The planning chat tools only check their input: no board, no profile.
-  const PLANNING = ["ask_questions", "propose_ticket", "propose_tickets"];
+  // The planning chat tools (forms, cards, artifacts) don't touch the board: no profile.
+  const PLANNING = ["ask_questions", "propose_ticket", "propose_tickets", "publish_artifact", "read_artifact"];
   for (const t of TOOLS.filter((t) => t.name !== "list_profiles" && !PLANNING.includes(t.name))) expect(t.inputSchema.properties.profile).toBeDefined();
   expect(TOOLS.filter((t) => !t.changes).map((t) => t.name).sort()).toEqual([
-    "ask_questions", "get_ticket", "list_profiles", "list_schedules", "list_tickets", "propose_ticket", "propose_tickets", "report_bug", "schedule_history",
+    "ask_questions", "get_ticket", "list_profiles", "list_schedules", "list_tickets", "propose_ticket", "propose_tickets", "publish_artifact",
+    "read_artifact", "report_bug", "schedule_history",
   ]);
   expect(TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name).sort()).toEqual(PLANNING);
   expect(TOOLS.filter((t) => t.allowInRun).map((t) => t.name).sort()).toEqual([

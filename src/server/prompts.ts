@@ -110,6 +110,14 @@ The Artifact tool is not available in board runs. To publish or read a claude.ai
 Include the printed URL in your summary.`;
 }
 
+/** Planning chats can't run the Bash helper (plan mode), so they reach artifacts through the ckanban MCP tools. */
+const PLANNING_ARTIFACT_RULE = `# claude.ai artifacts
+The Artifact tool is not available here. To read, update or publish a claude.ai artifact, use the ckanban MCP tools (each call can take a minute or two). Publishing artifacts is allowed while planning; it is the one exception to not changing anything:
+- Read one: \`read_artifact\` with its url returns the page source.
+- Update one (keeps the same link): \`read_artifact\` it, edit the HTML, then \`publish_artifact\` with the full edited page and the same url.
+- New page: \`publish_artifact\` with a complete HTML document (and a title).
+Reply with the printed URL.`;
+
 /** Planning chats draw HTML mockups for UI work as reply blocks; the board saves them for the Outputs tab. */
 function mockupsRule(outputDir: string): string {
   const dir = join(outputDir, MOCKUPS_DIR);
@@ -257,6 +265,8 @@ How to help:
 ${bugReportRule(t)}
 
 ${mockupsRule(outputDir)}
+
+${PLANNING_ARTIFACT_RULE}
 
 ${QUESTIONS_FORMAT}
 
