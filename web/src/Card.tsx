@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { safeHref, type Ticket } from "./api";
+import { safeHref, waitsForSlot, type Ticket } from "./api";
 import { ClockIcon } from "./icons";
 import { elapsed, fullTime, plainPreview, timeAgo, useNow } from "./time";
 
@@ -22,6 +22,7 @@ function workingBadge(label: string, since?: string | null) {
 const QUIET_ACTIVITY = new Set(["Starting…", "Claude is replying…"]);
 
 export function outcomeBadge(t: Ticket) {
+  if (waitsForSlot(t)) return <span className="badge queued" title="Your reply starts when a run slot is free">Queued</span>;
   if (t.status === "in_progress") return workingBadge("Running", t.runStartedAt);
   if (t.running) return workingBadge("Replying", t.runStartedAt);
   if (t.error?.startsWith("corrupt")) return <span className="badge failed">Corrupt file</span>;
@@ -35,9 +36,9 @@ export function outcomeBadge(t: Ticket) {
   }
 }
 
-/** queued: 1-based place in the queue for a free run slot (status `ready`). held: a pending daemon restart holds it. */
+/** queued: 1-based place in the queue for a free run slot (status `ready`, or a reply waiting for one). held: a pending daemon restart holds it. */
 export function Card({ ticket, onClick, dragging, queued, held }: { ticket: Ticket; onClick?: () => void; dragging?: boolean; queued?: number; held?: boolean }) {
-  const working = ticket.status === "in_progress" || !!ticket.running;
+  const working = (ticket.status === "in_progress" && !waitsForSlot(ticket)) || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
   const badge = att ? null
     : queued && !working ? (held

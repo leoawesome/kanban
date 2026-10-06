@@ -89,6 +89,14 @@ function chatFor(t: Pick<Ticket, "status" | "outcome">, msg: { text: string; pee
   return msg.peer ? { text: msg.text, mode, raw: true, quiet: true } : { text: msg.text, mode, from: { status: t.status, outcome: t.outcome } };
 }
 
+/**
+ * Runs that take a maxParallel slot: work, and chat replies that act on the ticket. Planning interviews, replies to
+ * another ticket's Claude (its asker waits on them) and planner wake-ups are short housekeeping and don't.
+ */
+function takesSlot(chat?: ActiveRun["chat"]): boolean {
+  return !chat || (chat.mode === "act" && !chat.quiet && !chat.returnTo);
+}
+
 const ACTIVITY_THROTTLE_MS = 1000;
 /** A requested restart waits this long for active runs to finish, then restarts anyway (recover() resumes them). */
 export const RESTART_MAX_WAIT_MS = 10 * 60_000;
@@ -141,11 +149,21 @@ export class Board {
     return t;
   }
 
-  /** Queue runs only: chat replies are interactive and don't take a maxParallel slot. */
+  /** Runs holding a maxParallel slot (see takesSlot). */
   running(slug: string): number {
     let n = 0;
-    for (const r of this.runs.values()) if (r.slug === slug && !r.chat) n++;
+    for (const r of this.runs.values()) if (r.slug === slug && takesSlot(r.chat)) n++;
     return n;
+  }
+
+  /** The ticket's run holds one of the board's maxParallel slots. */
+  holdsSlot(slug: string, id: string): boolean {
+    const r = this.runs.get(this.key(slug, id));
+    return !!r && takesSlot(r.chat);
+  }
+
+  private full(slug: string): boolean {
+    return this.running(slug) >= Math.max(1, this.store.getProfile(slug)?.maxParallel ?? 1);
   }
 
   isRunning(slug: string, id: string): boolean {
@@ -156,14 +174,42 @@ export class Board {
     if (this.restartPending) return; // Ready tickets start after the restart
     const profile = this.store.getProfile(slug);
     if (!profile || !existsSync(profile.path)) return;
-    const ready = this.store
-      .listTickets(slug)
-      .filter((t) => t.status === "ready" && !t.error?.startsWith("corrupt") && !this.isRunning(slug, t.id))
-      .sort((a, b) => a.order - b.order);
+    const idle = this.store.listTickets(slug).filter((t) => !t.error?.startsWith("corrupt") && !this.isRunning(slug, t.id));
+    // Chat replies waiting for a slot go first, oldest first: they continue work that is already underway.
+    for (const t of idle.filter((t) => t.slotWait).sort((a, b) => a.slotWait!.at.localeCompare(b.slotWait!.at))) {
+      const next = this.waiting(slug, t.id)[0];
+      if (!next) {
+        this.cancelSlotWait(slug, t.id);
+        continue;
+      }
+      if (this.full(slug)) return;
+      this.patch(slug, t.id, { slotWait: null });
+      this.start(slug, t.id, next.peer ? chatFor(t, next) : { text: next.text, mode: "act", from: t.slotWait!.from }, next.id);
+    }
+    const ready = idle.filter((t) => t.status === "ready").sort((a, b) => a.order - b.order);
     for (const t of ready) {
-      if (this.running(slug) >= Math.max(1, profile.maxParallel)) break;
+      if (this.full(slug)) break;
       this.start(slug, t.id);
     }
+  }
+
+  /** All slots are busy: the card waits in In Progress with its queued message(s) until dispatch() starts it. */
+  private waitForSlot(slug: string, id: string): Ticket {
+    const t = this.store.getTicket(slug, id)!;
+    return this.patch(slug, id, {
+      status: "in_progress", outcome: null, error: null, lastActivity: "Waiting for a free slot",
+      slotWait: t.slotWait ?? { at: nowIso(), from: { status: t.status, outcome: t.outcome } },
+    });
+  }
+
+  /** Stop (or a move) before a waiting reply started: its messages stay for the user to send or discard. */
+  private cancelSlotWait(slug: string, id: string): Ticket {
+    const t = this.store.getTicket(slug, id)!;
+    const from = t.slotWait?.from ?? { status: "review" as Status, outcome: t.outcome };
+    return this.patch(slug, id, {
+      status: from.status, outcome: from.outcome, slotWait: null, lastActivity: null,
+      queued: (t.queued ?? []).map((m) => (m.state === "queued" ? { ...m, state: "unsent" } : m)),
+    });
   }
 
   /**
@@ -190,7 +236,16 @@ export class Board {
       const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued", ...(opts.peer ? { peer: true } : {}) };
       return this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
     }
-    this.start(slug, id, chatFor(t, { text, peer: opts.peer }));
+    const chat = chatFor(t, { text, peer: opts.peer });
+    if (takesSlot(chat) && (t.slotWait || this.full(slug))) {
+      // Every run slot is busy: the reply waits on the ticket like a Ready ticket, but starts before them.
+      const msg: QueuedMessage = { id: crypto.randomUUID(), text, at: nowIso(), state: "queued" };
+      this.patch(slug, id, { queued: [...(t.queued ?? []), msg] });
+      this.waitForSlot(slug, id);
+      this.dispatch(slug);
+      return this.store.getTicket(slug, id)!;
+    }
+    this.start(slug, id, chat);
     return this.store.getTicket(slug, id)!;
   }
 
@@ -302,7 +357,13 @@ export class Board {
         this.patch(run.slug, run.id, { queued: (t.queued ?? []).map((m) => (m.state === "queued" ? { ...m, state: "unsent" } : m)) });
         return;
       }
-      run.chat = chatFor(t, next);
+      const chat = chatFor(t, next);
+      // A Planning or peer reply run doesn't hold a slot: one that would now act waits for one like any other.
+      if (takesSlot(chat) && !takesSlot(run.chat) && this.full(run.slug)) {
+        this.waitForSlot(run.slug, run.id);
+        return;
+      }
+      run.chat = chat;
       run.promptMsgId = next.id;
       run.inFlight = new Map();
       run.handle = null;
@@ -609,7 +670,10 @@ export class Board {
       }
     }
     let status = patch.status;
+    // A reply waiting for a slot stays put when reordered; moved elsewhere, it stops waiting.
+    if (current.slotWait && status === "in_progress") status = undefined;
     if (status === "in_progress" && !this.isRunning(slug, id)) status = "ready";
+    if (current.slotWait && status) current = this.cancelSlotWait(slug, id);
 
     const active = this.runs.get(this.key(slug, id));
     if (active && status && status !== "in_progress") {
@@ -951,8 +1015,12 @@ export class Board {
       this.stopRun(r);
       return true;
     }
-    // In Progress with no run behind it (e.g. the daemon lost it): clear the card instead of leaving it stuck.
     const t = this.store.getTicket(slug, id);
+    if (t?.slotWait) {
+      this.cancelSlotWait(slug, id);
+      return true;
+    }
+    // In Progress with no run behind it (e.g. the daemon lost it): clear the card instead of leaving it stuck.
     if (t?.status !== "in_progress") return false;
     this.store.addComment(slug, id, "ai", "Run stopped by user.");
     this.patch(slug, id, { status: "review", outcome: "stopped", error: null, lastActivity: null });
@@ -1024,7 +1092,8 @@ export class Board {
   recover(): void {
     for (const p of this.store.listProfiles()) {
       for (const t of this.store.listTickets(p.slug)) {
-        if (t.status !== "in_progress" || this.isRunning(p.slug, t.id)) continue;
+        // Replies waiting for a slot keep waiting: dispatch() below starts them first.
+        if (t.status !== "in_progress" || t.slotWait || this.isRunning(p.slug, t.id)) continue;
         if (t.plan?.awaiting && planActive(t.plan)) {
           // A planner wake-up was cut off: wake it again with the children's current state.
           this.store.addComment(p.slug, t.id, "ai", "Planner interrupted by daemon restart; waking it again.");
@@ -1051,8 +1120,10 @@ export class Board {
       // Messages a restarted chat run never got to: answer them in a chat reply now.
       for (const t of this.store.listTickets(p.slug)) {
         const next = this.waiting(p.slug, t.id)[0];
-        if (!next || this.isRunning(p.slug, t.id) || t.status === "ready" || t.error?.startsWith("corrupt")) continue;
-        this.start(p.slug, t.id, chatFor(t, next), next.id);
+        if (!next || this.isRunning(p.slug, t.id) || t.status === "ready" || t.slotWait || t.error?.startsWith("corrupt")) continue;
+        const chat = chatFor(t, next);
+        if (takesSlot(chat) && this.full(p.slug)) this.waitForSlot(p.slug, t.id);
+        else this.start(p.slug, t.id, chat, next.id);
       }
     }
   }

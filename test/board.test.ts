@@ -638,6 +638,83 @@ test("daemon restart keeps unread messages and delivers them after recovery", as
   expect(readArgs().some((c) => c.prompt?.startsWith("what about Z?"))).toBe(true);
 }, 20000);
 
+test("a chat reply that resumes work waits for a free slot, then starts before Ready tickets", async () => {
+  await setup({ maxParallel: 1 });
+  process.env.FAKE_MODE = "slow";
+  const a = await board.createTicket("p", { title: "a", body: "", status: "ready" });
+  const r = await board.createTicket("p", { title: "r", body: "", status: "review" });
+  await Bun.sleep(300);
+  await board.chat("p", r.id, "go on with it");
+  const waiting = store.getTicket("p", r.id)!;
+  expect(board.isRunning("p", r.id)).toBe(false);
+  expect(waiting.status).toBe("in_progress");
+  expect(waiting.slotWait?.from).toEqual({ status: "review", outcome: null });
+  expect(waiting.queued).toMatchObject([{ text: "go on with it", state: "queued" }]);
+  expect(board.running("p")).toBe(1);
+  const b = await board.createTicket("p", { title: "b", body: "", status: "ready" });
+
+  board.stop("p", a.id);
+  await Bun.sleep(1000);
+  expect(board.isRunning("p", r.id)).toBe(true);
+  expect(board.holdsSlot("p", r.id)).toBe(true);
+  expect(store.getTicket("p", r.id)!.slotWait).toBeNull();
+  expect(store.getTicket("p", b.id)!.status).toBe("ready");
+  expect(board.running("p")).toBe(1);
+  expect(readArgs().at(-1)!.prompt.startsWith("go on with it")).toBe(true);
+}, 15000);
+
+test("steering a running ticket takes no extra slot", async () => {
+  await setup({ maxParallel: 1 });
+  process.env.FAKE_MODE = "slow";
+  const a = await board.createTicket("p", { title: "a", body: "", status: "ready" });
+  await Bun.sleep(300);
+  await board.chat("p", a.id, "also do X");
+  expect(board.running("p")).toBe(1);
+  expect(store.getTicket("p", a.id)!.slotWait).toBeFalsy();
+}, 15000);
+
+test("Stop on a reply waiting for a slot puts the card back and keeps the message unsent", async () => {
+  await setup({ maxParallel: 1 });
+  process.env.FAKE_MODE = "slow";
+  const a = await board.createTicket("p", { title: "a", body: "", status: "ready" });
+  const r = await board.createTicket("p", { title: "r", body: "", status: "review" });
+  await Bun.sleep(300);
+  await board.chat("p", r.id, "go on with it");
+  expect(board.stop("p", r.id)).toBe(true);
+  const got = store.getTicket("p", r.id)!;
+  expect(got.status).toBe("review");
+  expect(got.slotWait).toBeNull();
+  expect(got.queued).toMatchObject([{ text: "go on with it", state: "unsent" }]);
+
+  board.stop("p", a.id);
+  await board.whenIdle();
+  expect(board.isRunning("p", r.id)).toBe(false);
+  expect(readArgs().some((c) => c.prompt?.startsWith("go on with it"))).toBe(false);
+}, 15000);
+
+test("after a restart, waiting replies still respect maxParallel", async () => {
+  await setup({ maxParallel: 1 });
+  process.env.FAKE_MODE = "slow";
+  const a = await board.createTicket("p", { title: "a", body: "", status: "ready" });
+  const r = await board.createTicket("p", { title: "r", body: "", status: "review" });
+  await Bun.sleep(300);
+  await board.chat("p", r.id, "go on with it");
+  await board.shutdown();
+  // A message a restart left undelivered on another Review card.
+  const c = await board.createTicket("p", { title: "c", body: "", status: "review" });
+  store.updateTicket("p", c.id, { queued: [{ id: "m1", text: "what about Z?", at: new Date().toISOString(), state: "queued" }] });
+
+  board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async () => false });
+  board.recover();
+  await Bun.sleep(300);
+  expect(board.running("p")).toBe(1);
+  // The waiting reply goes first; the interrupted work run and the other reply wait.
+  expect(board.isRunning("p", r.id)).toBe(true);
+  expect(store.getTicket("p", a.id)!.status).toBe("ready");
+  expect(board.isRunning("p", c.id)).toBe(false);
+  expect(store.getTicket("p", c.id)!).toMatchObject({ status: "in_progress", slotWait: { from: { status: "review" } } });
+}, 20000);
+
 test("refine chat does not take a queue slot", async () => {
   await setup({ maxParallel: 1 });
   process.env.FAKE_MODE = "slow";

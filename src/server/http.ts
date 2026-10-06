@@ -187,6 +187,8 @@ export function createServer(deps: ServerDeps) {
     return {
       ...t,
       running,
+      /** Its run takes one of the board's maxParallel slots (Planning and peer replies don't). */
+      holdsSlot: running && board.holdsSlot(p.slug, t.id),
       resumeCommand: t.sessionId ? resumeCommand(t.workdir ?? t.worktree ?? p.path, t.sessionId) : null,
       session,
       /** Absolute outputs folder, so the Share menu can show where a file is. */

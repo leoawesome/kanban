@@ -5,7 +5,7 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useMemo, useState } from "react";
-import { BOARD_COLUMNS, COLUMNS, type Status, type Ticket } from "./api";
+import { BOARD_COLUMNS, COLUMNS, waitsForSlot, type Status, type Ticket } from "./api";
 import { Card } from "./Card";
 import { CollapseIcon, PlusIcon, SparkIcon } from "./icons";
 
@@ -14,8 +14,12 @@ const COLLAPSED_KEY = "ckanban.collapsedColumns";
 /** Tickets per column (in `COLUMNS` order), each column sorted the way the board shows it. */
 export function groupByColumn(tickets: Ticket[]): Map<Status, Ticket[]> {
   const m = new Map<Status, Ticket[]>(COLUMNS.map((c) => [c.id, []]));
-  for (const t of tickets) m.get(t.status)?.push(t);
-  for (const list of m.values()) list.sort((a, b) => a.order - b.order);
+  // Replies waiting for a slot sit in the queue, first in line (oldest first), like the server starts them.
+  for (const t of tickets) m.get(waitsForSlot(t) ? "ready" : t.status)?.push(t);
+  for (const list of m.values()) {
+    list.sort((a, b) => a.slotWait && b.slotWait ? a.slotWait.at.localeCompare(b.slotWait.at)
+      : a.slotWait ? -1 : b.slotWait ? 1 : a.order - b.order);
+  }
   return m;
 }
 

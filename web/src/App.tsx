@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, copy, COLUMNS, onReconnect, subscribe, type Health, type InboxItem, type McpState, type Profile, type Schedule, type Status, type Ticket } from "./api";
+import { api, copy, COLUMNS, onReconnect, subscribe, waitsForSlot, type Health, type InboxItem, type McpState, type Profile, type Schedule, type Status, type Ticket } from "./api";
 import { avatarColor, avatarLetter } from "./avatar";
 import { BugReportDialog } from "./BugReportDialog";
 import { ConnectionsDialog } from "./ConnectionsDialog";
@@ -392,7 +392,9 @@ export function App() {
   const mcpAttention = mcp?.servers.filter((s) => s.attention).length ?? 0;
   const scheduleErrors = schedules?.filter((s) => s.lastError).length ?? 0;
   const missing = health ? (["claude", "git", "gh"] as const).filter((k) => !health[k]) : [];
-  const running = tickets.filter((t) => t.status === "in_progress").length;
+  // Runs holding a slot, as the server counts them (Planning and replies to other tickets don't take one).
+  const running = tickets.filter((t) => t.holdsSlot).length;
+  const queued = tickets.filter((t) => t.status === "ready" || waitsForSlot(t)).length;
 
   const updateKey = `update:${version?.latest}`;
   const pathKey = `path:${missing.join(",")}`;
@@ -447,7 +449,7 @@ export function App() {
         )}
         {profile && (
           <span className="pill" title={`At most ${profile.maxParallel} tickets run at the same time on this board`}>
-            {running}/{profile.maxParallel} running
+            {running}/{profile.maxParallel} running{queued > 0 && <> · {queued} queued</>}
           </span>
         )}
         <UsagePill />

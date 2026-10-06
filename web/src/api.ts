@@ -16,6 +16,11 @@ export const COLUMNS: { id: Status; label: string; hint: string; claude: boolean
 /** Columns the board shows: queued (`ready`) tickets sit in In Progress, under the running ones. */
 export const BOARD_COLUMNS = COLUMNS.filter((c) => c.id !== "ready");
 
+/** A chat reply waiting for a free run slot: the board shows it in the queue, ahead of Ready tickets. */
+export function waitsForSlot(t: Ticket): boolean {
+  return t.status === "in_progress" && !!t.slotWait && !t.running;
+}
+
 /** Start work on a Backlog ticket nobody shaped yet goes through the Planning interview first. */
 export function startWorkTarget(t: Ticket): "planning" | "ready" {
   const untouched = !t.refineStarted && !t.interviewed && t.runCount === 0 && !t.workdir && !t.sessionStarted;
@@ -116,6 +121,10 @@ export interface Ticket {
   queued?: QueuedMessage[];
   /** A reply a daemon restart cut off; the board resumes it. partial: what Claude had written so far. */
   interrupted?: { at: string; partial?: string; held?: boolean } | null;
+  /** A chat reply waiting for a free run slot: shown queued in In Progress. */
+  slotWait?: { at: string; from: { status: Status; outcome: Outcome } } | null;
+  /** Its run takes one of the board's maxParallel slots. */
+  holdsSlot?: boolean;
   createdAt: string;
   updatedAt: string;
   body: string;

@@ -71,6 +71,11 @@ export interface Ticket {
   queued?: QueuedMessage[];
   /** A chat reply the daemon cut off by restarting (or held back while a restart waited); recover() resumes it. */
   interrupted?: Interrupted | null;
+  /**
+   * A chat reply waiting for a free run slot: the card shows In Progress, queued, and dispatch() starts it before
+   * Ready tickets. from: where the card was, so Stop puts it back.
+   */
+  slotWait?: { at: string; from: Pick<Ticket, "status" | "outcome"> } | null;
   /** Output files the user published as claude.ai pages from the Outputs tab, one link per file. */
   shareLinks?: ShareLink[];
   createdAt: string;
