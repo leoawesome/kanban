@@ -21,7 +21,8 @@ import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
 import { mcpConfig } from "./agents";
 import type { Store } from "./store";
-import type { Interrupted, Plan, QueuedMessage, Status, Ticket, TicketMode } from "./types";
+import type { Interrupted, Plan, Profile, QueuedMessage, Status, Ticket, TicketMode } from "./types";
+import { CLEANUP_TIMEOUT_MS, prepareWorktree, runShell, withSetup, type SetupResult } from "./worktree-setup";
 import { nowIso, slugify } from "./util";
 
 export interface BoardOptions {
@@ -140,6 +141,10 @@ export class ConflictError extends Error {}
 
 export class Board {
   private runs = new Map<string, ActiveRun>();
+  /** Worktree setups running now (stopping the ticket's run aborts them), per ticket key. */
+  private setups = new Map<string, { done: Promise<void>; abort: AbortController }>();
+  /** Setup results the ticket's next run tells Claude about (and shows as a row in the chat). */
+  private setupResults = new Map<string, SetupResult>();
   private shuttingDown = false;
   /** A restart waits for active runs to finish: no new run starts until then (see requestRestart). */
   private restartPending = false;
@@ -503,7 +508,7 @@ export class Board {
     const runNo = t.runCount + 1;
     const newComments = this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt));
     const outputDir = this.store.outputsDir(slug, id);
-    const prompt = localizeImages(run.chat?.raw
+    const prompt = withSetup(localizeImages(run.chat?.raw
       ? run.chat.text
       : run.chat
       ? chatPrompt(t, run.chat.text, run.chat.mode, outputDir)
@@ -512,7 +517,7 @@ export class Board {
         isGit: session.isGit, linked: !!t.workdir, comments: t.workdir ? newComments : [], outputDir,
         schedule: t.scheduleId ? { id: t.scheduleId, name: this.store.getSchedule(slug, t.scheduleId)?.name ?? null, board: slug } : undefined,
       })
-      : resumePrompt(t, newComments, outputDir), this.store.attachmentsDir);
+      : resumePrompt(t, newComments, outputDir), this.store.attachmentsDir), this.takeSetup(slug, id));
 
     let lastWrite = 0;
     let pendingActivity: string | null = null;
@@ -692,11 +697,18 @@ export class Board {
           this.bus.emit({ type: "profile.updated", slug, profile: fixed });
           if (profile.baseBranch) patch.notice = `Base branch "${profile.baseBranch}" was not found in this repo, so the board now uses "${base}".`;
         }
-        if (!existsSync(dir)) await addWorktree(profile.path, dir, branch, base);
+        const fresh = !existsSync(dir);
+        if (fresh) await addWorktree(profile.path, dir, branch, base);
         patch.worktree = dir;
         patch.branch = branch;
+        if (fresh) {
+          t = this.patch(slug, id, patch);
+          await this.setupWorktree(slug, id, profile, dir);
+        }
       }
     }
+    // A worktree made elsewhere (branchTicket) may still be setting up.
+    await this.setups.get(this.key(slug, id))?.done;
     if (!t.sessionId) patch.sessionId = crypto.randomUUID();
     if (Object.keys(patch).length) t = this.patch(slug, id, patch);
     const sessionId = t.sessionId!;
@@ -706,6 +718,48 @@ export class Board {
       existed: !!t.sessionStarted || t.runCount > 0 || !!t.workdir || this.sessionExists(sessionId),
       isGit,
     };
+  }
+
+  /**
+   * Copies the board's files into a new worktree and runs its setup command there. Never throws: a failed setup
+   * doesn't block the run, Claude is told about it (see takeSetup).
+   */
+  private setupWorktree(slug: string, id: string, profile: Profile, dir: string): Promise<void> {
+    const key = this.key(slug, id);
+    const abort = new AbortController();
+    const done = (async () => {
+      if (!(profile.copyFiles?.length || profile.setupCommand?.trim())) return;
+      if (profile.setupCommand?.trim()) this.patch(slug, id, { lastActivity: `Setting up worktree: ${profile.setupCommand.trim().split("\n")[0]}` });
+      try {
+        const r = await prepareWorktree(profile.path, dir, profile, { signal: abort.signal, env: { CKANBAN_TICKET: `${slug}/${id}` } });
+        if (r) this.setupResults.set(key, r);
+        if (!this.isRunning(slug, id) && this.store.getTicket(slug, id)) this.patch(slug, id, { lastActivity: null });
+        if (r?.ok === false) console.log(`ticket ${slug}/${id}: worktree setup failed (${r.command}): ${r.output.split("\n").slice(-3).join(" | ")}`);
+      } catch (e) {
+        console.error(`ticket ${slug}/${id}: worktree setup crashed: ${(e as Error).message}`);
+      }
+    })();
+    this.setups.set(key, { done, abort });
+    return done.finally(() => {
+      if (this.setups.get(key)?.done === done) this.setups.delete(key);
+    });
+  }
+
+  /** The setup result not yet told to Claude, once. */
+  private takeSetup(slug: string, id: string): SetupResult | null {
+    const key = this.key(slug, id);
+    const r = this.setupResults.get(key) ?? null;
+    this.setupResults.delete(key);
+    return r;
+  }
+
+  /** Removes a ticket's worktree, running the board's cleanup command in it first (its failure never blocks). */
+  private removeTicketWorktree(profile: Profile, dir: string): ReturnType<typeof removeWorktree> {
+    const cleanup = profile.cleanupCommand?.trim();
+    return removeWorktree(profile.path, dir, cleanup ? async () => {
+      const r = await runShell(dir, cleanup, { timeoutMs: CLEANUP_TIMEOUT_MS });
+      if (!r.ok) console.error(`worktree cleanup failed in ${dir} (${cleanup}): ${r.output.split("\n").slice(-5).join(" | ")}`);
+    } : undefined);
   }
 
   async planningCommand(slug: string, id: string): Promise<string> {
@@ -1047,7 +1101,7 @@ export class Board {
   private async cleanupWorktree(slug: string, t: Ticket): Promise<Ticket> {
     const profile = this.store.getProfile(slug);
     if (!profile || !t.worktree) return t;
-    const r = await removeWorktree(profile.path, t.worktree);
+    const r = await this.removeTicketWorktree(profile, t.worktree);
     if (r.removed) return this.patch(slug, t.id, { worktree: null });
     this.store.addComment(slug, t.id, "ai", `Worktree kept at ${t.worktree}: ${r.reason}`);
     return t;
@@ -1061,7 +1115,7 @@ export class Board {
     }
     const t = this.store.getTicket(slug, id);
     const profile = this.store.getProfile(slug);
-    if (t?.worktree && profile) await removeWorktree(profile.path, t.worktree).catch(() => {});
+    if (t?.worktree && profile) await this.removeTicketWorktree(profile, t.worktree).catch(() => {});
     if (t) deleteAttachments(this.store.attachmentsDir, this.attachmentsOf(slug, t));
     this.store.deleteTicket(slug, id);
     this.bus.emit({ type: "ticket.deleted", profile: slug, id });
@@ -1087,7 +1141,7 @@ export class Board {
     if (this.isRunning(slug, id)) throw new Error("ticket is running; stop it before linking a session");
     if (sessionId !== null && !/^[0-9a-f-]{36}$/i.test(sessionId)) throw new Error("invalid session id");
     if (t.worktree && sessionId !== null) {
-      const r = await removeWorktree(profile.path, t.worktree);
+      const r = await this.removeTicketWorktree(profile, t.worktree);
       if (!r.removed) throw new Error(`ticket already has a worktree with changes (${t.worktree}); cannot switch session`);
     }
     return this.patch(slug, id, sessionId === null
@@ -1147,6 +1201,8 @@ export class Board {
       forkSessionFile(srcFile, { fromId: src.sessionId, toId: patch.sessionId!, fromCwd, toCwd, rename });
       this.store.copyOutputs(slug, src.id, t.id);
       const out = this.patch(slug, t.id, patch);
+      // In the background: the branch opens at once; its first run waits for the setup (ensureSession).
+      if (worktree) void this.setupWorktree(slug, t.id, profile, worktree);
       return { ticket: out, warning: warnings.join(" ") || null };
     } catch (e) {
       if (worktree) await removeWorktree(profile.path, worktree).catch(() => {});
@@ -1166,6 +1222,7 @@ export class Board {
     if (!run.stopRequested && this.store.getTicket(run.slug, run.id)) this.patch(run.slug, run.id, { lastActivity: "Stopping…" });
     run.stopRequested = true;
     run.handle?.stop();
+    this.setups.get(this.key(run.slug, run.id))?.abort.abort();
   }
 
   stop(slug: string, id: string): boolean {
@@ -1198,6 +1255,7 @@ export class Board {
       r.stopRequested = true;
       r.handle?.stop();
     }
+    for (const s of this.setups.values()) s.abort.abort();
     await Promise.race([this.whenIdle(), Bun.sleep(6000)]);
   }
 

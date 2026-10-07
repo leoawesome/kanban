@@ -102,6 +102,14 @@ export interface Profile {
   maxParallel: number;
   model?: string | null;
   createdAt: string;
+  /** Git-ignored files copied into each new worktree (paths or globs relative to the folder). */
+  copyFiles?: string[];
+  /** Runs in each new worktree before Claude starts. */
+  setupCommand?: string;
+  /** Runs in a worktree before it is removed. */
+  cleanupCommand?: string;
+  /** What auto-detection last found (values equal to it show an "Auto-detected" badge). */
+  setupDetected?: SetupDetection | null;
   pathExists?: boolean;
   running?: number;
 }
@@ -236,6 +244,25 @@ export interface Question {
   multiSelect: boolean;
 }
 
+export interface SetupDetection {
+  at: string;
+  copyFiles: string[];
+  setupCommand: string;
+  setupFrom: string[];
+}
+
+/** What the board did to prepare a new worktree before Claude started. */
+export interface SetupResult {
+  copied: string[];
+  missing: string[];
+  command: string;
+  ok: boolean | null;
+  exitCode: number | null;
+  timedOut: boolean;
+  output: string;
+  durationMs: number;
+}
+
 export interface SessionEntry {
   uuid: string;
   at: string;
@@ -254,6 +281,8 @@ export interface SessionEntry {
   unreadable?: "questions" | "proposal" | "tickets";
   /** A ticket-to-ticket message: in = from that ticket's Claude, out = Claude to it. */
   peer?: { dir: "in" | "out"; ticketId: string | null };
+  /** Worktree setup that ran before this prompt (shown as a row before it). */
+  setup?: SetupResult;
 }
 
 export interface Comment {
@@ -458,6 +487,7 @@ export const api = {
     req<Profile>("POST", "/api/profiles", p),
   updateProfile: (slug: string, p: Partial<Profile>) => req<Profile>("PATCH", `/api/profiles/${slug}`, p),
   deleteProfile: (slug: string) => req<void>("DELETE", `/api/profiles/${slug}`),
+  detectSetup: (slug: string) => req<SetupDetection>("POST", `/api/profiles/${slug}/detect-setup`),
   tickets: (slug: string) => req<Ticket[]>("GET", t(slug)),
   files: (slug: string, path: string) =>
     req<{ path: string; entries: FileEntry[] }>("GET", `/api/profiles/${encodeURIComponent(slug)}/files?path=${encodeURIComponent(path)}`),

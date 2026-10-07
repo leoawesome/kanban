@@ -13,6 +13,23 @@ export interface Profile {
   maxParallel: number;
   model?: string | null;
   createdAt: string;
+  /** Git-ignored files (paths or globs relative to the board folder) copied into each new worktree. */
+  copyFiles?: string[];
+  /** Runs in each new worktree (user's shell) after copyFiles, before Claude starts. */
+  setupCommand?: string;
+  /** Runs in a worktree before the board removes it. */
+  cleanupCommand?: string;
+  /** What auto-detection last found; missing: detection never ran (the board runs it on start). */
+  setupDetected?: SetupDetection | null;
+}
+
+/** Worktree setup values detected from the board folder (see worktree-setup.ts). */
+export interface SetupDetection {
+  at: string;
+  copyFiles: string[];
+  setupCommand: string;
+  /** Lockfiles the setup command came from, e.g. "bun.lock", "web/bun.lock". */
+  setupFrom: string[];
 }
 
 /** A tool Claude left running in the background (a long Bash call, a subagent). */

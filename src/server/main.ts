@@ -13,6 +13,7 @@ import { TerminalWatcher } from "./terminals";
 import { defaultRoot, Store } from "./store";
 import { VERSION } from "./version";
 import { WEB_ASSETS } from "./web-assets.gen";
+import { detectMissing } from "./worktree-setup";
 
 export async function startDaemon(): Promise<void> {
   // Board runs and other children inherit this; an older launchd plist starts the daemon with no locale.
@@ -35,6 +36,7 @@ export async function startDaemon(): Promise<void> {
   const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, mcp, scheduler, assets: WEB_ASSETS, restart });
   console.log(`ckanban v${VERSION} listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();
+  void detectMissing(store, (profile) => bus.emit({ type: "profile.updated", slug: profile.slug, profile }));
   const stopPoller = startPoller(board, store, config.prPollMinutes);
   // After recover(): a missed run's ticket must not be mistaken for an interrupted one.
   const stopScheduler = scheduler.start();

@@ -28,6 +28,7 @@ import { fetchUsage, type UsageResult } from "./usage";
 import type { Store } from "./store";
 import { STATUSES, type Profile, type ScheduleEditor, type Status, type Ticket } from "./types";
 import { nowIso, slugify } from "./util";
+import { applyDetection, detectSetup } from "./worktree-setup";
 
 export interface ServerDeps {
   store: Store;
@@ -444,9 +445,10 @@ export function createServer(deps: ServerDeps) {
           model: b.model || null,
           createdAt: nowIso(),
         };
-        store.saveProfile(profile);
-        bus.emit({ type: "profile.updated", slug, profile });
-        return json(profile, 201);
+        const saved = applyDetection(profile, await detectSetup(path));
+        store.saveProfile(saved);
+        bus.emit({ type: "profile.updated", slug, profile: saved });
+        return json(saved, 201);
       }
     }
 
@@ -464,6 +466,13 @@ export function createServer(deps: ServerDeps) {
         if (b.baseBranch !== undefined) next.baseBranch = String(b.baseBranch);
         if (b.maxParallel !== undefined) next.maxParallel = Math.max(1, Number(b.maxParallel) || 1);
         if (b.model !== undefined) next.model = b.model || null;
+        if (b.copyFiles !== undefined) {
+          if (!Array.isArray(b.copyFiles)) throw new HttpError(400, "copyFiles must be a list of paths");
+          next.copyFiles = [...new Set(b.copyFiles.map((f: unknown) => String(f).trim()).filter(Boolean))] as string[];
+        }
+        if (b.setupCommand !== undefined) next.setupCommand = String(b.setupCommand ?? "").trim();
+        if (b.cleanupCommand !== undefined) next.cleanupCommand = String(b.cleanupCommand ?? "").trim();
+        if (b.setupDetected !== undefined) next.setupDetected = b.setupDetected && typeof b.setupDetected === "object" ? b.setupDetected : null;
         if (next.path !== profile.path) shells.kill(slug);
         store.saveProfile(next);
         bus.emit({ type: "profile.updated", slug, profile: next });
@@ -478,6 +487,9 @@ export function createServer(deps: ServerDeps) {
         return new Response(null, { status: 204 });
       }
     }
+
+    // /profiles/:p/detect-setup — what worktree setup detection finds now (the settings dialog decides what to save)
+    if (parts[2] === "detect-setup" && parts.length === 3 && m === "POST") return json(await detectSetup(profile.path));
 
     // /profiles/:p/sessions — Claude Code sessions started in the profile folder
     if (parts[2] === "sessions" && parts.length === 3 && m === "GET") {

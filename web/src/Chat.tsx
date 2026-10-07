@@ -8,6 +8,7 @@ import { useImagePaste } from "./imagePaste";
 import { NewTicketsCard } from "./NewTicketsCard";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
+import { SetupRow } from "./SetupRow";
 import { filesByReply } from "./fileCards";
 import { baseName, copyFile, downloadFile } from "./share";
 import { draftKey, formKey } from "./drafts";
@@ -365,6 +366,11 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
 
   /** One block of the conversation; old = copied history of a branched ticket (shown dimmed). */
   const renderBlock = (b: Block, old: boolean) => {
+    const el = renderEntry(b, old);
+    if (b.kind === "tools" || !b.e.setup) return el;
+    return <Fragment key={b.e.uuid}><SetupRow setup={b.e.setup} old={old} />{el}</Fragment>;
+  };
+  const renderEntry = (b: Block, old: boolean) => {
           if (b.kind === "tools") {
             return (
               <details key={b.items[0].uuid} className={`conv-tools${old ? " inherited" : ""}`}>

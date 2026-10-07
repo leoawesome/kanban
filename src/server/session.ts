@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import type { Bus } from "./events";
 import { mockupName, stripMockups } from "./mockups";
 import type { Store } from "./store";
+import { parseSetupBlock, type SetupResult } from "./worktree-setup";
 
 /** One visible item of a Claude Code session, as shown in the ticket's Conversation tab. */
 export interface QuestionOption {
@@ -56,6 +57,8 @@ export interface SessionEntry {
   unreadable?: BlockKind;
   /** A ticket-to-ticket message (ask_ticket / reply_ticket): in = from that ticket's Claude, out = to it. */
   peer?: { dir: "in" | "out"; ticketId: string | null };
+  /** The board prepared a new worktree before this prompt (copied files, setup command): shown as a row before it. */
+  setup?: SetupResult;
 }
 
 export type BlockKind = "questions" | "proposal" | "tickets";
@@ -262,7 +265,7 @@ function isPublisher(block: any): boolean {
   return block.name === "Bash" && typeof block.input?.command === "string" && HELPER_PUBLISH.test(block.input.command);
 }
 
-function userText(content: unknown): { kind: "text" | "board"; text: string; from?: string; question?: string } | null {
+function userText(content: unknown): { kind: "text" | "board"; text: string; from?: string; question?: string; setup?: SetupResult } | null {
   if (Array.isArray(content)) {
     if (content.some((c: any) => c?.type === "tool_result")) return null;
     content = content.map((c: any) => (c?.type === "text" ? c.text : "")).join("\n");
@@ -275,10 +278,12 @@ function userText(content: unknown): { kind: "text" | "board"; text: string; fro
     const tag = content.slice(ctx, content.indexOf(">", ctx) + 1);
     // Sent by another ticket's Claude (a question, or a late reply): from="<ticket id>".
     const from = tag.match(/ from="([^"]*)"/)?.[1];
-    if (typed && from) return { kind: "text", text: typed, from, question: tag.match(/ question="([^"]*)"/)?.[1] };
-    if (typed) return { kind: "text", text: typed };
+    const setup = parseSetupBlock(content.slice(ctx));
+    const extra = setup ? { setup } : {};
+    if (typed && from) return { kind: "text", text: typed, from, question: tag.match(/ question="([^"]*)"/)?.[1], ...extra };
+    if (typed) return { kind: "text", text: typed, ...extra };
     const note = content.slice(ctx).match(/note="([^"]*)"/)?.[1];
-    return { kind: "board", text: note || "Board sent instructions to Claude" };
+    return { kind: "board", text: note || "Board sent instructions to Claude", ...extra };
   }
   const t = content.trim();
   // Slash-command wrappers, hook output and skill preambles are stored as user messages too.
@@ -341,7 +346,10 @@ export function parseSession(raw: string): ParsedSession {
   const failed = new Set<string>();
   const peerEntry = (u: NonNullable<ReturnType<typeof userText>>, uuid: string, at: string): SessionEntry => {
     if (u.from && u.question) askers.set(u.question, u.from);
-    return { uuid, at, role: "user", kind: u.kind, text: u.text, ...(u.from ? { peer: { dir: "in" as const, ticketId: u.from } } : {}) };
+    return {
+      uuid, at, role: "user", kind: u.kind, text: u.text,
+      ...(u.from ? { peer: { dir: "in" as const, ticketId: u.from } } : {}), ...(u.setup ? { setup: u.setup } : {}),
+    };
   };
 
   for (const line of raw.split("\n")) {

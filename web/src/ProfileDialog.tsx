@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type ClaudeProject, type Profile } from "./api";
+import { api, type ClaudeProject, type Profile, type SetupDetection } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Modal } from "./Modal";
 import { Select } from "./Select";
@@ -7,6 +7,8 @@ import { timeAgo } from "./time";
 
 const MODELS = ["opus", "sonnet", "haiku"];
 const DEFAULT_MAX_PARALLEL = 5;
+
+const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 function folderName(path: string): string {
   return path.replace(/\/+$/, "").split("/").pop() ?? "";
@@ -34,6 +36,15 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
   const [err, setErr] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [ticketCount, setTicketCount] = useState<number | null>(null);
+  // Worktree setup (existing boards; new ones are detected when created).
+  const [copyFiles, setCopyFiles] = useState<string[]>(profile?.copyFiles ?? []);
+  const [newFile, setNewFile] = useState("");
+  const [setupCommand, setSetupCommand] = useState(profile?.setupCommand ?? "");
+  const [cleanupCommand, setCleanupCommand] = useState(profile?.cleanupCommand ?? "");
+  const [detected, setDetected] = useState<SetupDetection | null>(profile?.setupDetected ?? null);
+  const [detecting, setDetecting] = useState(false);
+  const filesAuto = !!detected && detected.copyFiles.length > 0 && sameList(copyFiles, detected.copyFiles);
+  const setupAuto = !!detected && !!detected.setupCommand && setupCommand.trim() === detected.setupCommand;
 
   useEffect(() => {
     api.claudeDefaults().then((d) => setClaudeModel(d.model)).catch(() => {});
@@ -71,12 +82,38 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
     setSaving(true);
     try {
       const p = profile
-        ? await api.updateProfile(profile.slug, { name, path, maxParallel, model: model || null })
+        ? await api.updateProfile(profile.slug, {
+          name, path, maxParallel, model: model || null,
+          // A file typed but not yet added with Enter still counts.
+          copyFiles: newFile.trim() && !copyFiles.includes(newFile.trim()) ? [...copyFiles, newFile.trim()] : copyFiles,
+          setupCommand: setupCommand.trim(), cleanupCommand: cleanupCommand.trim(), setupDetected: detected,
+        })
         : await api.createProfile({ name, path, maxParallel, model: model || undefined });
       onSaved(p);
     } catch (e: any) {
       setErr(e.message);
       setSaving(false);
+    }
+  };
+
+  const addFile = () => {
+    const f = newFile.trim();
+    if (f && !copyFiles.includes(f)) setCopyFiles([...copyFiles, f]);
+    setNewFile("");
+  };
+
+  const detectAgain = async () => {
+    if (!profile) return;
+    setDetecting(true);
+    try {
+      const d = await api.detectSetup(profile.slug);
+      setDetected(d);
+      setCopyFiles(d.copyFiles);
+      setSetupCommand(d.setupCommand);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setDetecting(false);
     }
   };
 
@@ -160,6 +197,56 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
             />
           </label>
         </div>
+
+        {profile && (
+          <>
+            <div className="form-section">
+              <span>Worktree setup</span>
+              <button type="button" className="btn small ghost link" onClick={detectAgain} disabled={detecting}>
+                {detecting ? "Detecting…" : "↺ Detect again"}
+              </button>
+            </div>
+            <div className="setup-explain">
+              Each ticket works in a fresh copy of your repo (a git worktree). Git-ignored files like <code>.env</code> and{" "}
+              <code>node_modules</code> aren't there. These settings prepare that copy before Claude starts.{" "}
+              {(filesAuto || setupAuto) && <b>We filled them in from your folder, so you can leave them as they are.</b>}
+            </div>
+            <div className="field">
+              <div className="field-label setup-label">Files to copy {filesAuto && <span className="auto-badge">Auto-detected</span>}</div>
+              {copyFiles.length > 0 && (
+                <div className="setup-chips">
+                  {copyFiles.map((f) => (
+                    <span key={f} className="setup-chip">
+                      {f}
+                      <button type="button" aria-label={`Remove ${f}`} title="Remove" onClick={() => setCopyFiles(copyFiles.filter((x) => x !== f))}>×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <input className="mono" value={newFile} onChange={(e) => setNewFile(e.target.value)} spellCheck={false}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addFile(); } }}
+                placeholder="Add a path or glob, then Enter" aria-label="Add a file to copy" />
+              <span className="muted small">
+                {filesAuto ? "Found git-ignored .env* files in your folder." : "Copied from your folder into each new worktree; missing ones are skipped."}
+              </span>
+            </div>
+            <label>
+              <span className="setup-label">Setup command {setupAuto && <span className="auto-badge">Auto-detected</span>}</span>
+              <textarea className="mono" rows={2} value={setupCommand} onChange={(e) => setSetupCommand(e.target.value)} spellCheck={false}
+                placeholder="e.g. npm ci" />
+              <span className="muted small setup-hint">
+                {setupAuto && detected?.setupFrom.length ? `From ${detected.setupFrom.join(", ")}. ` : ""}
+                Runs before Claude starts; if it fails, Claude still starts and sees the error.
+              </span>
+            </label>
+            <label>
+              <span>Cleanup command <span className="muted small setup-hint">(optional, rarely needed)</span></span>
+              <input className="mono" value={cleanupCommand} onChange={(e) => setCleanupCommand(e.target.value)} spellCheck={false}
+                placeholder="e.g. docker compose down" />
+              <span className="muted small setup-hint">Runs in the worktree before the board removes it.</span>
+            </label>
+          </>
+        )}
 
         {err && <div className="form-error">{err}</div>}
         <div className="form-actions">

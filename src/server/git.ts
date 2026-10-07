@@ -69,11 +69,13 @@ export async function addWorktree(repo: string, dir: string, branch: string, bas
   }
 }
 
-export async function removeWorktree(repo: string, dir: string): Promise<{ removed: boolean; reason?: string }> {
+/** beforeRemove runs once the worktree is known to be removable (the board's cleanup command); it must not throw. */
+export async function removeWorktree(repo: string, dir: string, beforeRemove?: () => Promise<void>): Promise<{ removed: boolean; reason?: string }> {
   if (!existsSync(dir)) return { removed: true };
   const status = await run(["git", "status", "--porcelain"], dir);
   if (status.code !== 0) return { removed: false, reason: status.stderr.trim() };
   if (status.stdout.trim()) return { removed: false, reason: "worktree has uncommitted changes" };
+  await beforeRemove?.().catch(() => {});
   const r = await run(["git", "worktree", "remove", dir], repo);
   if (r.code !== 0) return { removed: false, reason: r.stderr.trim() };
   return { removed: true };
