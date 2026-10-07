@@ -49,7 +49,8 @@ test("missing binary resolves with error", async () => {
 test("buildArgs", () => {
   const first = buildArgs("u1", false, "sonnet");
   expect(first).toEqual(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages",
-    "--include-partial-messages", "--permission-mode", "bypassPermissions", "--session-id", "u1", "--model", "sonnet"]);
+    "--include-partial-messages", "--permission-mode", "bypassPermissions", "--session-id", "u1", "--model", "sonnet",
+    "--chrome", "--permission-prompt-tool", "stdio"]);
   const again = buildArgs("u1", true, null);
   expect(again).toContain("--resume");
   expect(again).not.toContain("--session-id");
@@ -131,6 +132,22 @@ test("buildArgs passes the board's MCP server so every run has the ckanban tools
   expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
   expect(JSON.parse(mcpConfig()).mcpServers.ckanban.args.at(-1)).toBe("mcp");
 });
+
+test("buildArgs turns Claude in Chrome on for work runs and planning chats", () => {
+  for (const mode of ["bypassPermissions", "plan"] as const) {
+    const args = buildArgs("u1", false, null, mode);
+    expect(args).toContain("--chrome");
+    expect(args[args.indexOf("--permission-prompt-tool") + 1]).toBe("stdio");
+  }
+});
+
+test("permission asks: Chrome tools are allowed, other tools denied, other requests answered with an error", withMode("asks", async () => {
+  const seen: any[] = [];
+  const r = await startRun({ bin: FAKE, cwd: tempDir(), args: STREAM, input: "open example.com", onEvent: (e) => seen.push(e) }).done;
+  expect(r.code).toBe(0);
+  expect(r.events.at(-1).result).toContain("Asks: mcp__claude-in-chrome__navigate=allow Bash=deny other=error");
+  expect(seen.some((e) => e.type === "control_request")).toBe(false);
+}));
 
 test("a background task keeps the run open until Claude picks its result up", withMode("background", async () => {
   const waits: (string[] | null)[] = [];

@@ -46,7 +46,35 @@ export function buildArgs(
   args.push(resume ? "--resume" : "--session-id", sessionId);
   if (model) args.push("--model", model);
   if (mcp) args.push("--mcp-config", mcp);
+  // Claude in Chrome. Its tools ask for permission even under bypassPermissions; with
+  // --permission-prompt-tool stdio those asks reach the board as control requests (see controlResponse).
+  args.push("--chrome", "--permission-prompt-tool", "stdio");
   return args;
+}
+
+const CHROME_TOOL = "mcp__claude-in-chrome__";
+
+/**
+ * The board's answer to a control request from claude (stream-json). Permission asks for Claude in Chrome
+ * tools are allowed; every other ask is denied, as it was before prompts reached the board (headless
+ * runs had nobody to answer them). Anything else gets an error so claude never waits on the board.
+ */
+export function controlResponse(ev: any): unknown {
+  const req = ev?.request;
+  const id = ev?.request_id;
+  if (req?.subtype !== "can_use_tool") {
+    return { type: "control_response", response: { subtype: "error", request_id: id, error: `unsupported control request: ${req?.subtype}` } };
+  }
+  const allow = typeof req.tool_name === "string" && req.tool_name.startsWith(CHROME_TOOL);
+  return {
+    type: "control_response",
+    response: {
+      subtype: "success", request_id: id,
+      response: allow
+        ? { behavior: "allow", updatedInput: req.input ?? {} }
+        : { behavior: "deny", message: "Permission prompts can't be answered in a board run." },
+    },
+  };
 }
 
 function userMessage(text: string): string {
@@ -99,15 +127,19 @@ export function startRun(opts: {
       s?.end();
     } catch {}
   };
-  const write = (text: string): boolean => {
+  const writeLine = (line: string): boolean => {
     if (!stdin) return false;
     try {
-      stdin.write(userMessage(text));
+      stdin.write(line);
       stdin.flush();
     } catch {
       stdin = null;
       return false;
     }
+    return true;
+  };
+  const write = (text: string): boolean => {
+    if (!writeLine(userMessage(text))) return false;
     unread++;
     return true;
   };
@@ -152,6 +184,11 @@ export function startRun(opts: {
         try {
           ev = JSON.parse(line);
         } catch {
+          return;
+        }
+        // Permission asks and other requests to the host: answer them, they aren't part of the conversation.
+        if (ev?.type === "control_request") {
+          writeLine(JSON.stringify(controlResponse(ev)) + "\n");
           return;
         }
         // Partial-message deltas are only for the live view; don't keep thousands of them in memory.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Fake `claude` CLI for tests. Behaviour controlled by env:
-// FAKE_MODE=ok|fail|slow|partial|blocked|noresult|background|bgsilent, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
+// FAKE_MODE=ok|fail|slow|partial|blocked|noresult|background|bgsilent|asks, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
 // With --input-format stream-json it reads user messages from stdin like the real CLI: messages that
 // arrive mid-run are picked up at the next step (replayed with --replay-user-messages), later ones
 // get their own turn, and it exits at end of input.
@@ -11,6 +11,8 @@ const streamIn = args.includes("--input-format");
 const replay = args.includes("--replay-user-messages");
 
 const inbox: string[] = [];
+// Answers to control requests (permission asks), by request id.
+const answers = new Map<string, any>();
 let eof = false;
 let wake = (): void => {};
 if (streamIn) {
@@ -20,6 +22,7 @@ if (streamIn) {
     const line = (l: string) => {
       if (!l.trim()) return;
       const m = JSON.parse(l);
+      if (m.type === "control_response") return void answers.set(m.response.request_id, m.response);
       inbox.push(m.message.content.map((c: any) => c.text ?? "").join(""));
     };
     for await (const chunk of Bun.stdin.stream()) {
@@ -107,6 +110,22 @@ if (mode === "partial") {
   await Bun.sleep(30000);
 }
 
+// Asks the host for permission like the real CLI does with --permission-prompt-tool stdio.
+const decisions: string[] = [];
+if (mode === "asks") {
+  const asks = [["c1", "mcp__claude-in-chrome__navigate"], ["c2", "Bash"], ["c3", "other"]];
+  for (const [id, tool] of asks) {
+    emit({ type: "control_request", request_id: id, request: tool === "other"
+      ? { subtype: "elicitation" }
+      : { subtype: "can_use_tool", tool_name: tool, input: { url: "https://example.com" }, tool_use_id: `t_${id}` } });
+  }
+  while (answers.size < asks.length && !eof) await new Promise<void>((r) => (wake = r));
+  for (const [id, tool] of asks) {
+    const a = answers.get(id);
+    decisions.push(`${tool}=${a?.subtype === "error" ? "error" : a?.response?.behavior}`);
+  }
+}
+
 const pr = process.env.FAKE_PR ?? null;
 if (process.env.FAKE_OUTPUT && process.env.CKANBAN_OUTPUT_DIR) {
   const { writeFileSync } = await import("node:fs");
@@ -123,7 +142,7 @@ const steered = heard.slice(1);
 const status = mode === "blocked" ? "blocked" : mode === "questions" ? "questions" : "done";
 const text = mode === "noresult"
   ? "All done, no result line."
-  : `Work complete.${steered.length ? `\nSteered: ${steered.join(" | ")}` : ""}${process.env.FAKE_EXTRA ?? ""}\nCKANBAN_RESULT: ${JSON.stringify({ status, prUrl: pr, summary: `fake ${status}` })}`;
+  : `Work complete.${steered.length ? `\nSteered: ${steered.join(" | ")}` : ""}${decisions.length ? `\nAsks: ${decisions.join(" ")}` : ""}${process.env.FAKE_EXTRA ?? ""}\nCKANBAN_RESULT: ${JSON.stringify({ status, prUrl: pr, summary: `fake ${status}` })}`;
 for (const chunk of ["Work ", "complete."]) {
   if (process.env.FAKE_STREAM_DELAY) await Bun.sleep(Number(process.env.FAKE_STREAM_DELAY));
   emit({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: chunk } } });

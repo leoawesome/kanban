@@ -54,6 +54,10 @@ const PEERS_RULE = `# Other tickets
 - If you need something only another ticket's Claude knows (what it changed and why, an API it is building), read that ticket with the ckanban \`get_ticket\` tool first. If that isn't enough, ask its Claude with \`ask_ticket\` (same board only); the call waits for the reply.
 - If another ticket's Claude asks you something, reply with \`reply_ticket\` and the question id it gave you.`;
 
+/** Runs start with --chrome and share the user's Chrome, so each works in tabs of its own. */
+const CHROME_RULE = `# Browser
+Claude in Chrome is available (mcp__claude-in-chrome__* tools, in the user's own Chrome). Open your own new tab and don't close or take over the user's tabs. If it isn't connected, say so and carry on without it.`;
+
 const quote = (s: string, max = 200) => {
   const one = s.replace(/\s+/g, " ").trim();
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
@@ -208,6 +212,8 @@ ${interview ? `${INTERVIEW}\n\n` : ""}# Rules
 
 ${PEERS_RULE}
 
+${CHROME_RULE}
+
 ${targetDesignRule(ctx.outputDir)}${deliverableRule(ctx.outputDir)}
 
 ${artifactRule()}
@@ -227,6 +233,8 @@ ${feedback}
 ${t.mode === "interview" ? `${t.interviewed ? AFTER_ANSWERS : INTERVIEW.replace("In this first run:", "Before continuing, in this run:")}\n\n` : ""}Continue working on the ticket, addressing the feedback. If a pull request already exists, push new commits to the same branch to update it. Update deliverables in ${outputDir} rather than creating duplicates.
 
 ${targetDesignRule(outputDir)}${PEERS_RULE}
+
+${CHROME_RULE}
 
 ${artifactRule()}
 
@@ -279,6 +287,8 @@ ${bugReportRule(t)}
 ${mockupsRule(outputDir)}
 
 ${PLANNING_ARTIFACT_RULE}
+
+${CHROME_RULE}
 
 ${QUESTIONS_FORMAT}
 
