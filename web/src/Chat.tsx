@@ -76,6 +76,22 @@ function liveView(text: string): { text: string; preparing: string | null } {
   };
 }
 
+/** Reply text compared loosely: no result line, whitespace collapsed. */
+const flat = (s: string) => s.replace(/^.*CKANBAN_RESULT.*$/gm, "").replace(/\s+/g, " ").trim();
+
+/** A finished live reply kept on screen until the conversation shows its saved copy. */
+type Handoff = { text: string; flat: string; at: number; count: number };
+const HANDOFF_RETRY_MS = 500;
+const HANDOFF_MAX_MS = 5000;
+
+/** Whether the loaded entries contain the saved copy of a finished live reply. */
+function saved(entries: SessionEntry[], h: Handoff): boolean {
+  // Only board blocks (questions, proposal…): nothing to compare, so wait for any new entry.
+  if (!h.flat) return entries.length > h.count;
+  const recent = entries.filter((e) => e.role === "assistant" && e.kind === "text" && !e.peer).slice(-30);
+  return flat(recent.map((e) => e.text).join(" ")).includes(h.flat);
+}
+
 const UNREADABLE = { questions: "questions", proposal: "ticket proposal", tickets: "proposed tickets" } as const;
 
 /** What the Resend button sends: the same content again, through the matching tool. */
@@ -144,6 +160,12 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   // Text Claude is writing right now (from the run's partial-message stream); not yet in the session file.
   const [live, setLive] = useState("");
+  // Replies that finished streaming but aren't in the loaded conversation yet.
+  const [handoff, setHandoff] = useState<Handoff[]>([]);
+  const entriesRef = useRef<SessionEntry[]>([]);
+  // loadTail calls overlap (draft, activity, session watcher): a slower, older response must not win.
+  const tailSeq = useRef(0);
+  const tailApplied = useRef(0);
   const scroller = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const keepOffset = useRef<number | null>(null);
@@ -154,7 +176,10 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
 
   const loadTail = useCallback(async () => {
     if (!ticket.sessionId) return setPage({ entries: [], start: 0 });
+    const seq = ++tailSeq.current;
     const r = await api.conversation(slug, ticket.id);
+    if (seq < tailApplied.current) return;
+    tailApplied.current = seq;
     setPage((prev) => {
       if (!prev || r.start <= prev.start) return { entries: r.entries, start: r.start };
       const idx = prev.entries.findIndex((e) => e.uuid === r.entries[0]?.uuid);
@@ -171,6 +196,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   }, [loadTail]);
   useEffect(() => {
     setPage(null);
+    setHandoff([]);
     reload();
   }, [reload]);
   useLayoutEffect(() => autoGrow(composer.current), [draft]);
@@ -179,8 +205,13 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   useEffect(() => subscribe((e) => {
     if (e.type === "draft" && e.profile === slug && e.id === ticket.id) {
       if (e.text) setLive(e.text);
-      // Message finished: swap the live copy for the saved one without a gap.
-      else loadTail().catch(() => {}).finally(() => setLive(""));
+      else if (e.final) {
+        // Message finished: show all of it until the saved copy is loaded, then swap without a gap.
+        const h = { text: e.final, flat: flat(liveView(e.final).text), at: Date.now(), count: entriesRef.current.length };
+        setHandoff((hs) => [...hs, h]);
+        setLive("");
+        loadTail().catch(() => {});
+      } else loadTail().catch(() => {}).finally(() => setLive(""));
       return;
     }
     const mine = (e.type === "session.updated" || e.type === "activity") && e.profile === slug && e.id === ticket.id;
@@ -206,6 +237,23 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   }, [ticket.queued]);
 
   const entries = page?.entries ?? [];
+  entriesRef.current = entries;
+  // Finished replies still waiting for their saved copy; filtered here so both never show at once.
+  const waitingHandoff = useMemo(() => handoff.filter((h) => !saved(entries, h)), [handoff, entries]);
+  useEffect(() => {
+    if (waitingHandoff.length !== handoff.length) setHandoff(waitingHandoff);
+  }, [waitingHandoff, handoff]);
+  // The saved copy can lag the stream (transcript written after stdout): poll briefly, then give up.
+  const handingOff = handoff.length > 0;
+  useEffect(() => {
+    if (!handingOff) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setHandoff((hs) => (hs.some((h) => now - h.at >= HANDOFF_MAX_MS) ? hs.filter((h) => now - h.at < HANDOFF_MAX_MS) : hs));
+      loadTail().catch(() => {});
+    }, HANDOFF_RETRY_MS);
+    return () => clearInterval(timer);
+  }, [handingOff, loadTail]);
   // Output files for the cards under replies; refreshed whenever the conversation is.
   const [files, setFiles] = useState<OutputFile[]>([]);
   useEffect(() => {
@@ -225,7 +273,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
       keepOffset.current = null;
     } else if (stickToBottom.current) el.scrollTop = el.scrollHeight;
     else setJump((j) => (j ? { fresh: true } : j));
-  }, [page, pending, running, live]);
+  }, [page, pending, running, live, waitingHandoff]);
 
   const toBottom = () => {
     const el = scroller.current;
@@ -478,6 +526,13 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
             <Markdown text={ticket.interrupted.partial} />
           </div>
         )}
+        {waitingHandoff.map((h) => (
+          <div key={h.at} className="conv-msg assistant live">
+            <div className="conv-head"><b>Claude</b></div>
+            {liveView(h.text).text && <Markdown text={liveView(h.text).text} />}
+            {liveView(h.text).preparing && <div className="chat-typing"><span className="spinner" /> {liveView(h.text).preparing}</div>}
+          </div>
+        ))}
         {live && (
           <div className="conv-msg assistant live" aria-live="polite">
             <div className="conv-head"><b>Claude</b><span className="muted small">writing…</span></div>

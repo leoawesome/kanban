@@ -8,8 +8,9 @@ export type BusEvent =
   | { type: "activity"; profile: string; id: string; run: number; event: unknown }
   | { type: "profile.updated"; slug: string; profile: Profile | null }
   | { type: "session.updated"; profile: string; id: string; session: SessionSummary }
-  /** Text Claude is writing right now in this ticket's run ("" = cleared). Not persisted. */
-  | { type: "draft"; profile: string; id: string; text: string }
+  /** Text Claude is writing right now in this ticket's run ("" = cleared). Not persisted.
+   * final: on a clear, the complete text of the message that just ended (shown until its saved copy loads). */
+  | { type: "draft"; profile: string; id: string; text: string; final?: string }
   /** Connections panel: cached `claude mcp list` result, login progress. */
   | { type: "mcp.updated"; state: McpState }
   /** A schedule was created, changed (fired, paused, edited) or deleted (schedule: null). */

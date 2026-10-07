@@ -537,10 +537,12 @@ export class Board {
       onEvent: (ev) => {
         const changed = draft.feed(ev);
         if (changed !== null) {
-          // Clears go out at once; growing text is batched (~8 updates/s).
+          // Clears go out at once with the finished text (the batched tail may not have gone out yet);
+          // growing text is batched (~8 updates/s).
           if (changed === "") {
             if (draftTimer) clearTimeout(draftTimer);
-            emitDraft();
+            draftTimer = null;
+            this.bus.emit({ type: "draft", profile: slug, id, text: "", ...(draft.finished ? { final: draft.finished } : {}) });
           } else if (!draftTimer) draftTimer = setTimeout(emitDraft, DRAFT_THROTTLE_MS);
         }
         if (ev?.type === "stream_event") return;

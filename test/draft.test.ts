@@ -31,3 +31,19 @@ test("non-stream events leave the draft alone", () => {
   expect(d.feed({ type: "user", message: { content: [] } })).toBeNull();
   expect(d.text).toBe("a");
 });
+
+test("a clear keeps the finished text, so the chat can show its end", () => {
+  const d = new DraftTracker();
+  d.feed(delta("First half, "));
+  d.feed(delta("second half."));
+  expect(d.feed({ type: "assistant", message: { content: [{ type: "text", text: "First half, second half." }] } })).toBe("");
+  expect(d.finished).toBe("First half, second half.");
+  expect(d.text).toBe("");
+  // a new message cutting in also hands over the old text
+  d.feed(delta("Old"));
+  expect(d.feed(se({ type: "message_start" }))).toBe("");
+  expect(d.finished).toBe("Old");
+  // nothing to hand over when no text was written
+  expect(d.feed(se({ type: "message_start" }))).toBeNull();
+  expect(d.finished).toBe("");
+});

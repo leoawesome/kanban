@@ -2,9 +2,12 @@
  * Turns `--include-partial-messages` stream events into the text Claude has written so far
  * in the current message, so the chat can show replies while they are being written.
  * feed() returns the new draft when it changed ("" = cleared), or null when nothing changed.
+ * On a clear, `finished` holds the full text of the message that just ended, so the chat can show
+ * all of it until the saved copy is loaded (throttled updates may not have carried its end yet).
  */
 export class DraftTracker {
   text = "";
+  finished = "";
   private blockHasText = false;
 
   feed(ev: any): string | null {
@@ -35,6 +38,7 @@ export class DraftTracker {
   }
 
   private reset() {
+    this.finished = this.text;
     this.text = "";
     this.blockHasText = false;
   }

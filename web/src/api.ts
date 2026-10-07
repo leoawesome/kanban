@@ -362,7 +362,7 @@ export type BusEvent =
   | { type: "activity"; profile: string; id: string; run: number; event: any }
   | { type: "profile.updated"; slug: string; profile: Profile | null }
   | { type: "session.updated"; profile: string; id: string; session: SessionSummary }
-  | { type: "draft"; profile: string; id: string; text: string }
+  | { type: "draft"; profile: string; id: string; text: string; final?: string }
   | { type: "mcp.updated"; state: McpState }
   | { type: "schedule.updated"; profile: string; id: string; schedule: Omit<Schedule, "summary" | "active"> | null }
   | { type: "restart.updated"; pending: boolean; waiting: number };
