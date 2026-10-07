@@ -21,6 +21,7 @@ import { McpError, McpManager } from "./mcp";
 import { AGENT_IDS, AgentError, AgentRegistry, type AgentId } from "./agents";
 import { SessionCache } from "./session";
 import { ptySupported, ShellManager, type PtyKind, type Shell } from "./shell";
+import { AGENT_STEP_TAIL, settleAgent } from "./subagents";
 import type { TerminalWatcher } from "./terminals";
 import { attachmentHeader, canCopyFile, copyFileToClipboard, markdownPage, markdownTitle, revealFile, ShareError } from "./share";
 import { UpdateChecker } from "./update";
@@ -786,7 +787,20 @@ export function createServer(deps: ServerDeps) {
       const before = url.searchParams.has("before") ? Number(url.searchParams.get("before")) : all.length;
       const end = Math.max(0, Math.min(all.length, before));
       const start = Math.max(0, end - limit);
-      return json({ entries: all.slice(start, end), start, total: all.length, title: parsed?.title ?? null });
+      const active = board.isRunning(slug, id);
+      // Subagent rows carry only their last steps; "show all" fetches the rest (agent endpoint below).
+      const entries = all.slice(start, end).map((e) => {
+        if (!e.agent) return e;
+        const agent = settleAgent(e.agent, active);
+        return { ...e, agent: { ...agent, steps: agent.steps.slice(-AGENT_STEP_TAIL) } };
+      });
+      return json({ entries, start, total: all.length, title: parsed?.title ?? null });
+    }
+    if (action === "agent" && parts.length === 6 && m === "GET") {
+      const t = store.getTicket(slug, id)!;
+      const e = (t.sessionId ? sessions.get(t.sessionId)?.entries : null)?.find((x) => x.agent?.toolUseId === parts[5]);
+      if (!e?.agent) throw new HttpError(404, "no such subagent in this ticket's conversation");
+      return json(settleAgent(e.agent, board.isRunning(slug, id)));
     }
     if (action === "comments") {
       if (m === "GET") return json(store.listComments(slug, id));

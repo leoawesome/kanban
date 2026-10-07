@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import type { Bus } from "./events";
 import { mockupName, stripMockups } from "./mockups";
 import type { Store } from "./store";
+import { AGENT_TOOL, notifiedStatus, parseTaskNotification, SubagentCache, toolLabel, withTranscript, type AgentInfo } from "./subagents";
 import { parseSetupBlock, type SetupResult } from "./worktree-setup";
 
 /** One visible item of a Claude Code session, as shown in the ticket's Conversation tab. */
@@ -39,8 +40,10 @@ export interface SessionEntry {
   at: string;
   role: "user" | "assistant";
   /** board: a prompt the board sent on the user's behalf (instructions hidden). */
-  kind: "text" | "tool" | "board";
+  /** agent: a subagent Claude started (rendered as its own row with status and steps). */
+  kind: "text" | "tool" | "board" | "agent";
   text: string;
+  agent?: AgentInfo;
   /** Interview questions Claude asked (rendered as a form). */
   questions?: Question[];
   /** Improved title/description Claude proposed (rendered with an Apply button). */
@@ -254,7 +257,6 @@ export function findSessionFile(sessionId: string, d: Dirs = {}): string | null 
   return null;
 }
 
-const TOOL_ARG_KEYS = ["file_path", "command", "url", "pattern", "query", "description", "prompt"];
 const PUBLISHED = /Published (\S+) at (https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9-]+)/g;
 
 const HELPER_PUBLISH = /\bartifact publish\b/;
@@ -325,13 +327,6 @@ function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "n
   return null;
 }
 
-function toolLabel(block: any): string {
-  const input = block.input ?? {};
-  const key = TOOL_ARG_KEYS.find((k) => typeof input[k] === "string" && input[k]);
-  const arg = key ? String(input[key]).split("\n")[0].slice(0, 120) : "";
-  return arg ? `${block.name}: ${arg}` : String(block.name);
-}
-
 export function parseSession(raw: string): ParsedSession {
   let customTitle: string | null = null;
   let aiTitle: string | null = null;
@@ -344,6 +339,18 @@ export function parseSession(raw: string): ParsedSession {
   /** Card tool calls (by tool_use id) and those whose result was an error: those don't render. */
   const cards = new Set<string>();
   const failed = new Set<string>();
+  /** Subagents by the Agent tool_use id; their rows update as results and notifications arrive. */
+  const agents = new Map<string, AgentInfo>();
+  const notified = (text: unknown, at: string) => {
+    const n = typeof text === "string" ? parseTaskNotification(text) : null;
+    const a = n && agents.get(n.toolUseId);
+    if (!n || !a) return;
+    a.status = notifiedStatus(n.status);
+    a.endedAt = at || a.endedAt;
+    a.updatedAt = at || a.updatedAt;
+    if (a.status === "done") a.result = n.result ?? a.result;
+    else a.error = n.result ?? `Agent ${n.status}`;
+  };
   const peerEntry = (u: NonNullable<ReturnType<typeof userText>>, uuid: string, at: string): SessionEntry => {
     if (u.from && u.question) askers.set(u.question, u.from);
     return {
@@ -365,6 +372,7 @@ export function parseSession(raw: string): ParsedSession {
     const at = typeof ev.timestamp === "string" ? ev.timestamp : "";
     const uuid = typeof ev.uuid === "string" ? ev.uuid : `${entries.length}`;
     // A message sent while Claude was working is saved as an attachment to the running turn, not a user message.
+    if (ev.type === "attachment" && ev.attachment?.type === "queued_command" && !ev.isSidechain) notified(ev.attachment.prompt, at);
     if (ev.type === "attachment" && ev.attachment?.type === "queued_command" && ev.attachment.commandMode === "prompt" && !ev.isSidechain) {
       const u = userText(ev.attachment.prompt);
       if (u) entries.push(peerEntry(u, uuid, at));
@@ -374,8 +382,10 @@ export function parseSession(raw: string): ParsedSession {
     const content = ev.message?.content;
 
     if (ev.type === "user") {
+      notified(typeof content === "string" ? content : Array.isArray(content) ? content.map((c: any) => (c?.type === "text" ? c.text : "")).join("\n") : "", at);
       if (Array.isArray(content)) {
         for (const [i, b] of content.entries()) {
+          if (b?.type === "tool_result" && agents.has(b.tool_use_id)) agentResult(agents.get(b.tool_use_id)!, b, ev.toolUseResult, at);
           if (b?.type === "tool_result" && b.is_error && cards.has(b.tool_use_id)) failed.add(b.tool_use_id);
           // The reply an ask_ticket call came back with: shown as that ticket's message.
           if (b?.type === "tool_result" && asks.has(b.tool_use_id) && !b.is_error) {
@@ -418,6 +428,15 @@ export function parseSession(raw: string): ParsedSession {
         // The tool_use id keeps the uuid stable, so form drafts and answered/applied state stick to it.
         cards.add(b.id);
         entries.push({ uuid: b.id, at, role: "assistant", kind: "text", text: "", ...card });
+      } else if (b?.type === "tool_use" && AGENT_TOOL.test(b.name ?? "") && typeof b.id === "string") {
+        const input = b.input ?? {};
+        const agent: AgentInfo = {
+          toolUseId: b.id, description: typeof input.description === "string" && input.description.trim() ? input.description.trim() : "Subagent",
+          type: typeof input.subagent_type === "string" ? input.subagent_type : null, background: input.run_in_background === true,
+          status: "running", startedAt: at, endedAt: null, updatedAt: at, steps: [], stepCount: 0, current: null, result: null, error: null,
+        };
+        agents.set(b.id, agent);
+        entries.push({ uuid: b.id, at, role: "assistant", kind: "agent", text: toolLabel(b), agent });
       } else if (b?.type === "tool_use") entries.push({ uuid: id, at, role: "assistant", kind: "tool", text: toolLabel(b) });
     });
   }
@@ -435,6 +454,32 @@ export function parseSession(raw: string): ParsedSession {
     lastMessage: last ? { role: last.role, text: lastText, at: last.at } : null,
     ...pendingSince(entries),
   };
+}
+
+/** The parent's tool_result for an Agent call: the report (sync), the launch (background) or an error. */
+function agentResult(a: AgentInfo, block: any, meta: any, at: string): void {
+  a.updatedAt = at || a.updatedAt;
+  if (meta?.status === "async_launched") {
+    a.background = true;
+    return;
+  }
+  if (block.is_error) {
+    a.status = "failed";
+    a.error = resultText(block.content).trim() || "Agent failed";
+  } else {
+    a.status = "done";
+    const report = meta && Array.isArray(meta.content) ? resultText(meta.content).trim() : "";
+    a.result = report || handBack(resultText(block.content));
+    if (typeof meta?.agentType === "string") a.type ??= meta.agentType;
+  }
+  a.endedAt = at || null;
+}
+
+/** A sync agent's tool_result wraps its report in a notice and indents it; keep just the report. */
+function handBack(text: string): string {
+  const m = /^\[Subagent hand-back\][^\n]*\n/.exec(text);
+  if (!m) return text.trim();
+  return text.slice(m[0].length).split("\n").map((l) => l.replace(/^ {2}/, "")).join("\n").trim();
 }
 
 function pendingSince(entries: SessionEntry[]): Pick<ParsedSession, "openQuestions" | "pendingProposal" | "pendingNewTickets"> {
@@ -455,12 +500,16 @@ interface CacheItem {
   file: string;
   key: string;
   parsed: ParsedSession;
+  /** parsed with its subagents' transcripts merged in, for agentKey. */
+  agentKey: string;
+  merged: ParsedSession;
 }
 
 /** Parses session files lazily; re-reads only when size/mtime change. */
 export class SessionCache {
   private items = new Map<string, CacheItem>();
   private files = new Map<string, string>();
+  private agents = new SubagentCache();
 
   constructor(private dirs: Dirs = {}) {}
 
@@ -477,10 +526,7 @@ export class SessionCache {
     return f;
   }
 
-  /** Cheap change marker for polling; null when the session file doesn't exist. */
-  version(sessionId: string): string | null {
-    const f = this.locate(sessionId);
-    if (!f) return null;
+  private fileVersion(f: string): string | null {
     try {
       const s = statSync(f);
       return `${s.size}:${s.mtimeMs}`;
@@ -489,21 +535,42 @@ export class SessionCache {
     }
   }
 
+  /** Cheap change marker for polling (subagent transcripts included); null when the session file doesn't exist. */
+  version(sessionId: string): string | null {
+    const f = this.locate(sessionId);
+    const v = f && this.fileVersion(f);
+    if (!f || !v) return null;
+    const agents = this.agents.version(f);
+    return agents ? `${v}|${agents}` : v;
+  }
+
   get(sessionId: string): ParsedSession | null {
     const f = this.locate(sessionId);
-    const key = this.version(sessionId);
+    const key = f && this.fileVersion(f);
     if (!f || !key) return null;
-    const hit = this.items.get(sessionId);
-    if (hit && hit.key === key && hit.file === f) return hit.parsed;
-    let raw = "";
-    try {
-      raw = readFileSync(f, "utf8");
-    } catch {
-      return null;
+    let hit = this.items.get(sessionId);
+    if (!hit || hit.key !== key || hit.file !== f) {
+      let raw = "";
+      try {
+        raw = readFileSync(f, "utf8");
+      } catch {
+        return null;
+      }
+      const parsed = parseSession(raw);
+      hit = { file: f, key, parsed, agentKey: "", merged: parsed };
+      this.items.set(sessionId, hit);
     }
-    const parsed = parseSession(raw);
-    this.items.set(sessionId, { file: f, key, parsed });
-    return parsed;
+    if (!hit.parsed.entries.some((e) => e.agent)) return hit.parsed;
+    const agentKey = this.agents.version(f);
+    if (hit.agentKey !== agentKey || hit.merged === hit.parsed) {
+      const transcripts = this.agents.load(f);
+      hit.merged = {
+        ...hit.parsed,
+        entries: hit.parsed.entries.map((e) => (e.agent ? { ...e, agent: withTranscript(e.agent, transcripts.get(e.agent.toolUseId)) } : e)),
+      };
+      hit.agentKey = agentKey;
+    }
+    return hit.merged;
   }
 
   summary(sessionId: string): SessionSummary | null {

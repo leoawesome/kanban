@@ -267,8 +267,10 @@ export interface SessionEntry {
   uuid: string;
   at: string;
   role: "user" | "assistant";
-  kind: "text" | "tool" | "board";
+  /** agent: a subagent Claude started (its own row with status, steps and result). */
+  kind: "text" | "tool" | "board" | "agent";
   text: string;
+  agent?: AgentInfo;
   questions?: Question[];
   proposal?: { title: string; description: string };
   newTickets?: NewTicketDraft[];
@@ -283,6 +285,32 @@ export interface SessionEntry {
   peer?: { dir: "in" | "out"; ticketId: string | null };
   /** Worktree setup that ran before this prompt (shown as a row before it). */
   setup?: SetupResult;
+}
+
+export type SubagentStatus = "running" | "done" | "failed" | "stopped";
+
+/** One thing a subagent did: a tool call or a message it wrote. */
+export interface AgentStep {
+  kind: "tool" | "text";
+  text: string;
+}
+
+export interface AgentInfo {
+  /** The parent's Agent tool_use id. */
+  toolUseId: string;
+  description: string;
+  type: string | null;
+  background: boolean;
+  status: SubagentStatus;
+  startedAt: string;
+  endedAt: string | null;
+  updatedAt: string;
+  /** In the conversation: only the last steps; stepCount counts all. */
+  steps: AgentStep[];
+  stepCount: number;
+  current: string | null;
+  result: string | null;
+  error: string | null;
 }
 
 export interface Comment {
@@ -553,6 +581,8 @@ export const api = {
   conversation: (slug: string, id: string, before?: number) =>
     req<{ entries: SessionEntry[]; start: number; total: number; title: string | null }>(
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),
+  /** One subagent of the ticket's conversation, with all of its steps. */
+  agent: (slug: string, id: string, toolUseId: string) => req<AgentInfo>("GET", `${t(slug, id)}/agent/${encodeURIComponent(toolUseId)}`),
   activity: (slug: string, id: string) => req<ActivityEntry[]>("GET", `${t(slug, id)}/activity`),
   /** Cost, tokens and ≈ share of the 5h plan window per run. */
   ticketUsage: (slug: string, id: string) => req<TicketUsage>("GET", `${t(slug, id)}/usage`),

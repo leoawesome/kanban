@@ -47,6 +47,14 @@ export function elapsed(iso: string, at = Date.now()): string {
   return m ? `${Math.floor(s / 3600)}h ${m}m` : `${Math.floor(s / 3600)}h`;
 }
 
+/** Duration with seconds for live timers: "48s", "2m 14s", "1h 5m". */
+export function duration(fromIso: string, to = Date.now()): string {
+  const s = Math.max(0, Math.floor((to - new Date(fromIso).getTime()) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
 export function timeUntil(iso: string): string {
   const s = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
   if (s < 60) return "any moment";

@@ -741,6 +741,40 @@ textarea { resize: vertical; font-size: 13.5px; }
 .conv-msg.peer .conv-head b { font-weight: 560; color: var(--text); }
 .conv-tools { font-size: 12px; opacity: 0.85; }
 .conv-tools summary::marker { color: var(--muted); }
+/* subagent rows (Agent tool calls): status, timer, live current step; expand for steps + result */
+.agents { align-self: stretch; display: flex; flex-direction: column; gap: 6px; max-width: 92%; }
+.agent { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.agent summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 7px 12px; font-size: 13px; }
+.agent summary::-webkit-details-marker { display: none; }
+.agent-chev { color: var(--muted); font-size: 9px; transition: transform 0.15s; }
+.agent details[open] .agent-chev { transform: rotate(90deg); }
+.agent-icon { flex: none; width: 12px; text-align: center; font-size: 12px; }
+.spinner.agent-icon { width: 9px; height: 9px; color: var(--accent); }
+.agent-icon.done { color: var(--ok); }
+.agent-icon.failed { color: var(--err); }
+.agent-icon.stopped { color: var(--muted); font-size: 9px; }
+.agent-name { flex: 1; min-width: 0; font-weight: 560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-type { font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
+.agent-pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; background: var(--surface-2); color: var(--muted); }
+.agent-pill.running { background: var(--accent-soft); color: var(--accent); }
+.agent-pill.done { background: var(--ok-soft); color: var(--ok); }
+.agent-pill.failed { background: var(--err-soft); color: var(--err); }
+.agent-meta { font-size: 12px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.agent-now { font: 11.5px var(--mono); color: var(--accent); padding: 0 12px 7px 43px; margin-top: -4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-body { border-top: 1px dashed var(--border); padding: 8px 12px 10px 43px; }
+.agent-steps { list-style: none; margin: 0; padding: 0; font: 11.5px/1.7 var(--mono); color: var(--muted); }
+.agent-steps li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-steps li.txt { font: 13px/1.5 inherit; font-family: inherit; color: var(--text); margin: 4px 0; white-space: pre-wrap; }
+.agents .agent-steps li.txt { font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
+.agent-steps li.cur { color: var(--accent); }
+.agent-steps .spinner { width: 8px; height: 8px; vertical-align: -1px; }
+.agent-more { font-size: 12px; margin-bottom: 4px; }
+.agent-empty { font-size: 12px; color: var(--muted); }
+.agent-result { margin-top: 8px; background: var(--bg); border-radius: 8px; padding: 8px 12px; font-size: 13px; overflow-wrap: anywhere; }
+.agent-result.error { background: var(--err-soft); color: var(--err); white-space: pre-wrap; }
+.agent-result h6 { margin: 0 0 2px; font-size: 11px; font-weight: 560; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.agent-result.error h6 { color: inherit; }
+@media (max-width: 720px) { .agent-type { display: none; } .agents { max-width: 100%; } }
 .chat-note { margin: 4px 0; }
 .chat-typing { font-family: inherit; font-size: 13px; }
 .composer { border-radius: 16px; padding: 10px 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); background: var(--surface); }

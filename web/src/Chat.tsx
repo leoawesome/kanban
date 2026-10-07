@@ -3,6 +3,7 @@ import { api, subscribe, type NewTicketDraft, type OutputFile, type SessionEntry
 import { autoGrow } from "./autoGrow";
 import { branchTicket } from "./branch";
 import { BranchCard } from "./BranchCard";
+import { AgentRows } from "./AgentRow";
 import { ArrowDownIcon, BranchIcon, CloseIcon, FileCodeIcon, FileTextIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { NewTicketsCard } from "./NewTicketsCard";
@@ -45,19 +46,21 @@ function WaitingCard({ tasks }: { tasks: NonNullable<Ticket["waitingOn"]> }) {
   );
 }
 
-type Block = { kind: "entry"; e: SessionEntry; index: number } | { kind: "tools"; items: SessionEntry[] };
+/** tools: a run of tool calls folded into one line; agents: a run of subagent rows. */
+type Block = { kind: "entry"; e: SessionEntry; index: number } | { kind: "tools"; items: SessionEntry[] } | { kind: "agents"; items: SessionEntry[] };
 
 /** Copied history of a branched ticket: entries from before the branch point (at = the branch time). */
 const before = (e: SessionEntry, at: string | undefined) => !!at && !!e.at && e.at < at;
 
-/** Tool calls in a row fold into one block; a branch point (splitAt) starts a new one. */
+/** Tool calls (and subagents) in a row fold into one block; a branch point (splitAt) starts a new one. */
 function group(entries: SessionEntry[], splitAt?: string): Block[] {
   const out: Block[] = [];
   entries.forEach((e, index) => {
     const prev = out.at(-1);
-    if (e.kind === "tool") {
-      if (prev?.kind === "tools" && before(prev.items[0], splitAt) === before(e, splitAt)) prev.items.push(e);
-      else out.push({ kind: "tools", items: [e] });
+    if (e.kind === "tool" || e.kind === "agent") {
+      const kind: "tools" | "agents" = e.kind === "tool" ? "tools" : "agents";
+      if (prev?.kind === kind && before(prev.items[0], splitAt) === before(e, splitAt)) prev.items.push(e);
+      else out.push({ kind, items: [e] });
     } else out.push({ kind: "entry", e, index });
   });
   return out;
@@ -369,10 +372,11 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   /** One block of the conversation; old = copied history of a branched ticket (shown dimmed). */
   const renderBlock = (b: Block, old: boolean) => {
     const el = renderEntry(b, old);
-    if (b.kind === "tools" || !b.e.setup) return el;
+    if (b.kind !== "entry" || !b.e.setup) return el;
     return <Fragment key={b.e.uuid}><SetupRow setup={b.e.setup} old={old} />{el}</Fragment>;
   };
   const renderEntry = (b: Block, old: boolean) => {
+          if (b.kind === "agents") return <AgentRows key={b.items[0].uuid} slug={slug} ticketId={ticket.id} items={b.items} old={old} />;
           if (b.kind === "tools") {
             return (
               <details key={b.items[0].uuid} className={`conv-tools${old ? " inherited" : ""}`}>
@@ -463,7 +467,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   const branchedFrom = ticket.branchedFrom ? tickets.find((t) => t.id === ticket.branchedFrom) : undefined;
   const blocks = group(entries, bp?.at);
   // Divider before the first block after the branch point (after all of them while nothing new was said yet).
-  const firstNew = bp ? blocks.findIndex((b) => !before(b.kind === "tools" ? b.items[0] : b.e, bp.at)) : -1;
+  const firstNew = bp ? blocks.findIndex((b) => !before(b.kind === "entry" ? b.e : b.items[0], bp.at)) : -1;
   const dividerAt = !bp || page === null || page.start > 0 && firstNew === 0 ? -1 : firstNew < 0 ? blocks.length : firstNew;
   const divider = bp && (
     <div key={`branch-${bp.at}`} className="branch-divider" role="separator">
@@ -518,7 +522,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
           </div>
         )}
         {blocks.map((b, i) => {
-          const first = b.kind === "tools" ? b.items[0] : b.e;
+          const first = b.kind === "entry" ? b.e : b.items[0];
           return <Fragment key={first.uuid}>{i === dividerAt && divider}{renderBlock(b, before(first, bp?.at))}</Fragment>;
         })}
         {dividerAt === blocks.length && divider}
