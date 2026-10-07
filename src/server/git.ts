@@ -8,9 +8,9 @@ export interface RunResult {
   stderr: string;
 }
 
-export async function run(cmd: string[], cwd: string): Promise<RunResult> {
+export async function run(cmd: string[], cwd: string, env?: Record<string, string>): Promise<RunResult> {
   try {
-    const p = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const p = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore", env: env ? { ...process.env, ...env } : undefined });
     const [stdout, stderr, code] = await Promise.all([
       new Response(p.stdout).text(),
       new Response(p.stderr).text(),

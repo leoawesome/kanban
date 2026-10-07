@@ -4,6 +4,8 @@ export type Store = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" |
 
 export const DRAFT_PREFIX = "ckanban.draft.";
 export const FORM_PREFIX = "ckanban.qform.";
+/** Changes tab line comments not sent to Claude yet. */
+export const REVIEW_PREFIX = "ckanban.review.";
 export const MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 
 export const draftKey = (slug: string, ticketId: string) => `${DRAFT_PREFIX}${slug}.${ticketId}`;
@@ -49,7 +51,7 @@ export function prune(store: Store | null, now = Date.now()) {
     const stale: string[] = [];
     for (let i = 0; i < store.length; i++) {
       const key = store.key(i);
-      if (!key || !(key.startsWith(DRAFT_PREFIX) || key.startsWith(FORM_PREFIX))) continue;
+      if (!key || ![DRAFT_PREFIX, FORM_PREFIX, REVIEW_PREFIX].some((p) => key.startsWith(p))) continue;
       let at = 0;
       try {
         at = Number(JSON.parse(store.getItem(key) ?? "").at) || 0;

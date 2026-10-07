@@ -4,6 +4,7 @@ import { runArtifactJob, type ArtifactJob, type ArtifactOutcome } from "./artifa
 import { ConflictError, type Board } from "./board";
 import { claudeDefaults, listClaudeProjects, listSessions, liveSessionMatch, pickFolder, processCommands } from "./claude";
 import type { Bus, BusEvent } from "./events";
+import { DiffError, ticketDiff } from "./diff";
 import { detectBaseBranch, isGitRepo, resolveBaseBranch, which } from "./git";
 import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
@@ -722,6 +723,18 @@ export function createServer(deps: ServerDeps) {
           ...download,
         },
       });
+    }
+    if (action === "diff" && m === "GET") {
+      // The Changes tab: the worktree (committed, uncommitted and untracked) against its merge-base with the base branch.
+      const t = store.getTicket(slug, id)!;
+      if (!t.worktree) throw new HttpError(404, "this ticket has no worktree");
+      try {
+        const base = profile.baseBranch || (await detectBaseBranch(t.worktree));
+        return json(await ticketDiff(t.worktree, base, { ignoreWhitespace: url.searchParams.get("w") === "1" }));
+      } catch (e) {
+        if (e instanceof DiffError) throw new HttpError(e.status, e.message);
+        throw e;
+      }
     }
     if (action === "conversation" && m === "GET") {
       // Read-only view of the ticket's Claude session file (terminal chat + board runs), newest last.

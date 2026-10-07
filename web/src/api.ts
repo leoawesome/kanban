@@ -41,6 +41,34 @@ export interface FileEntry {
   type: "dir" | "file";
 }
 
+/** The Changes tab: a ticket worktree's diff against its merge-base with the base branch (see src/server/diff.ts). */
+export interface DiffLine {
+  type: "ctx" | "add" | "del";
+  text: string;
+  old: number | null;
+  new: number | null;
+}
+
+export interface DiffFile {
+  path: string;
+  oldPath?: string;
+  status: "A" | "M" | "D" | "R";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  tooLarge: boolean;
+  hunks: { header: string; lines: DiffLine[] }[];
+}
+
+export interface TicketDiff {
+  base: string;
+  mergeBase: string;
+  branch: string | null;
+  files: DiffFile[];
+  additions: number;
+  deletions: number;
+}
+
 export interface FileContent {
   path: string;
   size: number;
@@ -463,6 +491,8 @@ export const api = {
   deleteTicket: (slug: string, id: string) => req<void>("DELETE", t(slug, id)),
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),
   addComment: (slug: string, id: string, text: string) => req<Comment>("POST", `${t(slug, id)}/comments`, { text }),
+  diff: (slug: string, id: string, ignoreWhitespace: boolean) =>
+    req<TicketDiff>("GET", `${t(slug, id)}/diff${ignoreWhitespace ? "?w=1" : ""}`),
   chat: (slug: string, id: string, text: string) => req<Ticket>("POST", `${t(slug, id)}/chat`, { text }),
   sendQueued: (slug: string, id: string, msgId: string) => req<Ticket>("POST", `${t(slug, id)}/queued/${msgId}`),
   discardQueued: (slug: string, id: string, msgId: string) => req<Ticket>("DELETE", `${t(slug, id)}/queued/${msgId}`),

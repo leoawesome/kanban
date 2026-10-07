@@ -3,6 +3,7 @@ import { api, COLUMNS, safeHref, startWorkTarget, subscribe, type ClaudeSession,
 import { outcomeBadge } from "./Card";
 import { branchTicket } from "./branch";
 import { BugReportDialog } from "./BugReportDialog";
+import { Changes, useTicketDiff } from "./Changes";
 import { Chat, useStop } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, ExternalIcon, FileTextIcon, LinkIcon, SparkIcon } from "./icons";
@@ -27,6 +28,9 @@ const MIN_WIDTH = 640;
 const BACKDROP_MIN = 64;
 
 const defaultWidth = () => Math.round(Math.min(1120, window.innerWidth * 0.72));
+
+/** Until the user resizes the panel, the Changes tab opens it this wide (clamped to the window): file list plus diff. */
+const CHANGES_WIDTH = 1280;
 
 /** Chat room for the default width: a comfortable reading column plus side padding. Dragging can go wider. */
 const CHAT_ROOM = 800;
@@ -171,7 +175,7 @@ function usePanelWidth(fit: number) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  return { width, dragging, handle: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onDoubleClick: reset, onKeyDown } };
+  return { width, custom: pref !== null, dragging, handle: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp, onDoubleClick: reset, onKeyDown } };
 }
 
 /** Ticket view: details on the left, the chat with Claude filling the right side. */
@@ -203,9 +207,10 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const images = useImagePaste(setBody);
   // Body the current edit started from; the server rejects the save if the file changed meanwhile.
   const [baseBody, setBaseBody] = useState(ticket.body);
-  const [tabPick, setTab] = useState<"chat" | "plan" | "outputs" | "usage">("chat");
-  // The Plan tab exists only while the ticket has children.
-  const tab = tabPick === "plan" && !children.length ? "chat" : tabPick;
+  const [tabPick, setTab] = useState<"chat" | "plan" | "changes" | "outputs" | "usage">("chat");
+  // The Plan tab exists only while the ticket has children; Changes only while it has a worktree.
+  const tab = (tabPick === "plan" && !children.length) || (tabPick === "changes" && !ticket.worktree) ? "chat" : tabPick;
+  const diffState = useTicketDiff(slug, ticket);
   const [outputCount, setOutputCount] = useState(0);
   const ticketUsage = useTicketUsage(slug, ticket.id);
   const usage = ticketUsage.usage;
@@ -274,7 +279,9 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const bodyRef = useRef<HTMLDivElement>(null);
   const side = useSidebarWidth(bodyRef);
   // Opens fitted to the sidebar plus the chat's reading column; dragging can make it wider.
-  const { width, dragging, handle } = usePanelWidth((detailsOpen ? side.pref : 0) + CHAT_ROOM);
+  const panel = usePanelWidth((detailsOpen ? side.pref : 0) + CHAT_ROOM);
+  const { dragging, handle } = panel;
+  const width = tab === "changes" && !panel.custom ? clampWidth(CHANGES_WIDTH) : panel.width;
   const [descScrolled, setDescScrolled] = useState(false);
 
   const loadOutputs = () => api.outputs(slug, ticket.id).then((o) => setOutputCount(o.length)).catch(() => {});
@@ -549,6 +556,11 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                   </span>
                 </button>
               )}
+              {ticket.worktree && (
+                <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "active" : ""} onClick={() => { diffState.reload(); setTab("changes"); }}>
+                  Changes{!!diffState.diff?.files.length && <span className="tab-count">{diffState.diff.files.length}</span>}
+                </button>
+              )}
               <button role="tab" aria-selected={tab === "outputs"} className={tab === "outputs" ? "active" : ""} onClick={() => { setOutputFocus(null); setTab("outputs"); }}>
                 Outputs{outputCount > 0 && <span className="tab-count">{outputCount}</span>}
               </button>
@@ -560,6 +572,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               <div className="panel-scroll panel-plan">
                 <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
               </div>
+            ) : tab === "changes" ? (
+              <Changes slug={slug} ticket={ticket} state={diffState} onSent={() => setTab("chat")} onError={onError} />
             ) : tab === "usage" ? (
               <div className="panel-scroll panel-usage"><UsagePanel usage={usage} error={ticketUsage.error} /></div>
             ) : tab === "outputs" ? (
