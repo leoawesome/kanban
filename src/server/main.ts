@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Board } from "./board";
 import { Bus } from "./events";
 import { createServer } from "./http";
+import { withUtf8Locale } from "./locale";
 import { McpManager } from "./mcp";
 import { startPoller } from "./prpoller";
 import { Scheduler } from "./scheduler";
@@ -14,6 +15,8 @@ import { VERSION } from "./version";
 import { WEB_ASSETS } from "./web-assets.gen";
 
 export async function startDaemon(): Promise<void> {
+  // Board runs and other children inherit this; an older launchd plist starts the daemon with no locale.
+  Object.assign(process.env, withUtf8Locale(process.env));
   const store = new Store(defaultRoot());
   const config = store.config();
   const port = Number(process.env.CKANBAN_PORT) || config.port;

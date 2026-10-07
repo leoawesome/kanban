@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_UTF8_LOCALE } from "./locale";
 
 export const LABEL = "io.ckanban.daemon";
 export const PLIST_PATH = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
@@ -27,6 +28,8 @@ ${o.programArgs.map((a) => `    <string>${esc(a)}</string>`).join("\n")}
     <string>${esc(o.path)}</string>
     <key>HOME</key>
     <string>${esc(o.home)}</string>
+    <key>LANG</key>
+    <string>${DEFAULT_UTF8_LOCALE}</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mcpConfig } from "./agents";
 import { helperArgv } from "./artifact";
+import { withUtf8Locale } from "./locale";
 
 /** Bun ≥ 1.3.5 can spawn processes on a pseudo-terminal (`Bun.spawn({ terminal })`). */
 export function ptySupported(): boolean {
@@ -63,7 +64,7 @@ export class Shell {
     const { CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, CKANBAN_TICKET, ...env } = process.env;
     this.proc = Bun.spawn(opts.script ? [shell, "-l", "-c", opts.script] : [shell, "-l"], {
       cwd,
-      env: { ...env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+      env: { ...withUtf8Locale(env), TERM: "xterm-256color", COLORTERM: "truecolor" },
       terminal: {
         cols, rows, name: "xterm-256color",
         data: (_t, data) => this.push(data),

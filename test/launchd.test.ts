@@ -9,6 +9,7 @@ test("plistXml", () => {
   expect(xml).toContain("<string>/usr/bin:/a&amp;b</string>");
   expect(xml).toMatch(/<string>\/opt\/bun<\/string>\s*<string>\/x\/src\/cli.ts<\/string>\s*<string>start<\/string>/);
   expect(xml).toContain("<string>/h/daemon.log</string>");
+  expect(xml).toMatch(/<key>LANG<\/key>\s*<string>en_US.UTF-8<\/string>/);
 });
 
 test("plistXml for standalone binary", () => {
