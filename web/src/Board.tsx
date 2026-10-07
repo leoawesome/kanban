@@ -66,6 +66,7 @@ function SortableCard({ ticket, onOpen, queued, held }: { ticket: Ticket; onOpen
       {...attributes}
       {...listeners}
       aria-label={ticket.title}
+      data-ticket={ticket.id}
       onKeyDown={(e) => {
         if (e.key === "Enter" && e.target === e.currentTarget) {
           e.preventDefault();

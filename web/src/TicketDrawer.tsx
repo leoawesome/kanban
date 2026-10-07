@@ -339,6 +339,19 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
       .catch((e) => onError(e.message));
   };
   const setStatus = (status: Status) => act(() => api.updateTicket(slug, ticket.id, { status }));
+  const markDoneRef = useRef(() => {});
+  markDoneRef.current = () => { if (ticket.status === "review") setStatus("done"); };
+  useEffect(() => {
+    // ⌘⇧Enter / Ctrl+Shift+Enter: Mark done (Review only), also while typing.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || !e.shiftKey || !(e.metaKey || e.ctrlKey) || e.altKey || e.isComposing) return;
+      if (document.querySelector(".overlay")) return;
+      e.preventDefault();
+      markDoneRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const col = COLUMNS.find((c) => c.id === ticket.status);
   const startTarget = startWorkTarget(ticket);
   const startWork = () => (startTarget === "planning" ? setStatus("planning") : setConfirmStart(true));
@@ -494,7 +507,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                 <div className="desc-edit">
                   <textarea className={`body-input${images.dragOver ? " drop-target" : ""}`} value={body} onChange={(e) => setBody(e.target.value)} autoFocus
                     placeholder="Markdown. Paste or drop images." {...images.handlers}
-                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveBody(); }} />
+                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) saveBody(); }} />
                   {images.error && <div className="form-error">{images.error}</div>}
                   <div className="form-actions">
                     <button className="btn ghost small" onClick={() => { setBody(baseBody); setEditing(false); images.clearError(); }}>Cancel</button>

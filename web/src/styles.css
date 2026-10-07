@@ -1073,6 +1073,10 @@ textarea.drop-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--
 .switcher-item { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 12px; cursor: pointer; border-bottom: 1px solid var(--border); }
 .switcher-item:last-child { border-bottom: 0; }
 .switcher-item.active { background: var(--accent-soft); }
+.board-switcher-item { align-items: center; gap: 10px; justify-content: flex-start; }
+.board-switcher-item .profile-avatar { width: 24px; height: 24px; border-radius: 6px; font-size: 12px; }
+.board-switcher-item .need-chip, .board-switcher-item kbd { flex: none; white-space: nowrap; }
+.switcher-foot { display: flex; flex-wrap: wrap; gap: 14px; }
 .switcher-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 540; }
 
 .field-error { color: var(--err); font-size: 12px; font-weight: 450; }

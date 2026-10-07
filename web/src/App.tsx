@@ -13,7 +13,8 @@ import { NewTicketDialog } from "./NewTicketDialog";
 import { ProfileDialog } from "./ProfileDialog";
 import { SchedulesDialog } from "./SchedulesDialog";
 import { Select } from "./Select";
-import { QuickSwitcher, ShortcutsDialog } from "./Shortcuts";
+import { BoardSwitcher, QuickSwitcher, ShortcutsDialog } from "./Shortcuts";
+import { altDigit, cardDir, stepBoard, stepCard, type CardPos } from "./keynav";
 import { TicketDrawer } from "./TicketDrawer";
 import { toast, Toaster } from "./toast";
 
@@ -49,6 +50,29 @@ function hashFor(slug: string | null, ticket?: string | null): string {
 function isTyping(e: KeyboardEvent): boolean {
   const el = e.target as HTMLElement | null;
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+}
+
+/** Cards on screen, per expanded column, in board order. */
+function cardGrid(): HTMLElement[][] {
+  return [...document.querySelectorAll<HTMLElement>(".board > .column:not(.collapsed)")]
+    .map((c) => [...c.querySelectorAll<HTMLElement>(".column-body > .sortable-card")]);
+}
+
+function focusedCard(grid: HTMLElement[][]): CardPos | null {
+  const el = (document.activeElement as HTMLElement | null)?.closest?.(".sortable-card");
+  for (let col = 0; col < grid.length; col++) {
+    const row = grid[col].findIndex((c) => c === el);
+    if (row >= 0) return { col, row };
+  }
+  return null;
+}
+
+function focusCard(pos: CardPos | null, grid = cardGrid()) {
+  const col = pos && grid[pos.col];
+  const el = col && col[Math.min(pos.row, col.length - 1)];
+  if (!el) return;
+  el.focus({ preventScroll: true });
+  el.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 /** Board filter chips; several on = tickets matching any of them. */
@@ -118,6 +142,7 @@ export function App() {
   const [shortcuts, setShortcuts] = useState(false);
   const [bugReport, setBugReport] = useState(false);
   const [switcher, setSwitcher] = useState(false);
+  const [boardSwitcher, setBoardSwitcher] = useState(false);
   // Command to type into the dock's terminal (e.g. "claude mcp login x"); n makes repeats count.
   const [dockCommand, setDockCommand] = useState<{ text: string; n: number } | null>(null);
   // Tab the dock should switch to (C opens the quick Claude chat).
@@ -246,7 +271,18 @@ export function App() {
     if (!dockOpen) setDockTab(null);
   }, [dockOpen]);
 
-  // Shortcuts: N new ticket, / search, ? cheatsheet, C quick Claude chat, ⌘K jump to a ticket, Ctrl+` terminal & files.
+  // Board switching (B picker, [ ] prev/next, Alt+1…9) leaves the open ticket: it belongs to the old board.
+  const switchBoard = useCallback((to: string) => {
+    if (to === slugRef.current) return;
+    pushedOpen.current = false;
+    setOpenId(null);
+    setSlug(to);
+  }, []);
+  // Latest values for the window key handler below, which is bound once per dialog state.
+  const live = useRef({ profiles, tickets, markDone: (_id: string) => {} });
+
+  // Shortcuts: N new ticket, / search, ? cheatsheet, C quick Claude chat, ⌘K jump to a ticket, Ctrl+` terminal & files,
+  // B board picker, [ ] previous / next board, Alt+1…9 board N, J/K/H/L or arrows select a card, D marks a Review card done.
   // Esc is handled by the panel and dialogs (one layer at a time, see layers.ts).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -261,8 +297,32 @@ export function App() {
         if (slug && !anyLayerOpen()) setSwitcher(true);
         return;
       }
+      const boards = live.current.profiles ?? [];
+      const at = boards.findIndex((p) => p.slug === slug);
+      // Alt+1…9 also works with the ticket panel open, just not while typing or in a dialog.
+      const digit = e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey ? altDigit(e.code) : null;
+      if (digit !== null) {
+        if (isTyping(e) || e.isComposing || document.querySelector(".overlay") || !boards[digit]) return;
+        e.preventDefault();
+        switchBoard(boards[digit].slug);
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
       if (openId || profileDialog || newTicket || connections || schedulesOpen || anyLayerOpen() || document.querySelector(".overlay")) return;
+      const dir = e.shiftKey && e.key.startsWith("Arrow") ? null : cardDir(e.key);
+      if (dir) {
+        // A picked-up card (Space) moves with the arrows instead: leave those to the drag.
+        if (!slug || e.defaultPrevented || document.querySelector(".sortable-card[aria-pressed='true']")) return;
+        // Arrows on a focused button or menu trigger belong to it; J/K/H/L work from anywhere.
+        const focus = document.activeElement;
+        if (e.key.startsWith("Arrow") && focus && focus !== document.body && !focus.closest(".sortable-card")) return;
+        const grid = cardGrid();
+        const next = stepCard(grid.map((c) => c.length), focusedCard(grid), dir);
+        if (!next) return;
+        e.preventDefault();
+        focusCard(next, grid);
+        return;
+      }
       if (e.key === "n" || e.key === "N") {
         e.preventDefault();
         if (slug) setNewTicket(true);
@@ -275,11 +335,24 @@ export function App() {
       } else if (e.key === "c" || e.key === "C") {
         e.preventDefault();
         if (slug) openDockOn("claude");
+      } else if (e.key === "b" || e.key === "B") {
+        e.preventDefault();
+        if (boards.length) setBoardSwitcher(true);
+      } else if (e.key === "[" || e.key === "]") {
+        const to = boards[stepBoard(boards.length, at, e.key === "]" ? 1 : -1)];
+        if (!to) return;
+        e.preventDefault();
+        switchBoard(to.slug);
+      } else if (e.key === "d" || e.key === "D") {
+        const id = (document.activeElement as HTMLElement | null)?.closest?.(".sortable-card")?.getAttribute("data-ticket");
+        if (!id) return;
+        e.preventDefault();
+        live.current.markDone(id);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openId, profileDialog, newTicket, connections, schedulesOpen, slug]);
+  }, [openId, profileDialog, newTicket, connections, schedulesOpen, slug, switchBoard]);
 
   const runInTerminal = useCallback((text: string) => {
     setDockOpen(true);
@@ -371,12 +444,13 @@ export function App() {
     return m;
   }, [inbox]);
 
-  const move = async (id: string, status: Status, order: number, undo = true) => {
+  // Without an order the server puts the ticket where a column entry goes (e.g. top of Done).
+  const move = async (id: string, status: Status, order?: number, undo = true) => {
     const board = slug!;
     const before = tickets.find((t) => t.id === id);
-    setTickets((ts) => ts.map((t) => (t.id === id ? { ...t, status, order } : t)));
+    setTickets((ts) => ts.map((t) => (t.id === id ? { ...t, status, ...(order === undefined ? {} : { order }) } : t)));
     try {
-      await api.updateTicket(board, id, { status, order });
+      await api.updateTicket(board, id, order === undefined ? { status } : { status, order });
       if (undo && before && before.status !== status) {
         const label = COLUMNS.find((c) => c.id === status)?.label ?? status;
         toast(<>Moved <b>{before.title}</b> to {label}</>, {
@@ -388,6 +462,15 @@ export function App() {
       api.tickets(board).then(setTickets).catch(() => {});
     }
   };
+
+  // D on a focused Review card; focus stays at the same spot on the board for the next key.
+  const markDone = (id: string) => {
+    if (tickets.find((t) => t.id === id)?.status !== "review") return;
+    const pos = focusedCard(cardGrid());
+    void move(id, "done");
+    setTimeout(() => focusCard(pos));
+  };
+  live.current = { profiles, tickets, markDone };
 
   const mcpAttention = mcp?.servers.filter((s) => s.attention).length ?? 0;
   const scheduleErrors = schedules?.filter((s) => s.lastError).length ?? 0;
@@ -587,6 +670,10 @@ export function App() {
       )}
       {shortcuts && <ShortcutsDialog onClose={() => setShortcuts(false)} />}
       {bugReport && <BugReportDialog onClose={() => setBugReport(false)} />}
+      {boardSwitcher && profiles && (
+        <BoardSwitcher profiles={profiles} current={slug} needYou={perBoard} onClose={() => setBoardSwitcher(false)}
+          onPick={(s) => { setBoardSwitcher(false); switchBoard(s); }} />
+      )}
       {switcher && profile && (
         <QuickSwitcher tickets={tickets} onClose={() => setSwitcher(false)} onPick={(id) => { setSwitcher(false); openTicket(id); }} />
       )}
