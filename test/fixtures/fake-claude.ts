@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 // Fake `claude` CLI for tests. Behaviour controlled by env:
-// FAKE_MODE=ok|fail|slow|partial|blocked|noresult|background|bgsilent|asks, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
+// FAKE_MODE=ok|fail|slow|partial|blocked|noresult|background|bgsilent|asks|nosession, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
+// FAKE_NO_SAVE=1: stopped before the session transcript is saved (under CLAUDE_CONFIG_DIR, like the real CLI).
 // With --input-format stream-json it reads user messages from stdin like the real CLI: messages that
 // arrive mid-run are picked up at the next step (replayed with --replay-user-messages), later ones
 // get their own turn, and it exits at end of input.
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const streamIn = args.includes("--input-format");
@@ -72,8 +73,20 @@ if (mode === "fail") {
   process.stderr.write("boom: something failed\n");
   process.exit(1);
 }
+// The real CLI's answer to --resume with a session it has no transcript for.
+if (args.includes("--resume") && (mode === "nosession" || (process.env.CLAUDE_CONFIG_DIR && !existsSync(`${process.env.CLAUDE_CONFIG_DIR}/projects/${process.cwd().replace(/[^a-zA-Z0-9]/g, "-")}/${sessionId}.jsonl`)))) {
+  emit({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, session_id: sessionId, errors: [`No conversation found with session ID: ${sessionId}`] });
+  process.exit(1);
+}
 
 emit({ type: "system", subtype: "init", session_id: sessionId, cwd: process.cwd() });
+// Like the real CLI, save the transcript where --resume looks for it (only under a test's own CLAUDE_CONFIG_DIR).
+if (process.env.CLAUDE_CONFIG_DIR && sessionId !== "none" && !process.env.FAKE_NO_SAVE) {
+  const { mkdirSync } = await import("node:fs");
+  const dir = `${process.env.CLAUDE_CONFIG_DIR}/projects/${process.cwd().replace(/[^a-zA-Z0-9]/g, "-")}`;
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(`${dir}/${sessionId}.jsonl`, JSON.stringify({ type: "user", sessionId, cwd: process.cwd(), message: { role: "user", content: first ?? "" } }) + "\n");
+}
 if (first !== null) take(first);
 
 // one event split across two chunks to exercise line buffering

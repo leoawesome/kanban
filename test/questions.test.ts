@@ -27,6 +27,8 @@ beforeEach(async () => {
   client = new BoardClient(server.port);
   argsFile = join(tempDir("ck-args-"), "args.jsonl");
   process.env.FAKE_ARGS_FILE = argsFile;
+  // Fake claude saves its sessions here, so runs can resume them.
+  process.env.CLAUDE_CONFIG_DIR = tempDir("ck-claude-");
   process.env.FAKE_MODE = "ok";
   const p: Profile = { name: "P", slug: "p", path: await makeRepo(), baseBranch: "main", maxParallel: 3, model: null, createdAt: new Date().toISOString() };
   store.saveProfile(p);
@@ -37,6 +39,7 @@ afterEach(async () => {
   await board.shutdown();
   server.stop(true);
   for (const k of ["FAKE_MODE", "FAKE_ARGS_FILE", "FAKE_STEP_MS", "MCP_TOOL_TIMEOUT"]) delete process.env[k];
+  delete process.env.CLAUDE_CONFIG_DIR;
 }, 15000);
 
 function readArgs(): { args: string[]; prompt: string }[] {

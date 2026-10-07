@@ -137,6 +137,12 @@ export function claudeSessionExists(sessionId: string): boolean {
   return claudeSessionFile(sessionId) !== null;
 }
 
+/** Claude's answer to `--resume` with a session it has no transcript for. */
+export function sessionMissing(error: string, events: any[]): boolean {
+  const re = /No conversation found with session ID/i;
+  return re.test(error) || events.some((e) => e?.type === "result" && Array.isArray(e.errors) && e.errors.some((m: unknown) => typeof m === "string" && re.test(m)));
+}
+
 export class ConflictError extends Error {}
 
 export class Board {
@@ -390,7 +396,8 @@ export class Board {
     if (!t || t.status !== "planning" || t.refineStarted || this.isRunning(slug, id) || this.shuttingDown) return;
     if (t.error?.startsWith("corrupt")) return;
     // A linked session is already a conversation about work underway; an interview would be noise.
-    if (t.workdir || t.sessionStarted) return;
+    // A run stopped before Claude saved its session left nothing to talk over: interview as if new.
+    if (t.workdir || (t.sessionStarted && t.sessionId && this.sessionExists(t.sessionId))) return;
     if (this.restartPending) {
       this.patch(slug, id, { refineStarted: true, interrupted: { at: nowIso(), mode: "refine", prompt: { text: "" }, held: true } });
       return;
@@ -469,7 +476,8 @@ export class Board {
     return { status: run.targetStatus ?? run.chat?.returnTo ?? "review" };
   }
 
-  private async executeOnce(run: ActiveRun): Promise<void> {
+  /** healed: this is the one retry in a new session after Claude could not find the old one. */
+  private async executeOnce(run: ActiveRun, healed = false): Promise<void> {
     const { slug, id } = run;
     const startedAt = nowIso();
     let session: { dir: string; sessionId: string; existed: boolean; isGit: boolean };
@@ -512,9 +520,9 @@ export class Board {
       ? run.chat.text
       : run.chat
       ? chatPrompt(t, run.chat.text, run.chat.mode, outputDir)
-      : t.runCount === 0
+      : t.runCount === 0 || !session.existed
       ? firstRunPrompt(t, {
-        isGit: session.isGit, linked: !!t.workdir, comments: t.workdir ? newComments : [], outputDir,
+        isGit: session.isGit, linked: !!t.workdir, comments: t.workdir || t.runCount > 0 ? newComments : [], outputDir,
         schedule: t.scheduleId ? { id: t.scheduleId, name: this.store.getSchedule(slug, t.scheduleId)?.name ?? null, board: slug } : undefined,
       })
       : resumePrompt(t, newComments, outputDir), this.store.attachmentsDir), this.takeSetup(slug, id));
@@ -593,9 +601,12 @@ export class Board {
       .filter((e) => e?.type === "result" && typeof e.result === "string")
       .map((e) => parseResult(e.result))
       .findLast((r) => r !== null) ?? null;
+    // Stopped before Claude got going: there is no session to resume, so the next run starts a new one.
+    const started = session.existed || this.sessionExists(session.sessionId)
+      || out.events.some((e) => (e?.type === "system" && e.subtype === "init") || e?.type === "assistant");
     const base: Partial<Ticket> = {
       ...this.endStatus(run),
-      sessionStarted: true,
+      sessionStarted: started,
       ...(refine || quiet ? {} : { lastRunAt: startedAt, runCount: runNo }),
       lastActivity: pendingActivity ?? this.store.getTicket(slug, id)?.lastActivity ?? null,
     };
@@ -607,6 +618,13 @@ export class Board {
     }
     if (out.code !== 0) {
       const error = out.stderr.trim() || finalText.trim() || `claude exited with code ${out.code}`;
+      // Claude can't find the session (stopped before it was saved, cleaned up, or saved for another folder):
+      // retry once in a new session instead of failing every run from now on.
+      if (!healed && !this.store.getTicket(slug, id)?.workdir && sessionMissing(error, out.events)) {
+        console.log(`ticket ${slug}/${id}: session ${session.sessionId} not found, starting a new one`);
+        this.patch(slug, id, { sessionId: crypto.randomUUID(), sessionStarted: false, error: null });
+        return this.executeOnce(run, true);
+      }
       this.store.addComment(slug, id, "ai", `Run failed (exit ${out.code}): ${error.split("\n").slice(-3).join("\n")}`);
       this.patch(slug, id, { ...base, outcome: "failed", error });
       return;
@@ -715,7 +733,8 @@ export class Board {
     return {
       dir: t.workdir ?? t.worktree ?? profile.path,
       sessionId,
-      existed: !!t.sessionStarted || t.runCount > 0 || !!t.workdir || this.sessionExists(sessionId),
+      // Only a saved session can be resumed (a run stopped in its first second leaves none); a linked one is the user's.
+      existed: !!t.workdir || this.sessionExists(sessionId),
       isGit,
     };
   }

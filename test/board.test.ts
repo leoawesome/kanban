@@ -38,6 +38,8 @@ beforeEach(() => {
   board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async (id) => liveSessions.has(id) });
   argsFile = join(tempDir("ck-args-"), "args.jsonl");
   process.env.FAKE_ARGS_FILE = argsFile;
+  // Fake claude saves its sessions here, so runs can resume them.
+  process.env.CLAUDE_CONFIG_DIR = tempDir("ck-claude-");
   process.env.FAKE_MODE = "ok";
   process.env.FAKE_PR = "https://github.com/x/y/pull/7";
 });
@@ -46,6 +48,7 @@ afterEach(async () => {
   // shutdown(), not stopAll(): stopping frees a slot and would start the next queued (slow) ticket.
   await board.shutdown();
   delete process.env.FAKE_MODE;
+  delete process.env.CLAUDE_CONFIG_DIR;
   delete process.env.FAKE_PR;
   delete process.env.FAKE_ARGS_FILE;
 }, 10000);
@@ -191,6 +194,72 @@ test("stop on an in_progress ticket with no live run clears it", async () => {
   expect(got.status).toBe("review");
   expect(got.outcome).toBe("stopped");
   expect(store.listComments("p", t.id).some((c) => c.text === "Run stopped by user.")).toBe(true);
+});
+
+test("a run stopped before its session was saved doesn't break the next runs", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  process.env.FAKE_NO_SAVE = "1";
+  try {
+    const t = await board.createTicket("p", { title: "x", body: "", status: "ready", mode: "interview" });
+    await Bun.sleep(500);
+    board.stop("p", t.id);
+    await board.whenIdle();
+  } finally {
+    delete process.env.FAKE_NO_SAVE;
+  }
+  process.env.FAKE_MODE = "ok";
+  const t = store.listTickets("p")[0];
+  // Moving the card to Planning starts the interview, in a new session.
+  await board.updateTicket("p", t.id, { status: "planning" });
+  await board.whenIdle();
+  const calls = readArgs();
+  expect(calls.length).toBe(2);
+  expect(calls[1].args).toContain("--session-id");
+  expect(calls[1].args).not.toContain("--resume");
+  expect(calls[1].args[calls[1].args.indexOf("--permission-mode") + 1]).toBe("plan");
+  const got = store.getTicket("p", t.id)!;
+  expect(got.error).toBeNull();
+  expect(got.status).toBe("planning");
+  // That session was saved, so the next message resumes it.
+  await board.chat("p", t.id, "more");
+  await board.whenIdle();
+  expect(readArgs()[2].args).toContain("--resume");
+}, 15000);
+
+test("a ticket stuck on a missing session heals: the next run starts a new session", async () => {
+  await setup();
+  const t = store.createTicket("p", { title: "x", body: "", status: "review" });
+  // Saved by an older version: marked started, but Claude never saved the session.
+  store.updateTicket("p", t.id, { sessionId: crypto.randomUUID(), sessionStarted: true, runCount: 1, error: "No conversation found with session ID: x", outcome: "failed" });
+  await board.chat("p", t.id, "go on");
+  await board.whenIdle();
+  const calls = readArgs();
+  expect(calls.length).toBe(1);
+  expect(calls[0].args).toContain("--session-id");
+  expect(calls[0].args).not.toContain("--resume");
+  const got = store.getTicket("p", t.id)!;
+  expect(got.error).toBeNull();
+  expect(store.listComments("p", t.id).some((c) => c.text.startsWith("Run failed"))).toBe(false);
+});
+
+test("Claude not finding a session it should have: retried once in a new session", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.whenIdle();
+  const old = store.getTicket("p", t.id)!.sessionId;
+  process.env.FAKE_MODE = "nosession";
+  await board.chat("p", t.id, "go on");
+  await board.whenIdle();
+  const calls = readArgs();
+  expect(calls.length).toBe(3);
+  expect(calls[1].args).toContain("--resume");
+  expect(calls[2].args).toContain("--session-id");
+  const got = store.getTicket("p", t.id)!;
+  expect(got.sessionId).not.toBe(old);
+  expect(calls[2].args).toContain(got.sessionId!);
+  expect(got.error).toBeNull();
+  expect(store.listComments("p", t.id).some((c) => c.text.startsWith("Run failed"))).toBe(false);
 });
 
 test("stop with nothing running is a no-op", async () => {

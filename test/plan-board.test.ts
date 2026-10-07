@@ -20,6 +20,8 @@ beforeEach(async () => {
   board = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async () => false, notify: (t) => notes.push(t), planWakeDelayMs: 300 });
   const p: Profile = { name: "P", slug: "p", path: await makeRepo(), baseBranch: "main", maxParallel: 5, model: null, createdAt: new Date().toISOString() };
   store.saveProfile(p);
+  // Fake claude saves its sessions here, so runs can resume them.
+  process.env.CLAUDE_CONFIG_DIR = tempDir("ck-claude-");
   process.env.FAKE_MODE = "ok";
   process.env.FAKE_ARGS_FILE = join(tempDir("ck-args-"), "args.jsonl");
   delete process.env.FAKE_PR;
@@ -28,6 +30,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await board.shutdown();
   delete process.env.FAKE_BLOCK_MATCH;
+  delete process.env.CLAUDE_CONFIG_DIR;
   delete process.env.FAKE_STEP_MS;
 }, 15000);
 
