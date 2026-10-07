@@ -9,6 +9,7 @@ import { NewTicketsCard } from "./NewTicketsCard";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
 import { SetupRow } from "./SetupRow";
+import { useSnippetPicker } from "./SnippetPicker";
 import { filesByReply } from "./fileCards";
 import { baseName, copyFile, downloadFile } from "./share";
 import { draftKey, formKey } from "./drafts";
@@ -158,6 +159,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   // Unsent text survives closing the drawer, switching tickets and reloads.
   const [draft, setDraft] = usePersistentState(draftKey(slug, ticket.id), () => "", (v) => !v.trim(), (v) => typeof v === "string");
   const images = useImagePaste(setDraft);
+  const snippets = useSnippetPicker({ slug, ref: composer, setValue: setDraft });
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   // Text Claude is writing right now (from the run's partial-message stream); not yet in the session file.
   const [live, setLive] = useState("");
@@ -624,13 +626,15 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
       <div className="composer">
         <textarea ref={composer} rows={2} value={draft} disabled={stopping} className={images.dragOver ? "drop-target" : undefined} {...images.handlers}
           placeholder={running ? "Steer Claude: it reads this at its next step, no restart…" : refine ? "Describe your idea or answer Claude…" : "Ask Claude to change or continue something…"}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => setDraft(e.target.value)} {...snippets.handlers}
           onKeyDown={(e) => {
+            if (snippets.onKeyDown(e)) return;
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               send(draft);
             }
           }} />
+        {snippets.popup}
         {images.error && <div className="form-error">{images.error}</div>}
         <div className="composer-foot">
           <span className="muted small composer-hint">

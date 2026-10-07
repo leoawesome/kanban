@@ -10,6 +10,7 @@ import { checkPr } from "./prpoller";
 import { resumeCommand } from "./prompts";
 import { cronError, describeCron, nextRuns, parseCron } from "./cron";
 import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
+import { SnippetError, Snippets } from "./snippets";
 import { QuestionError, Questions } from "./questions";
 import { attentionFor, userWaitReason } from "./attention";
 import { childrenOf, isComplete, MAX_RETRIES, planActive } from "./plan";
@@ -130,6 +131,7 @@ export function createServer(deps: ServerDeps) {
   const scheduler = deps.scheduler ?? new Scheduler(board, store, bus);
   const agents = deps.agents ?? new AgentRegistry();
   const questions = deps.questions ?? new Questions(store, board);
+  const snippets = new Snippets(store, bus);
   const windowsFile = join(store.root, "usage-windows.json");
   const usage = new UsageCache(deps.usage ?? fetchUsage, (r) => recordWindow(windowsFile, r));
   const claudeLogs = deps.claudeLogs ?? new ClaudeLogIndex();
@@ -379,6 +381,18 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
 
+    // Prompt snippets: GET ?profile=<slug> returns global ones plus that board's.
+    if (parts[0] === "snippets") {
+      if (parts.length === 1 && m === "GET") return json(snippets.list(url.searchParams.get("profile") ?? undefined));
+      if (parts.length === 1 && m === "POST") return json(snippets.create((await body(req)) ?? {}), 201);
+      if (parts.length === 2 && m === "PATCH") return json(snippets.update(parts[1], (await body(req)) ?? {}));
+      if (parts.length === 2 && m === "DELETE") {
+        snippets.remove(parts[1]);
+        return new Response(null, { status: 204 });
+      }
+      throw new HttpError(404, "not found");
+    }
+
     // Schedule form preview: is the expression valid, what it means, when it fires next.
     if (parts[0] === "cron" && parts[1] === "preview" && parts.length === 2 && m === "GET") {
       const expr = (url.searchParams.get("expr") ?? "").trim();
@@ -482,6 +496,7 @@ export function createServer(deps: ServerDeps) {
       if (m === "DELETE") {
         if (board.running(slug) > 0) throw new HttpError(409, "profile has running tickets");
         store.deleteProfile(slug);
+        snippets.dropScope(slug);
         shells.kill(slug);
         bus.emit({ type: "profile.updated", slug, profile: null });
         return new Response(null, { status: 204 });
@@ -978,6 +993,7 @@ export function createServer(deps: ServerDeps) {
         if (e instanceof McpError) return json({ error: e.message }, e.status);
         if (e instanceof AgentError) return json({ error: e.message }, e.status);
         if (e instanceof ScheduleError) return json({ error: e.message }, e.status);
+        if (e instanceof SnippetError) return json({ error: e.message }, e.status);
         if (e instanceof QuestionError) return json({ error: e.message }, e.status);
         if (e instanceof URIError) return json({ error: "malformed URL" }, 400);
         console.error(e);

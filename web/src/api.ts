@@ -392,6 +392,18 @@ export interface Schedule {
   active: boolean;
 }
 
+/** Reusable prompt text, inserted by typing `@name` in a composer. scope: "global" or a board slug. */
+export interface Snippet {
+  id: string;
+  name: string;
+  text: string;
+  scope: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SnippetInput = Pick<Snippet, "name" | "text" | "scope">;
+
 export type ScheduleInput = Pick<Schedule, "name" | "title" | "body" | "mode" | "cron" | "skipIfRunning">;
 
 export type ScheduleTrigger = "schedule" | "missed" | "manual";
@@ -421,6 +433,7 @@ export type BusEvent =
   | { type: "session.updated"; profile: string; id: string; session: SessionSummary }
   | { type: "draft"; profile: string; id: string; text: string; final?: string }
   | { type: "mcp.updated"; state: McpState }
+  | { type: "snippets.updated" }
   | { type: "schedule.updated"; profile: string; id: string; schedule: Omit<Schedule, "summary" | "active"> | null }
   | { type: "restart.updated"; pending: boolean; waiting: number };
 
@@ -533,6 +546,10 @@ export const api = {
   /** Cost, tokens and ≈ share of the 5h plan window per run. */
   ticketUsage: (slug: string, id: string) => req<TicketUsage>("GET", `${t(slug, id)}/usage`),
   inbox: () => req<InboxItem[]>("GET", "/api/inbox"),
+  snippets: (slug: string) => req<Snippet[]>("GET", `/api/snippets?profile=${encodeURIComponent(slug)}`),
+  createSnippet: (input: SnippetInput) => req<Snippet>("POST", "/api/snippets", input),
+  updateSnippet: (id: string, patch: Partial<SnippetInput>) => req<Snippet>("PATCH", `/api/snippets/${encodeURIComponent(id)}`, patch),
+  deleteSnippet: (id: string) => req<void>("DELETE", `/api/snippets/${encodeURIComponent(id)}`),
   schedules: (slug: string) => req<Schedule[]>("GET", sch(slug)),
   createSchedule: (slug: string, input: ScheduleInput) => req<Schedule>("POST", sch(slug), input),
   updateSchedule: (slug: string, id: string, patch: Partial<ScheduleInput & { enabled: boolean }>) => req<Schedule>("PATCH", sch(slug, id), patch),

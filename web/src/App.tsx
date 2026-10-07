@@ -4,7 +4,7 @@ import { avatarColor, avatarLetter } from "./avatar";
 import { BugReportDialog } from "./BugReportDialog";
 import { ConnectionsDialog } from "./ConnectionsDialog";
 import { HeaderMenu } from "./HeaderMenu";
-import { BugIcon, ChatIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, Logo, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
+import { AtIcon, BugIcon, ChatIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, Logo, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
 import { Inbox } from "./Inbox";
 import { UsagePill } from "./UsagePill";
 import { anyLayerOpen } from "./layers";
@@ -12,6 +12,7 @@ import { Board, boardOrder } from "./Board";
 import { NewTicketDialog } from "./NewTicketDialog";
 import { ProfileDialog } from "./ProfileDialog";
 import { SchedulesDialog } from "./SchedulesDialog";
+import { SnippetsDialog } from "./SnippetsDialog";
 import { Select } from "./Select";
 import { BoardSwitcher, QuickSwitcher, ShortcutsDialog } from "./Shortcuts";
 import { boardDigit, cardDir, stepBoard, stepCard, type CardPos } from "./keynav";
@@ -158,6 +159,7 @@ export function App() {
   const [connections, setConnections] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
   const [schedulesOpen, setSchedulesOpen] = useState(false);
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
   const schedulesTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [version, setVersion] = useState<{ version: string; latest: string | null; updateAvailable: boolean } | null>(null);
 
@@ -571,6 +573,9 @@ export function App() {
             title: scheduleErrors ? `${scheduleErrors} schedule${scheduleErrors === 1 ? "" : "s"} could not start their last run` : "Recurring tickets on a cron schedule",
             badge: scheduleErrors > 0 ? <span className="need-chip">{scheduleErrors}</span>
               : schedules && schedules.length > 0 ? <span className="muted small">{schedules.filter((s) => s.enabled).length} active</span> : null,
+          }, {
+            label: "Snippets", icon: <AtIcon />, onSelect: () => setSnippetsOpen(true),
+            title: "Reusable prompt text: type @name in a ticket or the chat to insert it",
           }] : []),
           {
             label: "Connections", icon: <PlugIcon />, onSelect: () => setConnections(true), separator: true,
@@ -681,6 +686,7 @@ export function App() {
         <SchedulesDialog profile={profile} schedules={schedules} tickets={tickets} onClose={() => setSchedulesOpen(false)}
           onOpenTicket={(id) => { setSchedulesOpen(false); openTicket(id); }} />
       )}
+      {snippetsOpen && profile && <SnippetsDialog profile={profile} onClose={() => setSnippetsOpen(false)} />}
       {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} tickets={tickets} onOpenTicket={openTicket} onClose={closeTicket}
         nav={{ prev: prevId, next: nextId, go: stepTicket }} slideIn={!stepped.current} />}
       {profileDialog && (

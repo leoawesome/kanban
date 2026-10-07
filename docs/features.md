@@ -99,6 +99,7 @@ Board runs are headless (`claude -p`), where Claude Code turns the built-in Arti
 ~/.claude-kanban/
   config.json                    { "port": 7777, "prPollMinutes": 5 }
   mcp-seen.json                  MCP servers seen connected (so "needs auth" there counts as expired)
+  snippets.json                  prompt snippets (⋯ → Snippets; scope "global" or a board slug), inserted with @name
   profiles/<slug>/profile.json
   profiles/<slug>/tickets/<id>/ticket.md        YAML frontmatter + description
   profiles/<slug>/tickets/<id>/comments.jsonl

@@ -43,6 +43,7 @@ export const KeyboardIcon = (p: IconProps) => svg(<><rect x="1.8" y="4" width="1
 export const DeviceIcon = (p: IconProps) => svg(<><rect x="4.5" y="1.8" width="7" height="12.4" rx="1.6" /><path d="M7.2 11.8h1.6" /></>, p);
 export const GearIcon = (p: IconProps) => svg(<><circle cx="8" cy="8" r="2.2" /><path d="M8 1.8v1.6M8 12.6v1.6M14.2 8h-1.6M3.4 8H1.8M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7L3.6 3.6" /></>, p);
 export const ClockIcon = (p: IconProps) => svg(<><circle cx="8" cy="8" r="6.2" /><path d="M8 4.6V8l2.4 1.6" /></>, p);
+export const AtIcon = (p: IconProps) => svg(<><circle cx="8" cy="8" r="2.4" /><path d="M10.4 8v1.1c0 1 .8 1.7 1.7 1.7s1.6-.8 1.6-1.7V8A5.7 5.7 0 1 0 11 13" /></>, p);
 export const PlugIcon = (p: IconProps) => svg(<path d="M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 0 1-7 0V5zM8 11v3" />, p);
 export const BugIcon = (p: IconProps) => svg(<><rect x="5" y="5" width="6" height="8.5" rx="3" /><path d="M6.3 5.2a1.7 1.7 0 0 1 3.4 0M8 8v5.5M5 8.5H2.5M13.5 8.5H11M5.2 11.5l-2 1.2M10.8 11.5l2 1.2M5.3 6.3L3.5 5M10.7 6.3L12.5 5" /></>, p);
 export const TrashIcon = (p: IconProps) => svg(<path d="M2.8 4.5h10.4M6.3 4.5V3.2c0-.4.3-.7.7-.7h2c.4 0 .7.3.7.7v1.3M4.2 4.5l.6 8.3c0 .4.4.7.8.7h4.8c.4 0 .8-.3.8-.7l.6-8.3" />, p);

@@ -14,6 +14,7 @@ import { Outputs } from "./Outputs";
 import { Select } from "./Select";
 import { useShareNotices } from "./share";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
+import { useSnippetPicker } from "./SnippetPicker";
 import { TicketMenu } from "./TicketMenu";
 import { missingPctReason, UsagePanel, usageChipText, useTicketUsage } from "./UsagePanel";
 import { approxPct } from "./usage";
@@ -205,6 +206,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const [body, setBody] = useState(ticket.body);
   const [editing, setEditing] = useState(false);
   const images = useImagePaste(setBody);
+  const bodyInput = useRef<HTMLTextAreaElement>(null);
+  const snippets = useSnippetPicker({ slug, ref: bodyInput, setValue: setBody });
   // Body the current edit started from; the server rejects the save if the file changed meanwhile.
   const [baseBody, setBaseBody] = useState(ticket.body);
   const [tabPick, setTab] = useState<"chat" | "plan" | "changes" | "outputs" | "usage">("chat");
@@ -512,9 +515,13 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               </div>
               {editing ? (
                 <div className="desc-edit">
-                  <textarea className={`body-input${images.dragOver ? " drop-target" : ""}`} value={body} onChange={(e) => setBody(e.target.value)} autoFocus
-                    placeholder="Markdown. Paste or drop images." {...images.handlers}
-                    onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) saveBody(); }} />
+                  <textarea ref={bodyInput} className={`body-input${images.dragOver ? " drop-target" : ""}`} value={body} onChange={(e) => setBody(e.target.value)} autoFocus
+                    placeholder="Markdown. Paste or drop images. Type @ to insert a snippet." {...images.handlers} {...snippets.handlers}
+                    onKeyDown={(e) => {
+                      if (snippets.onKeyDown(e)) return;
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) saveBody();
+                    }} />
+                  {snippets.popup}
                   {images.error && <div className="form-error">{images.error}</div>}
                   <div className="form-actions">
                     <button className="btn ghost small" onClick={() => { setBody(baseBody); setEditing(false); images.clearError(); }}>Cancel</button>

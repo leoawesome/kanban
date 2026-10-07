@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ClaudeSession, Status, TicketMode } from "./api";
 import { useImagePaste } from "./imagePaste";
 import { ModeToggle } from "./ModeToggle";
 import { Modal } from "./Modal";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
+import { useSnippetPicker } from "./SnippetPicker";
 
 export function NewTicketDialog({ slug, folder, onClose, onCreate }: {
   slug: string;
@@ -19,6 +20,8 @@ export function NewTicketDialog({ slug, folder, onClose, onCreate }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const images = useImagePaste(setBody);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const snippets = useSnippetPicker({ slug, ref: bodyRef, setValue: setBody });
 
   // Start: an interview goes to Planning (questions now), "Just do it" goes to Ready (runs when a slot is free).
   const startStatus: Status = mode === "interview" ? "planning" : "ready";
@@ -57,8 +60,10 @@ export function NewTicketDialog({ slug, folder, onClose, onCreate }: {
         </label>
         <label>
           Description
-          <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Context, acceptance criteria, links… (markdown). Paste or drop images."
-            className={images.dragOver ? "drop-target" : undefined} {...images.handlers} />
+          <textarea ref={bodyRef} rows={8} value={body} onChange={(e) => setBody(e.target.value)}
+            placeholder="Context, acceptance criteria, links… (markdown). Paste or drop images. Type @ to insert a snippet."
+            className={images.dragOver ? "drop-target" : undefined} {...images.handlers} {...snippets.handlers} onKeyDown={snippets.onKeyDown} />
+          {snippets.popup}
           {images.error && <span className="form-error">{images.error}</span>}
         </label>
         <div className="field">

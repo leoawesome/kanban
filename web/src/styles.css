@@ -1275,3 +1275,37 @@ button.pill:hover { color: var(--text); }
 .setup-chip button:hover { color: var(--err); }
 .form .setup-hint { font-weight: 400; }
 .form .mono { font-family: var(--mono); font-size: 12.5px; }
+
+/* Prompt snippets: ⋯ → Snippets dialog and the @name popup in composers */
+.snippets { display: flex; border-top: 1px solid var(--border); margin-top: 8px; min-height: 360px; }
+.snippet-names { width: 190px; flex: none; border-right: 1px solid var(--border); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; max-height: 60vh; }
+.snippet-new { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.snippet-name {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; border: 0; background: transparent;
+  color: var(--text); padding: 6px 9px; border-radius: 7px; cursor: pointer; font: inherit;
+}
+.snippet-name .mono { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.snippet-name:hover { background: var(--surface-2); }
+.snippet-name.on { background: var(--accent-soft); }
+.snippet-hint { padding: 4px 9px; line-height: 1.45; }
+.snippet-editor { flex: 1; min-width: 0; }
+.snippet-editor input.mono { font-family: var(--mono); font-size: 13px; }
+.snippet-editor textarea { font-size: 13px; }
+.snippet-pop {
+  position: fixed; z-index: 90; max-height: 280px; overflow-y: auto; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); animation: pop 0.1s ease-out;
+}
+.snippet-item { display: flex; flex-direction: column; padding: 7px 10px; border-radius: 7px; cursor: pointer; min-width: 0; }
+.snippet-item.on { background: var(--accent-soft); }
+.snippet-item b { font-family: var(--mono); font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.snippet-item > span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.snippet-scope { font-family: inherit; font-size: 10.5px; font-weight: 500; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+.snippet-foot { font-size: 11px; color: var(--muted); padding: 5px 10px 3px; border-top: 1px solid var(--border); margin-top: 4px; }
+.snippet-empty { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; font-size: 12.5px; }
+.snippet-empty span { color: var(--muted); }
+@media (max-width: 640px) {
+  .snippets { flex-direction: column; }
+  .snippet-names { width: auto; border-right: 0; border-bottom: 1px solid var(--border); max-height: 160px; }
+}
+.snippet-editor label > .muted { font-weight: 400; }
