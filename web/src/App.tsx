@@ -14,7 +14,7 @@ import { ProfileDialog } from "./ProfileDialog";
 import { SchedulesDialog } from "./SchedulesDialog";
 import { Select } from "./Select";
 import { BoardSwitcher, QuickSwitcher, ShortcutsDialog } from "./Shortcuts";
-import { altDigit, cardDir, stepBoard, stepCard, type CardPos } from "./keynav";
+import { boardDigit, cardDir, stepBoard, stepCard, type CardPos } from "./keynav";
 import { TicketDrawer } from "./TicketDrawer";
 import { toast, Toaster } from "./toast";
 
@@ -271,7 +271,7 @@ export function App() {
     if (!dockOpen) setDockTab(null);
   }, [dockOpen]);
 
-  // Board switching (B picker, [ ] prev/next, Alt+1…9) leaves the open ticket: it belongs to the old board.
+  // Board switching (B picker, [ ] prev/next, 1…9) leaves the open ticket: it belongs to the old board.
   const switchBoard = useCallback((to: string) => {
     if (to === slugRef.current) return;
     pushedOpen.current = false;
@@ -282,7 +282,7 @@ export function App() {
   const live = useRef({ profiles, tickets, markDone: (_id: string) => {} });
 
   // Shortcuts: N new ticket, / search, ? cheatsheet, C quick Claude chat, ⌘K jump to a ticket, Ctrl+` terminal & files,
-  // B board picker, [ ] previous / next board, Alt+1…9 board N, J/K/H/L or arrows select a card, D marks a Review card done.
+  // B board picker, [ ] previous / next board, 1…9 board N, J/K/H/L or arrows select a card, D marks a Review card done.
   // Esc is handled by the panel and dialogs (one layer at a time, see layers.ts).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -299,16 +299,16 @@ export function App() {
       }
       const boards = live.current.profiles ?? [];
       const at = boards.findIndex((p) => p.slug === slug);
-      // Alt+1…9 also works with the ticket panel open, just not while typing or in a dialog.
-      const digit = e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey ? altDigit(e.code) : null;
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
+      if (openId || profileDialog || newTicket || connections || schedulesOpen || anyLayerOpen() || document.querySelector(".overlay")) return;
+      // Plain 1…9 (Alt+digit is taken by Chrome's tab switching); the ticket panel's questions form uses digits too.
+      const digit = e.shiftKey || e.isComposing ? null : boardDigit(e.code);
       if (digit !== null) {
-        if (isTyping(e) || e.isComposing || document.querySelector(".overlay") || !boards[digit]) return;
+        if (!boards[digit]) return;
         e.preventDefault();
         switchBoard(boards[digit].slug);
         return;
       }
-      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e)) return;
-      if (openId || profileDialog || newTicket || connections || schedulesOpen || anyLayerOpen() || document.querySelector(".overlay")) return;
       const dir = e.shiftKey && e.key.startsWith("Arrow") ? null : cardDir(e.key);
       if (dir) {
         // A picked-up card (Space) moves with the arrows instead: leave those to the drag.

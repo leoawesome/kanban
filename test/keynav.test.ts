@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { altDigit, cardDir, stepBoard, stepCard } from "../web/src/keynav";
+import { boardDigit, cardDir, stepBoard, stepCard } from "../web/src/keynav";
 
 test("cardDir maps J/K/H/L and arrows, ignores other keys", () => {
   expect(cardDir("j")).toBe("down");
@@ -47,10 +47,10 @@ test("stepBoard wraps around both ways", () => {
   expect(stepBoard(0, 0, 1)).toBe(-1);
 });
 
-test("altDigit reads the physical key, 1-9 only", () => {
-  expect(altDigit("Digit1")).toBe(0);
-  expect(altDigit("Digit9")).toBe(8);
-  expect(altDigit("Numpad2")).toBe(1);
-  expect(altDigit("Digit0")).toBeNull();
-  expect(altDigit("KeyA")).toBeNull();
+test("boardDigit reads the physical key, 1-9 only", () => {
+  expect(boardDigit("Digit1")).toBe(0);
+  expect(boardDigit("Digit9")).toBe(8);
+  expect(boardDigit("Numpad2")).toBe(1);
+  expect(boardDigit("Digit0")).toBeNull();
+  expect(boardDigit("KeyA")).toBeNull();
 });

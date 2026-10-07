@@ -39,8 +39,8 @@ export function stepBoard(count: number, current: number, delta: number): number
   return (((current + delta) % count) + count) % count;
 }
 
-/** Alt+1…9 → board index 0…8 (by physical key, since Alt+digit types other characters on macOS). */
-export function altDigit(code: string): number | null {
+/** 1…9 → board index 0…8, by physical key so numpad digits work and the keyboard layout doesn't matter. */
+export function boardDigit(code: string): number | null {
   const m = /^(?:Digit|Numpad)([1-9])$/.exec(code);
   return m ? Number(m[1]) - 1 : null;
 }

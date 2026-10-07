@@ -13,7 +13,7 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
     keys: [
       [["B"], "Switch board"],
       [["[", "]"], "Previous / next board"],
-      [["Alt", "1…9"], "Go to board 1–9"],
+      [["1…9"], "Go to board 1–9"],
     ],
   },
   {
@@ -136,13 +136,13 @@ export function QuickSwitcher({ tickets, onPick, onClose }: { tickets: Ticket[];
 
 const tilde = (p: string) => p.replace(/^\/Users\/[^/]+/, "~");
 
-/** B: type part of a board name, Enter switches. Rows keep the header's board order, so Alt+N hints match. */
+/** B: type part of a board name, Enter switches. Rows keep the header's board order, so the 1…9 hints match. */
 export function BoardSwitcher({ profiles, current, needYou, onPick, onClose }: {
   profiles: Profile[]; current: string | null; needYou: Map<string, number>; onPick: (slug: string) => void; onClose: () => void;
 }) {
   const [q, setQ] = useState("");
   const shown = useMemo(() => {
-    const all = profiles.map((p, i) => ({ p, alt: i < 9 ? i + 1 : null }));
+    const all = profiles.map((p, i) => ({ p, num: i < 9 ? i + 1 : null }));
     if (!q.trim()) return all;
     return all.map((x) => ({ x, s: fuzzyScore(x.p.name, q) ?? fuzzyScore(x.p.slug, q) }))
       .filter((y) => y.s !== null).sort((a, b) => a.s! - b.s!).map((y) => y.x);
@@ -163,7 +163,7 @@ export function BoardSwitcher({ profiles, current, needYou, onPick, onClose }: {
           }} />
         <div className="switcher-list" id="board-switcher-list" role="listbox" aria-label="Boards">
           {shown.length === 0 && <div className="picker-empty">No board matches.</div>}
-          {shown.map(({ p, alt }, i) => {
+          {shown.map(({ p, num }, i) => {
             const need = needYou.get(p.slug);
             return (
               <div key={p.slug} id={`bs-${p.slug}`} role="option" aria-selected={i === active}
@@ -177,7 +177,7 @@ export function BoardSwitcher({ profiles, current, needYou, onPick, onClose }: {
                 </span>
                 {!!need && <span className="need-chip">{need} need you</span>}
                 {p.slug === current && <span className="profile-check" aria-label="Current board"><CheckIcon size={13} /></span>}
-                {alt && <kbd aria-label={`Alt ${alt}`}>Alt {alt}</kbd>}
+                {num && <kbd aria-label={`Key ${num}`}>{num}</kbd>}
               </div>
             );
           })}
