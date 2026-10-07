@@ -1063,7 +1063,7 @@ textarea.drop-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--
 .toast .icon-btn:hover { opacity: 1; background: color-mix(in srgb, currentColor 15%, transparent); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 
-/* shortcuts + quick switcher */
+/* shortcuts + board switcher */
 .shortcuts section h4 { margin: 4px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .shortcuts dl { margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
@@ -1078,6 +1078,36 @@ textarea.drop-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--
 .board-switcher-item .need-chip, .board-switcher-item kbd { flex: none; white-space: nowrap; }
 .switcher-foot { display: flex; flex-wrap: wrap; gap: 14px; }
 .switcher-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 540; }
+
+/* ⌘K command bar */
+.cmdbar-overlay { padding-top: 12vh; }
+.cmdbar {
+  width: 100%; max-width: 600px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28); overflow: hidden; display: flex; flex-direction: column; max-height: 72vh;
+}
+.cmdbar-input { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); color: var(--muted); }
+.cmdbar-input input, .cmdbar-input input:focus { flex: 1; min-width: 0; border: 0; outline: 0; box-shadow: none; border-radius: 0; font: inherit; font-size: 16px; background: none; color: var(--text); padding: 0; }
+.cmdbar-list { overflow-y: auto; padding-bottom: 6px; }
+.cmdbar-group { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); padding: 10px 16px 4px; font-weight: 600; }
+.cmdbar-group-note { text-transform: none; letter-spacing: 0; font-weight: 450; }
+.cmdbar-group .spinner { width: 10px; height: 10px; border-width: 1.5px; }
+.cmdbar-item { display: flex; align-items: center; gap: 10px; padding: 7px 16px; cursor: pointer; font-size: 13.5px; }
+.cmdbar-item.active { background: var(--accent-soft); }
+.cmdbar-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdbar-title mark { background: none; color: var(--accent); font-weight: 650; }
+.cmdbar-icon { width: 14px; flex: none; display: flex; justify-content: center; color: var(--muted); }
+.cmdbar-board { flex: none; font-size: 12px; color: var(--muted); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdbar-board.here { font-weight: 600; }
+.cmdbar-status { flex: none; font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.cmdbar-status.st-running, .cmdbar-status.st-in_progress { color: var(--accent); }
+.cmdbar-status.st-review { color: var(--info); }
+.cmdbar-status.st-planning { color: var(--warn); }
+.cmdbar-status.st-done { color: var(--ok); }
+.cmdbar-keys { flex: none; display: flex; gap: 3px; }
+.cmdbar-item .profile-avatar { width: 20px; height: 20px; border-radius: 5px; font-size: 11px; }
+.cmdbar-item .need-chip { flex: none; white-space: nowrap; }
+.cmdbar-foot { display: flex; flex-wrap: wrap; gap: 14px; padding: 8px 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.cmdbar-foot-note { margin-left: auto; }
 
 .field-error { color: var(--err); font-size: 12px; font-weight: 450; }
 input[aria-invalid="true"] { border-color: var(--err); }

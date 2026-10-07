@@ -3,7 +3,7 @@ import type { InboxItem } from "./api";
 import { useLayer } from "./layers";
 
 /** Top-bar "N need you" across every board; the list jumps straight to a ticket. ↑↓ move, Esc closes. */
-export function Inbox({ items, onPick }: { items: InboxItem[]; onPick: (i: InboxItem) => void }) {
+export function Inbox({ items, onPick, openRequest }: { items: InboxItem[]; onPick: (i: InboxItem) => void; openRequest?: number }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -21,6 +21,13 @@ export function Inbox({ items, onPick }: { items: InboxItem[]; onPick: (i: Inbox
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
+
+  // ⌘K "Open inbox": open the list with the first entry focused.
+  useEffect(() => {
+    if (!openRequest) return;
+    setOpen(true);
+    requestAnimationFrame(() => focusAt(0));
+  }, [openRequest]);
 
   const entries = () => [...(menu.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? [])];
   const focusAt = (i: number) => {

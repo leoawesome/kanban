@@ -14,7 +14,8 @@ import { ProfileDialog } from "./ProfileDialog";
 import { SchedulesDialog } from "./SchedulesDialog";
 import { SnippetsDialog } from "./SnippetsDialog";
 import { Select } from "./Select";
-import { BoardSwitcher, QuickSwitcher, ShortcutsDialog } from "./Shortcuts";
+import { BoardSwitcher, ShortcutsDialog } from "./Shortcuts";
+import { CommandBar, type CommandAction } from "./CommandBar";
 import { boardDigit, cardDir, stepBoard, stepCard, type CardPos } from "./keynav";
 import { TicketDrawer } from "./TicketDrawer";
 import { toast, Toaster } from "./toast";
@@ -142,7 +143,10 @@ export function App() {
   const [dismissed, setDismissed] = useState(readDismissed);
   const [shortcuts, setShortcuts] = useState(false);
   const [bugReport, setBugReport] = useState(false);
-  const [switcher, setSwitcher] = useState(false);
+  // ⌘K command bar; the inbox and usage popovers open from it too (n makes repeats count).
+  const [commandBar, setCommandBar] = useState(false);
+  const [inboxRequest, setInboxRequest] = useState(0);
+  const [usageRequest, setUsageRequest] = useState(0);
   const [boardSwitcher, setBoardSwitcher] = useState(false);
   // Command to type into the dock's terminal (e.g. "claude mcp login x"); n makes repeats count.
   const [dockCommand, setDockCommand] = useState<{ text: string; n: number } | null>(null);
@@ -283,7 +287,7 @@ export function App() {
   // Latest values for the window key handler below, which is bound once per dialog state.
   const live = useRef({ profiles, tickets, markDone: (_id: string) => {} });
 
-  // Shortcuts: N new ticket, / search, ? cheatsheet, C quick Claude chat, ⌘K jump to a ticket, Ctrl+` terminal & files,
+  // Shortcuts: N new ticket, / search, ? cheatsheet, C quick Claude chat, ⌘K command bar (tickets on every board, actions, boards), Ctrl+` terminal & files,
   // B board picker, [ ] previous / next board, 1…9 board N, J/K/H/L or arrows select a card, D marks a Review card done.
   // Esc is handled by the panel and dialogs (one layer at a time, see layers.ts).
   useEffect(() => {
@@ -296,7 +300,9 @@ export function App() {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
         if ((e.target as HTMLElement | null)?.closest?.(".xterm")) return;
         e.preventDefault();
-        if (slug && !anyLayerOpen()) setSwitcher(true);
+        // Works without a board too; a second ⌘K closes the bar.
+        const layer = anyLayerOpen();
+        setCommandBar((o) => (o ? false : !layer));
         return;
       }
       const boards = live.current.profiles ?? [];
@@ -491,6 +497,24 @@ export function App() {
     return next;
   });
 
+  // ⌘K actions run the same handlers as their buttons and menu items.
+  const commandActions: CommandAction[] = [
+    ...(profile ? [
+      { id: "new", label: "New ticket", keys: ["N"], run: () => setNewTicket(true) },
+      { id: "dock", label: "Open terminal & files", keys: ["Ctrl", "`"], icon: <TerminalIcon size={14} />, run: () => openDockOn("terminal") },
+      { id: "chat", label: "Quick Claude chat", keys: ["C"], icon: <ChatIcon size={14} />, run: () => openDockOn("claude") },
+    ] : []),
+    ...(inbox.length ? [{ id: "inbox", label: `Open inbox (${inbox.length} need you)`, run: () => setInboxRequest(Date.now()) }] : []),
+    ...(profile ? [{ id: "schedules", label: "Schedules", icon: <ClockIcon size={14} />, run: () => setSchedulesOpen(true) }] : []),
+    { id: "connections", label: "Connections", icon: <PlugIcon size={14} />, run: () => setConnections(true) },
+    ...(profile ? [{ id: "snippets", label: "Snippets", icon: <AtIcon size={14} />, run: () => setSnippetsOpen(true) }] : []),
+    { id: "usage", label: "Usage", run: () => setUsageRequest(Date.now()) },
+    ...(profile ? [{ id: "settings", label: "Board settings", icon: <GearIcon size={14} />, run: () => setProfileDialog("edit") }] : []),
+    { id: "new-board", label: "New board", run: () => setProfileDialog("new") },
+    { id: "shortcuts", label: "Keyboard shortcuts", keys: ["?"], icon: <KeyboardIcon size={14} />, run: () => setShortcuts(true) },
+    { id: "bug", label: "Report a bug", icon: <BugIcon size={14} />, run: () => setBugReport(true) },
+  ];
+
   return (
     <div className="app">
       <header className="topbar">
@@ -537,14 +561,14 @@ export function App() {
             {running}/{profile.maxParallel} running{queued > 0 && <> · {queued} queued</>}
           </span>
         )}
-        <UsagePill />
+        <UsagePill openRequest={usageRequest} />
         {restart.pending && (
           <span className="pill warn" title="The daemon restarts once every active run (on any board) has finished. Until then nothing new starts: queued tickets, chat replies and Planning interviews wait.">
             Restart pending{restart.waiting > 0 ? ` · waiting for ${restart.waiting} ${restart.waiting === 1 ? "run" : "runs"}` : ""}
           </span>
         )}
         <div className="spacer" />
-        <Inbox items={inbox} onPick={(i) => {
+        <Inbox items={inbox} openRequest={inboxRequest} onPick={(i) => {
           if (i.profile !== slug) setSlug(i.profile);
           openTicket(i.id, i.profile);
         }} />
@@ -679,8 +703,13 @@ export function App() {
         <BoardSwitcher profiles={profiles} current={slug} needYou={perBoard} onClose={() => setBoardSwitcher(false)}
           onPick={(s) => { setBoardSwitcher(false); switchBoard(s); }} />
       )}
-      {switcher && profile && (
-        <QuickSwitcher tickets={tickets} onClose={() => setSwitcher(false)} onPick={(id) => { setSwitcher(false); openTicket(id); }} />
+      {commandBar && (
+        <CommandBar profiles={profiles ?? []} current={profile?.slug ?? null} tickets={tickets} needYou={perBoard} actions={commandActions}
+          onClose={() => setCommandBar(false)} onSwitchBoard={switchBoard}
+          onOpenTicket={(board, id) => {
+            if (board !== slug) switchBoard(board);
+            openTicket(id, board);
+          }} />
       )}
       {schedulesOpen && profile && (
         <SchedulesDialog profile={profile} schedules={schedules} tickets={tickets} onClose={() => setSchedulesOpen(false)}

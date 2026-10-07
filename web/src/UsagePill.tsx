@@ -5,7 +5,7 @@ import { fullTime, timeAgo, useNow } from "./time";
 import { pillText, resetText, usageTone, worstTone, type UsageResult } from "./usage";
 
 /** Header pill with Claude plan usage; loads once on page open, then only on Refresh. */
-export function UsagePill() {
+export function UsagePill({ openRequest }: { openRequest?: number } = {}) {
   const [usage, setUsage] = useState<UsageResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
@@ -21,6 +21,11 @@ export function UsagePill() {
       .finally(() => setLoading(false));
   }, []);
   useEffect(load, [load]);
+
+  // ⌘K "Usage" opens the panel.
+  useEffect(() => {
+    if (openRequest) setOpen(true);
+  }, [openRequest]);
 
   useLayer(() => {
     setOpen(false);

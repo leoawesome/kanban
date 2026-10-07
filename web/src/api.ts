@@ -445,6 +445,17 @@ export interface InboxItem {
   attention: { kind: AttentionKind; label: string };
 }
 
+/** A ticket on any board, as the ⌘K command bar lists it. */
+export interface TicketRow {
+  profile: string;
+  profileName: string;
+  id: string;
+  title: string;
+  status: Status;
+  running: boolean;
+  updatedAt: string;
+}
+
 export type BugBlockId = "env" | "ticket" | "log";
 
 /** Context a bug report attaches; the user sees it and can leave it out. */
@@ -546,6 +557,7 @@ export const api = {
   /** Cost, tokens and ≈ share of the 5h plan window per run. */
   ticketUsage: (slug: string, id: string) => req<TicketUsage>("GET", `${t(slug, id)}/usage`),
   inbox: () => req<InboxItem[]>("GET", "/api/inbox"),
+  allTickets: () => req<TicketRow[]>("GET", "/api/tickets"),
   snippets: (slug: string) => req<Snippet[]>("GET", `/api/snippets?profile=${encodeURIComponent(slug)}`),
   createSnippet: (input: SnippetInput) => req<Snippet>("POST", "/api/snippets", input),
   updateSnippet: (id: string, patch: Partial<SnippetInput>) => req<Snippet>("PATCH", `/api/snippets/${encodeURIComponent(id)}`, patch),

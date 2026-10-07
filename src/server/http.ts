@@ -328,6 +328,20 @@ export function createServer(deps: ServerDeps) {
       return json(out);
     }
 
+    if (parts[0] === "tickets" && parts.length === 1 && m === "GET") {
+      // ⌘K command bar: a light row per ticket on every board (title search runs in the browser).
+      const out = [];
+      for (const p of store.listProfiles()) {
+        for (const t of store.listTickets(p.slug)) {
+          out.push({
+            profile: p.slug, profileName: p.name, id: t.id, title: t.title, status: t.status,
+            running: board.isRunning(p.slug, t.id), updatedAt: t.updatedAt,
+          });
+        }
+      }
+      return json(out);
+    }
+
     // Connections panel: Claude Code MCP servers (always from the home dir, user scope for edits).
     if (parts[0] === "mcp") {
       const name = parts[1];

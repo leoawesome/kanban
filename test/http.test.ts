@@ -198,6 +198,22 @@ test("inbox lists tickets across boards where Claude needs the user, not Review"
   expect(mine).toEqual([{ profile: "inbox-a", profileName: "Inbox A", id: failed.id, title: "broken", attention: { kind: "failed", label: "Run failed" } }]);
 });
 
+test("tickets lists a light row for every ticket on every board", async () => {
+  const a = tempDir("ck-plain-");
+  const b = tempDir("ck-plain-");
+  await fetch(`${base}/api/profiles`, json("POST", { name: "Find A", path: a }));
+  await fetch(`${base}/api/profiles`, json("POST", { name: "Find B", path: b }));
+  const one = (await (await fetch(`${base}/api/profiles/find-a/tickets`, json("POST", { title: "alpha", status: "backlog" }))).json()) as any;
+  const two = (await (await fetch(`${base}/api/profiles/find-b/tickets`, json("POST", { title: "beta", status: "backlog" }))).json()) as any;
+  store.updateTicket("find-b", two.id, { status: "review", outcome: "done" });
+  const all = (await (await fetch(`${base}/api/tickets`)).json()) as any[];
+  const mine = all.filter((t) => t.profile.startsWith("find-")).sort((x, y) => x.title.localeCompare(y.title));
+  expect(mine).toEqual([
+    { profile: "find-a", profileName: "Find A", id: one.id, title: "alpha", status: "backlog", running: false, updatedAt: expect.any(String) },
+    { profile: "find-b", profileName: "Find B", id: two.id, title: "beta", status: "review", running: false, updatedAt: expect.any(String) },
+  ]);
+});
+
 test("health", async () => {
   const r = await fetch(`${base}/api/health`);
   const h = (await r.json()) as any;
