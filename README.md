@@ -38,7 +38,7 @@ Columns: **Backlog → Planning → Ready → In Progress → Review → Done**.
 - **Backlog**: park ideas. Nothing runs.
 - **Planning**: Claude interviews you with a clickable question form, draws HTML mockups for UI work, and proposes a clear ticket. It changes no files.
 - **Ready → In Progress**: a headless `claude -p` session works the ticket in its own git worktree (up to 5 at once per board).
-- **Review**: check the result, chat with Claude to change it, or merge the PR. Merged PRs move the card to Done.
+- **Review**: check the diff in the Changes tab, comment on lines or chat with Claude to change it, or merge the PR. Merged PRs move the card to Done.
 
 All data lives in plain files under `~/.claude-kanban/`.
 
@@ -63,9 +63,13 @@ All data lives in plain files under `~/.claude-kanban/`.
 ## Features
 
 - **Profiles**: one board per folder; git repos get a worktree and branch per ticket.
+- **Worktree setup**: each new worktree gets your `.env` files copied and dependencies installed before Claude starts, auto-detected from your folder.
 - **Auto pickup**: moving a card to Ready starts a run right away, up to max parallel per board.
 - **Live activity**: cards show Claude's latest action; the ticket shows the full transcript and cost.
 - **Ticket chat**: refine in Planning, steer while running, follow up in Review.
+- **Diff review**: the Changes tab shows what Claude changed (file tree, unified diff); comment on lines and send them all to Claude at once.
+- **Prompt snippets**: save text you reuse and insert it with `@name` in tickets and chat.
+- **Command bar**: `⌘K` jumps to any ticket on any board, any board or action.
 - **Mockups**: UI tickets get HTML mockups you preview and pick from before work starts.
 - **Plans**: split a ticket into child tickets that run in dependency order, unattended.
 - **Schedules**: recurring tickets on a cron schedule.
