@@ -78,7 +78,7 @@ All data lives in plain files under `~/.claude-kanban/`.
 - **Use it from other agents**: Claude Code or Codex can create, start and steer tickets through `ckanban mcp`.
 - **PR tracking**: Review cards with a PR are checked via `gh`; merged → Done.
 
-Every feature in detail: **[docs/features.md](docs/features.md)**.
+Every feature in detail: **[docs/features.md](docs/features.md)**. What changed in each release: **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## Everyday commands
 
@@ -124,13 +124,13 @@ Run from source as the daemon: `bun src/cli.ts install`. Data layout and env ove
 
 ### Releasing
 
-Bump `version` in `package.json`, then:
+Move the `## Unreleased` notes in [CHANGELOG.md](CHANGELOG.md) under `## [X.Y.Z] - <date>`, bump `version` in `package.json`, commit, then:
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-GitHub Actions runs the tests, builds `ckanban-darwin-arm64` / `ckanban-darwin-x64` with the UI embedded, and publishes a GitHub Release. Users get it with `ckanban update`.
+GitHub Actions takes the release notes from that CHANGELOG section, runs the tests, builds `ckanban-darwin-arm64` / `ckanban-darwin-x64` with the UI embedded, and publishes a GitHub Release. Users get it with `ckanban update`.
 
 Design: `docs/superpowers/specs/2026-09-29-claude-kanban-design.md`.
 

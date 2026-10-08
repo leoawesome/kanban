@@ -18,5 +18,6 @@ Only Leo uses this repo, so no review step for now. **This overrides the board's
 - **User asks to install / set it up:** follow `docs/install-ai.md` exactly (uses the release binary; no need to build from source).
 - **Developing:** see README → Development. Tests: `bun test test`. Typecheck: `bunx tsc --noEmit`. UI build: `bun run build:web`.
 - **After changing code while the daemon runs from source:** `bun run build:web && bun src/cli.ts restart`.
-- **Releasing:** bump `package.json` version, `git tag vX.Y.Z && git push origin vX.Y.Z` (GitHub Actions builds and publishes).
+- **Releasing:** in `CHANGELOG.md`, rename `## Unreleased` to `## [X.Y.Z] - <date>` (first check it covers every user-facing `feat:`/`fix:` since the last tag: `git log vPREV..HEAD --oneline`; write plain user-facing lines, not commit subjects), add a fresh empty `## Unreleased` and the compare link at the bottom; bump `package.json` version; commit `chore: release vX.Y.Z`, push, then `git tag vX.Y.Z && git push origin vX.Y.Z`. GitHub Actions builds and publishes, using that CHANGELOG section as the release notes (the release fails early if the section is missing).
+- **Changelog:** tickets don't edit `CHANGELOG.md` (parallel tickets would conflict); it is written at release time from the commits.
 - `src/server/web-assets.gen.ts` is a stub; `scripts/build-bin.ts` overwrites it during binary builds and restores it. Never commit a generated version.

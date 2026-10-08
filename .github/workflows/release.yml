@@ -11,8 +11,16 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - name: Release notes from CHANGELOG.md
+        run: |
+          bun scripts/release-notes.ts "${GITHUB_REF_NAME}" > notes.md
+          prev=$(git tag --sort=-v:refname --merged HEAD | grep -vx "${GITHUB_REF_NAME}" | head -1)
+          [ -n "$prev" ] && printf '\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' "${GITHUB_REPOSITORY}" "$prev" "${GITHUB_REF_NAME}" >> notes.md
+          cat notes.md
       - run: bun test test
       - name: Build binaries (web UI embedded)
         run: bun scripts/build-bin.ts "${GITHUB_REF_NAME}"
@@ -27,4 +35,4 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/ckanban-darwin-arm64 dist/ckanban-darwin-x64 dist/SHA256SUMS --generate-notes --title "${GITHUB_REF_NAME}"
+        run: gh release create "${GITHUB_REF_NAME}" dist/ckanban-darwin-arm64 dist/ckanban-darwin-x64 dist/SHA256SUMS --notes-file notes.md --title "${GITHUB_REF_NAME}"
