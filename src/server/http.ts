@@ -4,6 +4,7 @@ import { runArtifactJob, type ArtifactJob, type ArtifactOutcome } from "./artifa
 import { ConflictError, type Board } from "./board";
 import { claudeDefaults, listClaudeProjects, listSessions, liveSessionMatch, pickFolder, processCommands } from "./claude";
 import type { Bus, BusEvent } from "./events";
+import { listCommands } from "./commands";
 import { DiffError, ticketDiff } from "./diff";
 import { detectBaseBranch, isGitRepo, resolveBaseBranch, which } from "./git";
 import { checkPr } from "./prpoller";
@@ -508,6 +509,11 @@ export function createServer(deps: ServerDeps) {
 
     // /profiles/:p/detect-setup — what worktree setup detection finds now (the settings dialog decides what to save)
     if (parts[2] === "detect-setup" && parts.length === 3 && m === "POST") return json(await detectSetup(profile.path));
+
+    // /profiles/:p/commands — skills and commands in the profile folder (the `/` picker of new ticket and schedule descriptions)
+    if (parts[2] === "commands" && parts.length === 3 && m === "GET") {
+      return json(listCommands(profile.path, { projects: [profile.path] }).map(({ local, ...c }) => c));
+    }
 
     // /profiles/:p/sessions — Claude Code sessions started in the profile folder
     if (parts[2] === "sessions" && parts.length === 3 && m === "GET") {

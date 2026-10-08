@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   api, type CronPreview, type ScheduleTrigger, type Outcome, type Profile, type Schedule, type ScheduleHistoryItem, type ScheduleInput, type Status,
   type Ticket, type TicketMode,
 } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DescriptionEditor } from "./DescriptionEditor";
 import { Modal } from "./Modal";
 import { ModeToggle } from "./ModeToggle";
 import { timeAgo, timeUntil, useNow } from "./time";
@@ -225,6 +226,7 @@ function ScheduleForm({ slug, initial, onDone }: { slug: string; initial?: Sched
   const [name, setName] = useState(initial?.name ?? "");
   const [title, setTitle] = useState(initial?.title ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [mode, setMode] = useState<TicketMode>(initial?.mode ?? "auto");
   const [cron, setCron] = useState(initial?.cron ?? CRON_PRESETS[1].cron);
   const [custom, setCustom] = useState(() => !!initial && !CRON_PRESETS.some((p) => p.cron === initial.cron));
@@ -281,8 +283,8 @@ function ScheduleForm({ slug, initial, onDone }: { slug: string; initial?: Sched
       <span className="muted small field-help-tight"><code>{"{date}"}</code> and <code>{"{time}"}</code> in the title become the run's date and time.</span>
       <label>
         Prompt
-        <textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)}
-          placeholder="What Claude should do each time: context, steps, what done looks like (markdown)." />
+        <DescriptionEditor slug={slug} value={body} setValue={setBody} inputRef={bodyRef} rows={5}
+          placeholder="What Claude should do each time: context, steps, what done looks like." />
       </label>
       <div className="field">
         <div className="field-label">When</div>

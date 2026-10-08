@@ -62,3 +62,44 @@ export function commandNote(c: SlashCommand | null): string {
 export function sourceLabel(c: SlashCommand): string {
   return c.source === "claude" ? "claude code" : c.source;
 }
+
+/** What may sit right before a `/` that starts a skill name in free text: start, whitespace or an opening bracket/quote (not "a/b"). */
+const BEFORE_SLASH = /[\s([{"'`]/;
+const NAME_CHAR = /[\w.:-]/;
+
+/** The `/query` the caret is in anywhere in a description, if any: `start` is the index of the `/`. */
+export function inlineSlashQuery(value: string, caret: number): { start: number; query: string } | null {
+  let i = caret;
+  while (i > 0 && caret - i < 80 && NAME_CHAR.test(value[i - 1])) i--;
+  if (i === 0 || value[i - 1] !== "/") return null;
+  const at = i - 1;
+  if (at > 0 && !BEFORE_SLASH.test(value[at - 1])) return null;
+  return { start: at, query: value.slice(i, caret) };
+}
+
+/** Replace the `/query` at `start` (and the rest of that word) with `/name `; caret goes after the space. */
+export function insertInlineCommand(value: string, start: number, name: string): { value: string; caret: number } {
+  let end = start + 1;
+  while (end < value.length && NAME_CHAR.test(value[end])) end++;
+  const head = `/${name}`;
+  const rest = value.slice(end);
+  const sep = /^\s/.test(rest) ? "" : " ";
+  return { value: value.slice(0, start) + head + sep + rest, caret: start + head.length + 1 };
+}
+
+/** Text split into plain parts and `/name` mentions of known commands (trailing punctuation stays text). */
+export function splitCommandMentions(text: string, known: (name: string) => boolean): (string | { name: string })[] {
+  const out: (string | { name: string })[] = [];
+  const re = /\/([A-Za-z0-9][\w:-]*(?:\.[\w:-]+)*)/g;
+  let last = 0;
+  for (let m: RegExpExecArray | null; (m = re.exec(text)); ) {
+    if (m.index > 0 && !BEFORE_SLASH.test(text[m.index - 1])) continue;
+    // Part of a path ("/skills/x") rather than a mention.
+    if (text[m.index + m[0].length] === "/" || !known(m[1])) continue;
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push({ name: m[1] });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}

@@ -2,24 +2,24 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from "react-dom";
 import { api } from "./api";
 import { useLayer } from "./layers";
-import { matchCommands, SLASH_GROUPS, slashQuery, sourceLabel, type SlashCommand } from "./slashText";
+import { inlineSlashQuery, insertInlineCommand, matchCommands, SLASH_GROUPS, slashQuery, sourceLabel, type SlashCommand } from "./slashText";
 
 const GAP = 6;
 const STALE_MS = 30_000;
 
-// Per ticket (its worktree decides the project skills); refetched when older than STALE_MS.
+// Per ticket (its worktree decides the project skills) or per board; refetched when older than STALE_MS.
 const cache = new Map<string, { at: number; list: SlashCommand[] }>();
 
-/** What `/` can run in this ticket's chat. null while loading. */
-export function useSlashCommands(slug: string, ticketId: string): SlashCommand[] | null {
-  const key = `${slug}/${ticketId}`;
+/** What `/` can run in this ticket's chat, or in the board's folder without a ticket. null while loading. */
+export function useSlashCommands(slug: string, ticketId?: string): SlashCommand[] | null {
+  const key = `${slug}/${ticketId ?? ""}`;
   const [list, setList] = useState<SlashCommand[] | null>(() => cache.get(key)?.list ?? null);
   useEffect(() => {
     setList(cache.get(key)?.list ?? null);
     const hit = cache.get(key);
     if (hit && Date.now() - hit.at < STALE_MS) return;
     let live = true;
-    api.commands(slug, ticketId).then((l) => {
+    (ticketId ? api.commands(slug, ticketId) : api.boardCommands(slug)).then((l) => {
       cache.set(key, { at: Date.now(), list: l });
       if (live) setList(l);
     }).catch(() => {});
@@ -31,17 +31,20 @@ export function useSlashCommands(slug: string, ticketId: string): SlashCommand[]
 /**
  * `/name` picker for the chat composer, like Claude Code's: typing `/` as the message's first character lists
  * skills, custom commands and built-ins in sections. ↑↓ choose, Enter/Tab insert `/name ` (not send), Esc closes.
+ * `inline` (descriptions): `/` opens it at any word start, and the pick replaces just that word.
  * Wire `handlers` onto the textarea and call `onKeyDown` first in its key handler (true = handled).
  */
-export function useSlashPicker({ commands, ref, setValue }: {
+export function useSlashPicker({ commands, ref, setValue, inline = false }: {
   commands: SlashCommand[] | null;
   ref: RefObject<HTMLTextAreaElement | null>;
   setValue: (v: string) => void;
+  inline?: boolean;
 }) {
-  const [query, setQuery] = useState<string | null>(null);
+  const [q, setQ] = useState<{ start: number; query: string } | null>(null);
+  const query = q?.query ?? null;
   const [active, setActive] = useState(0);
-  // Esc closes the picker until the message no longer starts with "/".
-  const dismissed = useRef(false);
+  // Esc closes the picker for this one `/` (chat: until the message no longer starts with "/").
+  const dismissed = useRef<number | null>(null);
   const caret = useRef<number | null>(null);
   const list = useRef<HTMLDivElement>(null);
 
@@ -49,8 +52,8 @@ export function useSlashPicker({ commands, ref, setValue }: {
   const open = query !== null && matches.length > 0;
 
   useLayer(() => {
-    dismissed.current = true;
-    setQuery(null);
+    if (q) dismissed.current = q.start;
+    setQ(null);
   }, { active: open });
 
   useLayoutEffect(() => {
@@ -68,23 +71,36 @@ export function useSlashPicker({ commands, ref, setValue }: {
 
   const update = () => {
     const el = ref.current;
-    if (!el || el.selectionStart !== el.selectionEnd) return setQuery(null);
-    if (!el.value.startsWith("/")) dismissed.current = false;
-    const next = dismissed.current ? null : slashQuery(el.value, el.selectionStart);
-    if (next !== query) setActive(0);
-    setQuery(next);
+    if (!el || el.selectionStart !== el.selectionEnd) return setQ(null);
+    let next: { start: number; query: string } | null;
+    if (inline) next = inlineSlashQuery(el.value, el.selectionStart);
+    else {
+      const word = slashQuery(el.value, el.selectionStart);
+      next = word === null ? null : { start: 0, query: word };
+    }
+    // Chat: a dismissed picker stays closed until the message no longer starts with "/".
+    if (inline ? !next || next.start !== dismissed.current : !el.value.startsWith("/")) dismissed.current = null;
+    if (next && next.start === dismissed.current) return setQ(null);
+    if (next?.start !== q?.start || next?.query !== query) setActive(0);
+    setQ(next);
   };
 
   const insert = (i: number) => {
     const el = ref.current;
     const c = matches[i];
-    if (!el || !c) return;
-    // Replace the first word, keep whatever was typed after it.
-    const rest = el.value.replace(/^\/\S*\s?/, "");
-    const head = `/${c.name} `;
-    caret.current = head.length;
-    setValue(head + rest);
-    setQuery(null);
+    if (!el || !c || !q) return;
+    if (inline) {
+      const r = insertInlineCommand(el.value, q.start, c.name);
+      caret.current = r.caret;
+      setValue(r.value);
+    } else {
+      // Replace the first word, keep whatever was typed after it.
+      const rest = el.value.replace(/^\/\S*\s?/, "");
+      const head = `/${c.name} `;
+      caret.current = head.length;
+      setValue(head + rest);
+    }
+    setQ(null);
   };
 
   const onKeyDown = (e: React.KeyboardEvent): boolean => {
@@ -103,7 +119,8 @@ export function useSlashPicker({ commands, ref, setValue }: {
   const el = ref.current;
   if (open && el) {
     const rect = el.getBoundingClientRect();
-    const width = Math.min(560, Math.max(300, rect.width - 24));
+    // Descriptions can sit in a narrow panel: wide enough to read what a skill does anyway.
+    const width = Math.min(560, Math.max(inline ? 380 : 300, rect.width - 24));
     const style: CSSProperties = { left: Math.min(rect.left + 12, window.innerWidth - width - 8), width };
     if (rect.top > 300) style.bottom = window.innerHeight - rect.top + GAP;
     else style.top = rect.bottom + GAP;
@@ -144,6 +161,6 @@ export function useSlashPicker({ commands, ref, setValue }: {
     popup,
     onKeyDown,
     /** Spread on the textarea; re-checks the `/query` whenever the text or caret moves. */
-    handlers: { onSelect: update, onBlur: () => setQuery(null) },
+    handlers: { onSelect: update, onBlur: () => setQ(null) },
   };
 }

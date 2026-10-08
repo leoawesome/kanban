@@ -6,6 +6,7 @@ import { BugReportDialog } from "./BugReportDialog";
 import { Changes, useTicketDiff } from "./Changes";
 import { Chat, useStop } from "./Chat";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DescriptionEditor, useDescriptionCommands } from "./DescriptionEditor";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, ExternalIcon, FileTextIcon, LinkIcon, SparkIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { useFocusTrap, useLayer } from "./layers";
@@ -17,7 +18,6 @@ import { Outputs } from "./Outputs";
 import { Select } from "./Select";
 import { useShareNotices } from "./share";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
-import { useSnippetPicker } from "./SnippetPicker";
 import { TicketMenu } from "./TicketMenu";
 import { missingPctReason, UsagePanel, usageChipText, useTicketUsage } from "./UsagePanel";
 import { approxPct } from "./usage";
@@ -209,8 +209,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const [body, setBody] = useState(ticket.body);
   const [editing, setEditing] = useState(false);
   const images = useImagePaste(setBody);
+  const descCommands = useDescriptionCommands(slug, ticket.id);
   const bodyInput = useRef<HTMLTextAreaElement>(null);
-  const snippets = useSnippetPicker({ slug, ref: bodyInput, setValue: setBody });
   // Body the current edit started from; the server rejects the save if the file changed meanwhile.
   const [baseBody, setBaseBody] = useState(ticket.body);
   const [tabPick, setTab] = useState<"chat" | "plan" | "changes" | "outputs" | "usage">("chat");
@@ -568,24 +568,20 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               </div>
               {editing ? (
                 <div className="desc-edit">
-                  <textarea ref={bodyInput} className={`body-input${images.dragOver ? " drop-target" : ""}`} value={body} onChange={(e) => setBody(e.target.value)} autoFocus
-                    placeholder="Markdown. Paste or drop images. Type @ to insert a snippet." {...images.handlers} {...snippets.handlers}
+                  <DescriptionEditor slug={slug} ticketId={ticket.id} value={body} setValue={setBody} images={images} inputRef={bodyInput} autoFocus fill
                     onKeyDown={(e) => {
-                      if (snippets.onKeyDown(e)) return;
                       if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) saveBody();
                       else if (e.key === "Escape" && !e.nativeEvent.isComposing) { e.preventDefault(); cancelEdit(); }
                     }} />
-                  {snippets.popup}
-                  {images.error && <div className="form-error">{images.error}</div>}
                   <div className="form-actions">
-                    <button className="btn ghost small" onClick={cancelEdit} title="Cancel (Esc)">Cancel<KeyHint keys="Esc" /></button>
-                    <button className="btn primary small" disabled={images.uploading} onClick={saveBody} title={`Save (${MOD}Enter)`}>{images.uploading ? "Uploading…" : "Save"}<KeyHint keys="⌘↵" /></button>
+                    <button className="btn ghost" onClick={cancelEdit} title="Cancel (Esc)">Cancel<KeyHint keys="Esc" /></button>
+                    <button className="btn primary" disabled={images.uploading} onClick={saveBody} title={`Save (${MOD}Enter)`}>{images.uploading ? "Uploading…" : "Save"}<KeyHint keys="⌘↵" /></button>
                   </div>
                 </div>
               ) : (
                 <div className="desc-scroll" onScroll={(e) => setDescScrolled(e.currentTarget.scrollTop > 0)}>
                   {body.trim() ? (
-                    <div className="body-view" onDoubleClick={startEdit}><Markdown text={body} /></div>
+                    <div className="body-view" onDoubleClick={startEdit}><Markdown text={body} commands={descCommands} /></div>
                   ) : (
                     <div className="muted small">No description yet. {ticket.status === "planning" ? "Claude can propose one in the chat." : ""}</div>
                   )}

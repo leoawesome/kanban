@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { commandText, frontmatter, listCommands, localCommandOutput, parseSlash, rememberInit, slashMessage, useBundledFile, validModel } from "../src/server/commands";
 import { parseSession } from "../src/server/session";
-import { commandNote, matchCommands, messageCommand, slashQuery, type SlashCommand } from "../web/src/slashText";
+import { commandNote, inlineSlashQuery, insertInlineCommand, matchCommands, messageCommand, slashQuery, splitCommandMentions, type SlashCommand } from "../web/src/slashText";
 import { tempDir } from "./helpers";
 
 function write(file: string, text: string) {
@@ -169,4 +169,27 @@ test("messageCommand / commandNote: the chip under a sent command", () => {
   expect(commandNote(cmds[3])).toBe("Runs skill · user");
   expect(commandNote(cmds[2])).toBe("Runs command · project");
   expect(commandNote({ name: "clear", kind: "builtin", source: "board", description: "" })).toBe("Board command");
+});
+
+test("inlineSlashQuery: `/` at any word start in a description, not inside paths or words", () => {
+  expect(inlineSlashQuery("/gri", 4)).toEqual({ start: 0, query: "gri" });
+  expect(inlineSlashQuery("Use /grill", 10)).toEqual({ start: 4, query: "grill" });
+  expect(inlineSlashQuery("line\n(/sup", 11)).toEqual({ start: 6, query: "sup" });
+  expect(inlineSlashQuery("Use /", 5)).toEqual({ start: 4, query: "" });
+  expect(inlineSlashQuery("a/b", 3)).toBeNull();
+  expect(inlineSlashQuery("see /Users/leo", 14)).toBeNull();
+  expect(inlineSlashQuery("Use /grill me", 13)).toBeNull();
+});
+
+test("insertInlineCommand: replaces the whole word, adds a space only when needed", () => {
+  expect(insertInlineCommand("Use /gr then", 4, "grill-me")).toEqual({ value: "Use /grill-me then", caret: 14 });
+  expect(insertInlineCommand("Use /grXY", 4, "grill-me")).toEqual({ value: "Use /grill-me ", caret: 14 });
+  expect(insertInlineCommand("/", 0, "a:b")).toEqual({ value: "/a:b ", caret: 5 });
+});
+
+test("splitCommandMentions: known names only, trailing dots stay text, paths skipped", () => {
+  const known = (n: string) => n === "grill-me" || n === "superpowers:brainstorming";
+  expect(splitCommandMentions("Use /grill-me.", known)).toEqual(["Use ", { name: "grill-me" }, "."]);
+  expect(splitCommandMentions("(/superpowers:brainstorming) then /other", known)).toEqual(["(", { name: "superpowers:brainstorming" }, ") then /other"]);
+  expect(splitCommandMentions("a/grill-me and /grill-me/x", known)).toEqual(["a/grill-me and /grill-me/x"]);
 });

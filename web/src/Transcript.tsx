@@ -3,6 +3,7 @@ import { marked } from "marked";
 import { useEffect, useMemo, useRef } from "react";
 import type { ActivityEntry } from "./api";
 import { opensNewTab } from "./links";
+import { sourceLabel, splitCommandMentions, type SlashCommand } from "./slashText";
 
 function textOf(content: unknown): string {
   if (typeof content === "string") return content;
@@ -26,8 +27,9 @@ const PURIFY = {
 // Pasted images: the UI URL, or the absolute file path Claude was given in its prompt (seen in the chat history).
 const ATTACHMENT_SRC = /(?:^|\/)attachments\/([0-9a-f]{32}\.(?:png|jpg|gif|webp))$/;
 
-function thumbnails(html: string): string {
+function thumbnails(html: string, commands?: SlashCommand[] | null): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
+  if (commands?.length) mentionChips(doc, commands);
   doc.querySelectorAll("img").forEach((img) => {
     const m = (img.getAttribute("src") ?? "").match(ATTACHMENT_SRC);
     if (!m) return;
@@ -43,8 +45,37 @@ function thumbnails(html: string): string {
   return doc.body.innerHTML;
 }
 
-export function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => thumbnails(DOMPurify.sanitize(marked.parse(text, { async: false, breaks: true }) as string, PURIFY)), [text]);
+/** `/name` of a known skill or command in prose (not code or links) becomes a chip; hover tells what it is. */
+function mentionChips(doc: Document, commands: SlashCommand[]) {
+  const byName = new Map(commands.map((c) => [c.name, c]));
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+  for (const node of nodes) {
+    const text = node.nodeValue ?? "";
+    if (!text.includes("/") || node.parentElement?.closest("code, pre, a")) continue;
+    const parts = splitCommandMentions(text, (n) => byName.has(n));
+    if (parts.every((p) => typeof p === "string")) continue;
+    const frag = doc.createDocumentFragment();
+    for (const p of parts) {
+      if (typeof p === "string") { frag.append(p); continue; }
+      const c = byName.get(p.name)!;
+      const chip = doc.createElement("span");
+      chip.className = "cmd-chip mention";
+      chip.textContent = `/${p.name}`;
+      chip.title = `${c.kind === "skill" ? "Skill" : "Command"} · ${sourceLabel(c)}${c.description ? `\n${c.description}` : ""}`;
+      frag.append(chip);
+    }
+    node.replaceWith(frag);
+  }
+}
+
+/** `commands`: `/name` mentions of these render as chips (ticket descriptions). */
+export function Markdown({ text, commands }: { text: string; commands?: SlashCommand[] | null }) {
+  const html = useMemo(
+    () => thumbnails(DOMPurify.sanitize(marked.parse(text, { async: false, breaks: true }) as string, PURIFY), commands),
+    [text, commands],
+  );
   return (
     <div className="md" dangerouslySetInnerHTML={{ __html: html }}
       onClick={(e) => {
