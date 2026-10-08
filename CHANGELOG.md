@@ -4,6 +4,18 @@ What changed in each ckanban release. Get the latest with `ckanban update`.
 
 ## Unreleased
 
+## [0.9.0] - 2026-10-08
+
+### Added
+- **Keyboard control in the ticket panel**: `⌘⇧Enter` does the ticket's next step (apply Claude's proposal, then Start work, or Mark done in Review); `↑`/`↓` or `J`/`K` switch tickets; `E` edits the description, `Esc` cancels and `⌘Enter` saves.
+- **Hold ⌘** (Ctrl on Windows/Linux) to see key hints on the buttons in the ticket panel and on the board.
+- `Enter` confirms the *Start work?* and *Branch* dialogs.
+
+### Fixed
+- Previous / next in the ticket panel stays in the ticket's column, and marking a ticket Done moves on to the next ticket in that column.
+- Links in the chat, descriptions and outputs open in a new tab instead of replacing the board.
+- A ticket whose PR is merged stays in Review while it still waits on you (questions, a proposal or proposed tickets).
+
 ## [0.8.0] - 2026-10-08
 
 ### Added
@@ -115,6 +127,7 @@ First release.
 - Terminal & file explorer panel, Connections panel for MCP servers, scheduled tickets on a cron, claude.ai artifacts from runs.
 - Standalone binary, installer, `ckanban update` and a background service that starts at login.
 
+[0.9.0]: https://github.com/leoawesome/kanban/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/leoawesome/kanban/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/leoawesome/kanban/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/leoawesome/kanban/compare/v0.5.0...v0.6.0
