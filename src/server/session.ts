@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { commandText, localCommandOutput } from "./commands";
+import { commandText, localCommandOutput, TERMINAL_COMMANDS } from "./commands";
 import type { Bus } from "./events";
 import { mockupName, stripMockups } from "./mockups";
 import type { Store } from "./store";
@@ -277,6 +277,11 @@ function isPublisher(block: any): boolean {
   return block.name === "Bash" && typeof block.input?.command === "string" && HELPER_PUBLISH.test(block.input.command);
 }
 
+/** A Claude Code built-in typed in a terminal session (/exit, /resume): not part of the ticket chat. */
+function terminalOnly(cmd: string | null): boolean {
+  return !!cmd && TERMINAL_COMMANDS.has(cmd.slice(1).split(" ")[0]);
+}
+
 function userText(content: unknown): { kind: "text" | "board"; text: string; from?: string; question?: string; setup?: SetupResult; command?: string } | null {
   if (Array.isArray(content)) {
     if (content.some((c: any) => c?.type === "tool_result")) return null;
@@ -300,7 +305,7 @@ function userText(content: unknown): { kind: "text" | "board"; text: string; fro
   const t = content.trim();
   // A slash command the user ran: Claude Code stores it as tags; show it as typed.
   const cmd = commandText(t);
-  if (cmd) return { kind: "text", text: cmd, command: cmd.slice(1).split(" ")[0] };
+  if (cmd) return terminalOnly(cmd) ? null : { kind: "text", text: cmd, command: cmd.slice(1).split(" ")[0] };
   // Other slash-command wrappers, hook output and skill preambles are stored as user messages too.
   if (!t || t.startsWith("<") || /^(Base directory for this skill|Caveat:|\[Request interrupted)/.test(t)) return null;
   return { kind: "text", text: t };
@@ -356,6 +361,8 @@ export function parseSession(raw: string): ParsedSession {
   const errored = new Set<string>();
   /** Subagents by the Agent tool_use id; their rows update as results and notifications arrive. */
   const agents = new Map<string, AgentInfo>();
+  /** The last command was terminal-only: its output (next local-command-stdout, if any) is hidden too. */
+  let hideOutput = false;
   const notified = (text: unknown, at: string) => {
     const n = typeof text === "string" ? parseTaskNotification(text) : null;
     const a = n && agents.get(n.toolUseId);
@@ -396,7 +403,8 @@ export function parseSession(raw: string): ParsedSession {
     if (ev.type === "system" && !ev.isSidechain) {
       // What a built-in command printed (/context, /model), and where /compact summarised the conversation.
       const out = ev.subtype === "local_command" && typeof ev.content === "string" ? localCommandOutput(ev.content) : null;
-      if (out) entries.push({ uuid, at, role: "assistant", kind: "text", text: out, commandOutput: true });
+      if (out !== null && hideOutput) hideOutput = false;
+      else if (out) entries.push({ uuid, at, role: "assistant", kind: "text", text: out, commandOutput: true });
       else if (ev.subtype === "compact_boundary") entries.push({ uuid, at, role: "user", kind: "board", text: "Conversation compacted" });
       continue;
     }
@@ -406,11 +414,18 @@ export function parseSession(raw: string): ParsedSession {
     if (ev.type === "user") {
       // The summary /compact left behind: the boundary above already says so.
       if (ev.isCompactSummary) continue;
-      const out = typeof content === "string" ? localCommandOutput(content) : null;
-      if (out !== null) {
-        if (out) entries.push({ uuid, at, role: "assistant", kind: "text", text: out, commandOutput: true });
+      // A terminal-only command is hidden, and so is what it printed.
+      if (typeof content === "string" && terminalOnly(commandText(content.trim()))) {
+        hideOutput = true;
         continue;
       }
+      const out = typeof content === "string" ? localCommandOutput(content) : null;
+      if (out !== null) {
+        if (hideOutput) hideOutput = false;
+        else if (out) entries.push({ uuid, at, role: "assistant", kind: "text", text: out, commandOutput: true });
+        continue;
+      }
+      if (!ev.isMeta) hideOutput = false;
       notified(typeof content === "string" ? content : Array.isArray(content) ? content.map((c: any) => (c?.type === "text" ? c.text : "")).join("\n") : "", at);
       if (Array.isArray(content)) {
         for (const [i, b] of content.entries()) {
@@ -441,6 +456,7 @@ export function parseSession(raw: string): ParsedSession {
       continue;
     }
 
+    hideOutput = false;
     if (!Array.isArray(content)) continue;
     content.forEach((b: any, i: number) => {
       if (b?.type === "tool_use" && typeof b.id === "string" && isPublisher(b)) publishers.add(b.id);

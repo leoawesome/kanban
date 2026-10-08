@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { commandText, frontmatter, listCommands, localCommandOutput, parseSlash, rememberInit, slashMessage } from "../src/server/commands";
+import { commandText, frontmatter, listCommands, localCommandOutput, parseSlash, rememberInit, slashMessage, useBundledFile, validModel } from "../src/server/commands";
 import { parseSession } from "../src/server/session";
 import { commandNote, matchCommands, messageCommand, slashQuery, type SlashCommand } from "../web/src/slashText";
 import { tempDir } from "./helpers";
@@ -18,16 +18,21 @@ test("frontmatter: description (quoted, folded) or the first text line", () => {
   expect(frontmatter(`---\nname: x\ndescription: "Quoted: yes"\n---\n`)).toEqual({ name: "x", description: "Quoted: yes" });
   expect(frontmatter(`---\ndescription: >\n  Folded\n  over lines\nother: 1\n---\n`).description).toBe("Folded over lines");
   expect(frontmatter("# Release the app\n\nSteps…").description).toBe("Release the app");
+  expect(frontmatter(`---\ndescription: x\nuser-invocable: false\n---\n`).userInvocable).toBe(false);
+  expect(frontmatter(`---\nuser-invocable: "true"\n---\n`).userInvocable).toBe(true);
 });
 
 test("listCommands: built-ins, project over user, folders and plugins namespaced", () => {
   const config = tempDir("ck-cfg-");
   const project = tempDir("ck-proj-");
-  write(join(config, "skills", "retro", "SKILL.md"), skill("User retro"));
+  // Named after its folder, like Claude Code does, not after the frontmatter name.
+  write(join(config, "skills", "retro", "SKILL.md"), skill("User retro", "sprint-retrospective"));
   write(join(config, "skills", "shared", "SKILL.md"), skill("User version"));
   write(join(config, "commands", "git", "sync.md"), "Sync the branch");
   write(join(project, ".claude", "skills", "shared", "SKILL.md"), skill("Project version"));
   write(join(project, ".claude", "commands", "x.md"), skill("Project command"));
+  // Only Claude may use this one: not offered, and its name isn't taken for a bundled skill either.
+  write(join(config, "skills", "internal", "SKILL.md"), `---\ndescription: Background helper\nuser-invocable: false\n---\n`);
   // An enabled user-wide plugin, a disabled one, and one installed for another project.
   const plugin = (name: string) => {
     const dir = join(config, "plugins", "cache", "m", name, "1.0.0");
@@ -49,7 +54,9 @@ test("listCommands: built-ins, project over user, folders and plugins namespaced
   const list = listCommands(project, { configDir: config, fresh: true });
   const by = (n: string) => list.find((c) => c.name === n);
   expect(by("compact")).toMatchObject({ kind: "builtin", source: "claude", local: true });
-  expect(by("clear")).toMatchObject({ kind: "builtin", source: "board" });
+  expect(by("model")).toMatchObject({ kind: "builtin", source: "board" });
+  expect(by("clear")).toBeUndefined();
+  expect(by("internal")).toBeUndefined();
   expect(by("retro")).toMatchObject({ kind: "skill", source: "user", description: "User retro" });
   expect(by("shared")).toMatchObject({ source: "project", description: "Project version" });
   expect(list.filter((c) => c.name === "shared").length).toBe(1);
@@ -60,11 +67,29 @@ test("listCommands: built-ins, project over user, folders and plugins namespaced
   expect(by("off:brainstorming")).toBeUndefined();
   expect(by("elsewhere:go")).toBeUndefined();
 
-  // Skills only a run's init event knew (bundled with Claude Code) join the list.
-  rememberInit(project, { type: "system", subtype: "init", skills: ["simplify", "retro"], slash_commands: [] });
+  // Skills only a run's init event knew (bundled with Claude Code) join the list, for every folder, and are saved.
+  const file = join(tempDir("ck-store-"), "claude-commands.json");
+  useBundledFile(file);
+  const init = (skills: string[], offered: string[]) =>
+    rememberInit(project, { type: "system", subtype: "init", skills, slash_commands: offered }, { configDir: config });
+  init(["simplify", "retro", "internal", "superpowers:brainstorming", "auto-only", "doctor"], ["simplify", "retro", "internal", "superpowers:brainstorming", "doctor"]);
   const after = listCommands(project, { configDir: config });
   expect(after.find((c) => c.name === "simplify")).toMatchObject({ kind: "skill", source: "claude" });
   expect(after.filter((c) => c.name === "retro")).toHaveLength(1);
+  // Not offered as a slash command, hidden on disk, or a plugin's: not bundled.
+  expect(after.find((c) => c.name === "auto-only")).toBeUndefined();
+  expect(after.find((c) => c.name === "internal")).toBeUndefined();
+  expect(after.find((c) => c.name === "doctor")).toBeUndefined();
+  expect(JSON.parse(readFileSync(file, "utf8")).bundledSkills).toEqual(["simplify"]);
+  // Another folder (and a fresh start reading the file) has them too.
+  useBundledFile(file);
+  expect(listCommands(tempDir("ck-other-"), { configDir: config }).find((c) => c.name === "simplify")).toBeTruthy();
+  useBundledFile(null);
+});
+
+test("validModel: aliases, [1m], full ids; typos refused", () => {
+  for (const ok of ["sonnet", "opus", "haiku", "fable", "opusplan", "opus[1m]", "claude-opus-5-5", "claude-haiku-4-5-20251001"]) expect(validModel(ok)).toBe(true);
+  for (const bad of ["sonet", "gpt-4", "claude", "$(rm)", "sonnet sonnet"]) expect(validModel(bad)).toBe(false);
 });
 
 test("parseSlash / slashMessage: only known commands at the start of the message", () => {
@@ -94,12 +119,20 @@ test("parseSession shows commands as typed, their output and compaction", () => 
     line({ type: "user", uuid: "4", isCompactSummary: true, message: { role: "user", content: "This session is being continued…" } }),
     line({ type: "user", uuid: "5", message: { role: "user", content: "<command-name>/context</command-name>\n<command-message>context</command-message>\n<command-args></command-args>" } }),
     line({ type: "system", uuid: "6", subtype: "local_command", content: "<local-command-stdout>## Context Usage</local-command-stdout>" }),
+    // Typed in a terminal: hidden, with what it printed.
+    line({ type: "user", uuid: "7", message: { role: "user", content: "<command-name>/exit</command-name>\n<command-message>exit</command-message>\n<command-args></command-args>" } }),
+    line({ type: "user", uuid: "8", message: { role: "user", content: "<local-command-stdout>Goodbye!</local-command-stdout>" } }),
+    line({ type: "user", uuid: "9", message: { role: "user", content: "<command-name>/resume</command-name>\n<command-args></command-args>" } }),
+    line({ type: "user", uuid: "10", message: { role: "user", content: "<command-name>/model</command-name>\n<command-args>opus</command-args>" } }),
+    line({ type: "system", uuid: "11", subtype: "local_command", content: "<local-command-stdout>Set model to Opus</local-command-stdout>" }),
   ].join("\n");
   expect(parseSession(raw).entries.map((e) => [e.role, e.kind, e.text, e.command ?? e.commandOutput ?? null])).toEqual([
     ["user", "text", "/echoargs hello", "echoargs"],
     ["user", "board", "Conversation compacted", null],
     ["user", "text", "/context", "context"],
     ["assistant", "text", "## Context Usage", true],
+    ["user", "text", "/model opus", "model"],
+    ["assistant", "text", "Set model to Opus", true],
   ]);
 });
 

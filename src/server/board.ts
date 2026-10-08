@@ -19,7 +19,7 @@ import { run as runCmd } from "./git";
 import { parseResult } from "./result";
 import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
-import { BOARD_COMMANDS, commandText, listCommands, rememberInit, slashMessage, type SlashCommand } from "./commands";
+import { BOARD_COMMANDS, commandText, listCommands, MODEL_HELP, parseSlash, REFUSED_COMMANDS, rememberInit, slashMessage, useBundledFile, validModel, type SlashCommand } from "./commands";
 import { mcpConfig } from "./agents";
 import type { Store } from "./store";
 import type { Interrupted, Plan, Profile, QueuedMessage, Status, Ticket, TicketMode } from "./types";
@@ -173,6 +173,7 @@ export class Board {
     this.sessionExists = opts.sessionExists ?? claudeSessionExists;
     this.isSessionLive = opts.isSessionLive ?? psSessionLive;
     this.notify = opts.notify ?? systemNotify;
+    useBundledFile(join(store.root, "claude-commands.json"));
   }
 
   private key(slug: string, id: string) {
@@ -329,6 +330,10 @@ export class Board {
     if (t.error?.startsWith("corrupt")) throw new Error("ticket file is corrupt");
     const active = this.runs.get(this.key(slug, id));
     if (!opts.peer && !opts.slash) {
+      const refused = parseSlash(text)?.name;
+      if (refused && REFUSED_COMMANDS.has(refused)) {
+        throw new Error(`/${refused} isn't available here: start a new ticket for a fresh conversation.`);
+      }
       const slash = slashMessage(text, this.commands(slug, id));
       if (slash && BOARD_COMMANDS.has(slash.command.name)) return this.boardCommand(slug, id, slash.command.name, slash.args);
       if (slash) [text, opts] = [slash.text, { ...opts, slash: slash.command.local ? "local" : "prompt" }];
@@ -367,7 +372,7 @@ export class Board {
     return listCommands(t.workdir ?? t.worktree ?? profile.path, { projects: [profile.path] });
   }
 
-  /** /clear and /model: the board's own commands. Claude Code's versions don't fit board runs (see commands.ts). */
+  /** /model: the board's own command. Claude Code's version only lasts for one run (see commands.ts). */
   private boardCommand(slug: string, id: string, name: string, args: string): Ticket {
     const t = this.store.getTicket(slug, id)!;
     if (name === "model") {
@@ -376,18 +381,12 @@ export class Board {
       if (!args) {
         return this.patch(slug, id, { notice: t.model ? `This ticket uses model ${t.model}. Change it with /model <name>, or /model default.` : `This ticket uses ${fallback}. Change it with /model <name>, e.g. /model sonnet.` });
       }
-      if (!/^[\w.:\[\]-]+$/.test(args)) throw new Error(`"${args}" is not a model name`);
       const reset = args === "default" || args === "reset";
+      if (!reset && !validModel(args)) throw new Error(`"${args}" is not a model name. Use ${MODEL_HELP}.`);
       const when = this.isRunning(slug, id) ? "from the next run (the current one keeps its model)" : "from the next run";
       return this.patch(slug, id, { model: reset ? null : args, notice: reset ? `Model reset: this ticket uses ${fallback} ${when}.` : `Model set to ${args} for this ticket, ${when}.` });
     }
-    // clear
-    if (this.isRunning(slug, id)) throw new ConflictError("Claude is working on this ticket; stop it before /clear");
-    if (t.workdir) throw new Error("This ticket is linked to a Claude session you started yourself; /clear only works on the board's own sessions");
-    return this.patch(slug, id, {
-      sessionId: crypto.randomUUID(), sessionStarted: false, error: null,
-      notice: "Started a fresh Claude session (/clear). The earlier conversation isn't shown here any more; Claude won't remember it in the next reply.",
-    });
+    return t;
   }
 
   /** Send a message that was left unsent by Stop, as if the user typed it now. */
@@ -618,7 +617,7 @@ export class Board {
           } else if (!draftTimer) draftTimer = setTimeout(emitDraft, DRAFT_THROTTLE_MS);
         }
         if (ev?.type === "stream_event") return;
-        rememberInit(session.dir, ev);
+        rememberInit(session.dir, ev, { projects: [profile.path] });
         if (refine && ev?.type === "assistant") this.saveMockups(slug, id, outputDir, ev);
         if (showsInterrupted && !this.shuttingDown && hasText(ev)) {
           showsInterrupted = false;

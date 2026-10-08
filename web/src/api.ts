@@ -215,6 +215,8 @@ export interface QueuedMessage {
   state: "queued" | "unsent";
   /** From another ticket's Claude: text is the full prompt (question first, then board instructions). */
   peer?: boolean;
+  /** A slash command: Claude Code runs it as its own turn, after the current one. */
+  slash?: "prompt" | "local";
 }
 
 export interface SessionMessage {

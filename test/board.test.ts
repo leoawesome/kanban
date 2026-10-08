@@ -1444,7 +1444,7 @@ test("a slash command sent while Claude works goes alone too", async () => {
   }
 });
 
-test("/compact runs natively without moving the card; /model and /clear are the board's", async () => {
+test("/compact runs natively without moving the card; /model is the board's; /clear and /resume are refused", async () => {
   await setup();
   const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
   await board.whenIdle();
@@ -1471,13 +1471,31 @@ test("/compact runs natively without moving the card; /model and /clear are the 
   await board.chat("p", t.id, "/model default");
   expect(store.getTicket("p", t.id)!.model).toBeNull();
   await expect(board.chat("p", t.id, "/model $(rm -rf)")).rejects.toThrow("not a model name");
+  // A typo is refused and leaves the model alone.
+  await board.chat("p", t.id, "/model claude-opus-5-5");
+  await expect(board.chat("p", t.id, "/model sonet")).rejects.toThrow("not a model name");
+  expect(store.getTicket("p", t.id)!.model).toBe("claude-opus-5-5");
 
-  await board.chat("p", t.id, "/clear");
-  got = store.getTicket("p", t.id)!;
-  expect(got.sessionId).not.toBe(before.sessionId);
-  expect(got.sessionStarted).toBe(false);
-  expect(got.notice).toContain("fresh Claude session");
-  await board.chat("p", t.id, "start over");
-  await board.whenIdle();
-  expect(readArgs()[3].args).toContain("--session-id");
+  // Claude Code's own /clear or /resume would switch sessions behind the board's back.
+  for (const cmd of ["/clear", "/resume abc", "/exit"]) {
+    await expect(board.chat("p", t.id, cmd)).rejects.toThrow("start a new ticket");
+  }
+  expect(board.isRunning("p", t.id)).toBe(false);
+  expect(store.getTicket("p", t.id)!.sessionId).toBe(before.sessionId);
+  expect(readArgs().length).toBe(3);
+});
+
+test("bundled Claude Code skills from a run's init event are kept for every ticket", async () => {
+  await setup();
+  process.env.FAKE_INIT_SKILLS = "simplify,code-review";
+  try {
+    await board.createTicket("p", { title: "x", body: "", status: "ready" });
+    await board.whenIdle();
+    const other = await board.createTicket("p", { title: "y", body: "", status: "backlog" });
+    expect(board.commands("p", other.id).find((c) => c.name === "simplify")).toMatchObject({ kind: "skill", source: "claude" });
+    // Saved, so a new board (a daemon restart) still has them.
+    expect(JSON.parse(readFileSync(join(store.root, "claude-commands.json"), "utf8")).bundledSkills).toEqual(["code-review", "simplify"]);
+  } finally {
+    delete process.env.FAKE_INIT_SKILLS;
+  }
 });

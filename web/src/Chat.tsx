@@ -579,7 +579,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
           <div key={q.id} className={`conv-msg user pending${q.state === "unsent" ? " unsent" : ""}`}>
             <div className="conv-head">
               <b>You</b>
-              <span className="muted small">{q.state === "queued" ? "queued · Claude reads this at its next step" : "not sent · Claude was stopped before reading it"}</span>
+              <span className="muted small">{q.state === "unsent" ? "not sent · Claude was stopped before reading it" : q.slash ? "queued · runs after Claude's current turn" : "queued · Claude reads this at its next step"}</span>
             </div>
             <UserText text={q.text} commands={commands} />
             {q.state === "unsent" && (

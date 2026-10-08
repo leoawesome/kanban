@@ -11,6 +11,10 @@ const args = process.argv.slice(2);
 const streamIn = args.includes("--input-format");
 const replay = args.includes("--replay-user-messages");
 
+// FAKE_INIT_SKILLS=a,b: skills (also offered as slash commands) the init event reports, like Claude Code's bundled ones.
+const fakeSkills = (process.env.FAKE_INIT_SKILLS ?? "").split(",").filter(Boolean);
+const initSkills = fakeSkills.length ? { skills: fakeSkills, slash_commands: fakeSkills } : {};
+
 const inbox: string[] = [];
 // Answers to control requests (permission asks), by request id.
 const answers = new Map<string, any>();
@@ -79,7 +83,7 @@ if (args.includes("--resume") && (mode === "nosession" || (process.env.CLAUDE_CO
   process.exit(1);
 }
 
-emit({ type: "system", subtype: "init", session_id: sessionId, cwd: process.cwd() });
+emit({ type: "system", subtype: "init", session_id: sessionId, cwd: process.cwd(), ...initSkills });
 // Like the real CLI, save the transcript where --resume looks for it (only under a test's own CLAUDE_CONFIG_DIR).
 if (process.env.CLAUDE_CONFIG_DIR && sessionId !== "none" && !process.env.FAKE_NO_SAVE) {
   const { mkdirSync } = await import("node:fs");
@@ -172,7 +176,7 @@ if (background) {
   emit({ type: "system", subtype: "background_tasks_changed", tasks: [] });
   emit({ type: "system", subtype: "task_notification", task_id: "bg1", status });
   if (!eof && mode === "background") {
-    emit({ type: "system", subtype: "init", session_id: sessionId, cwd: process.cwd() });
+    emit({ type: "system", subtype: "init", session_id: sessionId, cwd: process.cwd(), ...initSkills });
     const reply = `Background result: ${status}\nCKANBAN_RESULT: ${JSON.stringify({ status: "done", prUrl: pr, summary: "bg done" })}`;
     emit({ type: "assistant", message: { content: [{ type: "text", text: reply }] } });
     emit({ type: "result", subtype: "success", is_error: false, result: reply, session_id: sessionId });
