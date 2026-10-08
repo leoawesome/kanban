@@ -4,18 +4,25 @@ What changed in each ckanban release. Get the latest with `ckanban update`.
 
 ## Unreleased
 
+## [0.8.0] - 2026-10-08
+
 ### Added
 - **Changes tab**: review a ticket's diff in the board (file tree or list, unified diff), comment on lines and send all comments to Claude as one message.
 - **Worktree setup**: each new worktree gets your git-ignored `.env` files copied and dependencies installed before Claude starts. Both are auto-detected from your folder (*Board settings → Worktree setup*), with an optional cleanup command.
 - **Prompt snippets**: save text you reuse under *⋯ → Snippets* and insert it with `@name` in the chat, new-ticket and description boxes.
 - **⌘K command bar**: jump to any ticket on any board, any board, or run an action.
 - **Subagents in the chat**: agents Claude launches show as rows with live status, their steps and result.
+- **Slash commands in the ticket chat**: type `/` to pick a Claude Code command; only commands that can run headless are offered.
+- Click a tool call in the ticket chat to see its full input and output.
+- This changelog, also used as the release notes.
 - `Shift+Enter` makes a new line when running `claude` in the embedded terminal.
 
 ### Fixed
 - Switch boards with plain `1`–`9` instead of `Alt+1`–`9`.
 - Copying non-ASCII text from the dock terminal pastes as UTF-8 instead of Mac Roman.
 - A run whose Claude session was never saved starts a new session instead of failing every time.
+- Reopened Done tickets get their worktree back; leftover worktrees are cleaned up on start.
+- Finished chat replies no longer show twice under the *Moved to Planning* box.
 
 ## [0.7.0] - 2026-10-07
 
@@ -108,6 +115,7 @@ First release.
 - Terminal & file explorer panel, Connections panel for MCP servers, scheduled tickets on a cron, claude.ai artifacts from runs.
 - Standalone binary, installer, `ckanban update` and a background service that starts at login.
 
+[0.8.0]: https://github.com/leoawesome/kanban/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/leoawesome/kanban/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/leoawesome/kanban/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/leoawesome/kanban/compare/v0.4.2...v0.5.0
