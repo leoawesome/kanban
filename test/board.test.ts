@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Board } from "../src/server/board";
 import { Bus } from "../src/server/events";
-import { run } from "../src/server/git";
+import { run, worktreeDir } from "../src/server/git";
 import { Store } from "../src/server/store";
 import type { Profile } from "../src/server/types";
 import { makeRepo, tempDir } from "./helpers";
@@ -359,6 +359,116 @@ test("moving to done removes clean worktree", async () => {
   await board.whenIdle();
   const wt = store.getTicket("p", t.id)!.worktree!;
   await board.updateTicket("p", t.id, { status: "done" });
+  expect(existsSync(wt)).toBe(false);
+  expect(store.getTicket("p", t.id)!.worktree).toBeNull();
+});
+
+async function doneAndBack(id: string) {
+  await board.updateTicket("p", id, { status: "done" });
+  expect(store.getTicket("p", id)!.worktree).toBeNull();
+  await board.updateTicket("p", id, { status: "ready" });
+  await board.whenIdle();
+}
+
+test("a ticket moved back from done gets its worktree back on its branch and resumes its session", async () => {
+  const p = await setup();
+  const t = await board.createTicket("p", { title: "Reopen", body: "", status: "ready" });
+  await board.whenIdle();
+  const first = store.getTicket("p", t.id)!;
+  await doneAndBack(t.id);
+  const got = store.getTicket("p", t.id)!;
+  expect(got.worktree).toBe(worktreeDir(p, t.id));
+  expect(existsSync(got.worktree!)).toBe(true);
+  expect(got.branch).toBe(first.branch);
+  expect((await run(["git", "branch", "--show-current"], got.worktree!)).stdout.trim()).toBe(first.branch!);
+  const call = readArgs().at(-1)!;
+  expect(call.cwd).toBe(got.worktree!);
+  expect(call.args).toContain("--resume");
+  expect(call.args).toContain(first.sessionId!);
+  expect(got.outcome).toBe("done");
+});
+
+test("a reopened ticket whose branch was renamed takes the renamed branch", async () => {
+  const p = await setup();
+  const t = await board.createTicket("p", { title: "Rename", body: "", status: "ready" });
+  await board.whenIdle();
+  const first = store.getTicket("p", t.id)!;
+  await board.updateTicket("p", t.id, { status: "done" });
+  await run(["git", "branch", "-m", first.branch!, `ck/${t.id}-renamed`], p.path);
+  await board.updateTicket("p", t.id, { status: "ready" });
+  await board.whenIdle();
+  const got = store.getTicket("p", t.id)!;
+  expect(got.branch).toBe(`ck/${t.id}-renamed`);
+  expect(got.worktree).toBe(worktreeDir(p, t.id));
+  expect(got.notice ?? null).toBeNull();
+});
+
+test("a reopened ticket whose branch is gone starts again from base with a notice", async () => {
+  const p = await setup();
+  const t = await board.createTicket("p", { title: "Gone", body: "", status: "ready" });
+  await board.whenIdle();
+  const first = store.getTicket("p", t.id)!;
+  await board.updateTicket("p", t.id, { status: "done" });
+  await run(["git", "branch", "-D", first.branch!], p.path);
+  await board.updateTicket("p", t.id, { status: "ready" });
+  await board.whenIdle();
+  const got = store.getTicket("p", t.id)!;
+  expect(got.worktree).toBe(worktreeDir(p, t.id));
+  expect(got.branch).toBe(first.branch);
+  expect(got.notice).toContain("was not found");
+  expect(readArgs().at(-1)!.cwd).toBe(got.worktree!);
+});
+
+test("a ticket that ran in the project folder keeps running there", async () => {
+  const p = await setup();
+  const t = await board.createTicket("p", { title: "In place", body: "", status: "backlog" });
+  store.updateTicket("p", t.id, { runCount: 1, sessionStarted: true });
+  await board.updateTicket("p", t.id, { status: "ready" });
+  await board.whenIdle();
+  const got = store.getTicket("p", t.id)!;
+  expect(got.worktree).toBeNull();
+  expect(readArgs().at(-1)!.cwd).toBe(p.path);
+});
+
+test("startup sweep removes worktrees of done and deleted tickets, keeps dirty and active ones", async () => {
+  const p = await setup({ maxParallel: 4 });
+  const mk = async (title: string) => {
+    const t = await board.createTicket("p", { title, body: "", status: "ready" });
+    await board.whenIdle();
+    return store.getTicket("p", t.id)!;
+  };
+  const done = await mk("Done");
+  const dirty = await mk("Dirty");
+  const review = await mk("Review");
+  const deleted = await mk("Deleted");
+  // Orphans: Done tickets whose folder outlived the cleanup, and a folder whose ticket is gone.
+  store.updateTicket("p", done.id, { status: "done", worktree: null });
+  writeFileSync(join(dirty.worktree!, "wip.txt"), "wip\n");
+  store.updateTicket("p", dirty.id, { status: "done" });
+  store.deleteTicket("p", deleted.id);
+  // A worktree outside the board's folder is never touched.
+  const outside = join(tempDir("ck-outside-"), "wt");
+  await run(["git", "worktree", "add", "-q", "-b", "other", outside, "main"], p.path);
+
+  await board.sweepWorktrees();
+  expect(existsSync(done.worktree!)).toBe(false);
+  expect(existsSync(deleted.worktree!)).toBe(false);
+  expect(existsSync(dirty.worktree!)).toBe(true);
+  expect(store.getTicket("p", dirty.id)!.worktree).toBe(dirty.worktree);
+  expect(existsSync(review.worktree!)).toBe(true);
+  expect(existsSync(outside)).toBe(true);
+  // Branches stay: they are the undo.
+  expect((await run(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${done.branch}`], p.path)).code).toBe(0);
+  expect((await run(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${deleted.branch}`], p.path)).code).toBe(0);
+}, 20000);
+
+test("startup sweep clears the worktree of a done ticket once it is clean", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "Later", body: "", status: "ready" });
+  await board.whenIdle();
+  const wt = store.getTicket("p", t.id)!.worktree!;
+  store.updateTicket("p", t.id, { status: "done" });
+  await board.sweepWorktrees();
   expect(existsSync(wt)).toBe(false);
   expect(store.getTicket("p", t.id)!.worktree).toBeNull();
 });

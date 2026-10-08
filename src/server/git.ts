@@ -61,7 +61,7 @@ export function worktreeDir(profile: Pick<Profile, "path" | "slug">, id: string)
 
 export async function addWorktree(repo: string, dir: string, branch: string, base: string): Promise<void> {
   mkdirSync(dirname(dir), { recursive: true });
-  const exists = (await run(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo)).code === 0;
+  const exists = await branchExists(repo, branch);
   const args = exists ? ["git", "worktree", "add", dir, branch] : ["git", "worktree", "add", "-b", branch, dir, base];
   const r = await run(args, repo);
   if (r.code !== 0) {
@@ -79,6 +79,25 @@ export async function removeWorktree(repo: string, dir: string, beforeRemove?: (
   const r = await run(["git", "worktree", "remove", dir], repo);
   if (r.code !== 0) return { removed: false, reason: r.stderr.trim() };
   return { removed: true };
+}
+
+export async function branchExists(repo: string, branch: string): Promise<boolean> {
+  return (await run(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], repo)).code === 0;
+}
+
+/** Local branches starting with prefix, most recently committed first. */
+export async function branchesWithPrefix(repo: string, prefix: string): Promise<string[]> {
+  const r = await run(["git", "for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads/"], repo);
+  if (r.code !== 0) return [];
+  return r.stdout.split("\n").map((l) => l.trim()).filter((b) => b.startsWith(prefix));
+}
+
+/** Paths of the repo's linked worktrees (after pruning registrations whose folder is gone). */
+export async function listWorktrees(repo: string): Promise<string[]> {
+  await run(["git", "worktree", "prune"], repo);
+  const r = await run(["git", "worktree", "list", "--porcelain"], repo);
+  if (r.code !== 0) return [];
+  return r.stdout.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice("worktree ".length)).slice(1);
 }
 
 export async function which(bin: string): Promise<boolean> {

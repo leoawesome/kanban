@@ -1,11 +1,11 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { extractFinalText, summarizeEvent } from "./activity";
 import { copyAttachments, deleteAttachments, localizeImages, referencedAttachments } from "./attachments";
 import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
-import { addWorktree, isGitRepo, removeWorktree, resolveBaseBranch, worktreeDir } from "./git";
+import { addWorktree, branchesWithPrefix, branchExists, isGitRepo, listWorktrees, removeWorktree, resolveBaseBranch, worktreeDir } from "./git";
 import { MOVE_TO_PLANNING_RE, STAY_RE } from "./session";
 import { forkSessionFile } from "./fork";
 import { saveMockups } from "./mockups";
@@ -699,10 +699,17 @@ export class Board {
     const patch: Partial<Ticket> = {};
     if (t.workdir && !existsSync(t.workdir)) throw new Error(`linked session folder no longer exists: ${t.workdir}`);
     // A ticket that already ran in the folder itself stays there: its Claude session belongs to that folder.
-    const ranInPlace = !t.worktree && (!!t.sessionStarted || t.runCount > 0);
+    // One with a branch had a worktree (removed on Done): it gets it back at the same path, so its session resumes.
+    const ranInPlace = !t.worktree && !t.branch && (!!t.sessionStarted || t.runCount > 0);
     if (isGit && !t.workdir && !ranInPlace && (!t.worktree || !existsSync(t.worktree))) {
       const dir = worktreeDir(profile, id);
-      const branch = t.branch ?? `ck/${id}-${slugify(t.title)}`;
+      let branch = t.branch ?? `ck/${id}-${slugify(t.title)}`;
+      if (t.branch && !existsSync(dir) && !(await branchExists(profile.path, t.branch))) {
+        // Claude may have renamed the branch in its worktree: take the ticket's newest one, else start over from base.
+        const renamed = (await branchesWithPrefix(profile.path, `ck/${id}-`))[0];
+        if (renamed) branch = renamed;
+        else patch.notice = `Branch "${t.branch}" was not found, so this ticket's worktree starts again from the base branch.`;
+      }
       const base = existsSync(dir) ? profile.baseBranch : await resolveBaseBranch(profile.path, profile.baseBranch);
       if (base === null) {
         // Fresh `git init` with no commits: nothing to branch from, so run in the folder rather than fail.
@@ -1124,6 +1131,43 @@ export class Board {
     if (r.removed) return this.patch(slug, t.id, { worktree: null });
     this.store.addComment(slug, t.id, "ai", `Worktree kept at ${t.worktree}: ${r.reason}`);
     return t;
+  }
+
+  /**
+   * Removes worktrees left behind by Done or deleted tickets (run once at startup; never throws).
+   * Only the board's own worktree folder is looked at; ones with uncommitted changes are kept and logged.
+   */
+  async sweepWorktrees(): Promise<void> {
+    for (const profile of this.store.listProfiles()) {
+      try {
+        if (!(await isGitRepo(profile.path))) continue;
+        const root = dirname(worktreeDir(profile, "x"));
+        if (!existsSync(root)) continue;
+        const realRoot = realpathSync(root);
+        let swept = 0;
+        const kept: string[] = [];
+        for (const dir of await listWorktrees(profile.path)) {
+          if (dirname(dir) !== realRoot && dirname(dir) !== root) continue;
+          const id = basename(dir);
+          const t = this.store.getTicket(profile.slug, id);
+          const key = this.key(profile.slug, id);
+          const busy = this.isRunning(profile.slug, id) || this.setups.has(key) || this.sessionLocks.has(key);
+          if (t && (t.status !== "done" || busy)) continue;
+          const r = await this.removeTicketWorktree(profile, dir);
+          if (!r.removed) {
+            kept.push(`${id} (${r.reason})`);
+            continue;
+          }
+          swept++;
+          if (t?.worktree) this.patch(profile.slug, id, { worktree: null });
+        }
+        if (swept || kept.length) {
+          console.log(`profile ${profile.slug}: swept ${swept} orphan worktree${swept === 1 ? "" : "s"}, kept ${kept.length} with changes${kept.length ? `: ${kept.join(", ")}` : ""}`);
+        }
+      } catch (e) {
+        console.error(`profile ${profile.slug}: worktree sweep failed: ${(e as Error).message}`);
+      }
+    }
   }
 
   async deleteTicket(slug: string, id: string): Promise<void> {
