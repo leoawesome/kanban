@@ -5,6 +5,7 @@ import type { Store } from "./store";
 export type PrState = "OPEN" | "MERGED" | "CLOSED" | null;
 
 const CLOSED_MSG = "PR closed without merge.";
+const MERGED_MSG = "PR merged.";
 
 export async function ghState(url: string): Promise<PrState> {
   const r = await run(["gh", "pr", "view", url, "--json", "state", "-q", ".state"], process.cwd());
@@ -13,8 +14,10 @@ export async function ghState(url: string): Promise<PrState> {
   return s === "OPEN" || s === "MERGED" || s === "CLOSED" ? s : null;
 }
 
+/** waits: the card still needs the user, so a merged PR keeps it in Review until that is dealt with. */
 export async function checkPr(
   board: Board, store: Store, slug: string, id: string, gh: (url: string) => Promise<PrState> = ghState,
+  waits: (slug: string, id: string) => boolean = (s, i) => board.waitsOnUser(s, i),
 ): Promise<PrState> {
   const t = store.getTicket(slug, id);
   if (!t?.prUrl || t.status !== "review") return null;
@@ -23,8 +26,9 @@ export async function checkPr(
   const now = store.getTicket(slug, id);
   if (now?.status !== "review" || now.prUrl !== t.prUrl) return state;
   if (state === "MERGED") {
-    store.addComment(slug, id, "ai", "PR merged.");
-    await board.updateTicket(slug, id, { status: "done" });
+    // The poller sees the merge on every tick while the card waits; say it once.
+    if (!store.listComments(slug, id).some((c) => c.author === "ai" && c.text === MERGED_MSG)) store.addComment(slug, id, "ai", MERGED_MSG);
+    if (!waits(slug, id)) await board.updateTicket(slug, id, { status: "done" });
   } else if (state === "CLOSED") {
     const last = store.listComments(slug, id).filter((c) => c.author === "ai").at(-1);
     if (last?.text !== CLOSED_MSG) store.addComment(slug, id, "ai", CLOSED_MSG);

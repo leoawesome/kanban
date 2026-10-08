@@ -9,7 +9,7 @@ import { addWorktree, branchesWithPrefix, branchExists, isGitRepo, listWorktrees
 import { MOVE_TO_PLANNING_RE, STAY_RE } from "./session";
 import { forkSessionFile } from "./fork";
 import { saveMockups } from "./mockups";
-import { userWaitReason } from "./attention";
+import { ticketAttention, userWaitReason } from "./attention";
 import type { SessionSummary } from "./session";
 import { chatPrompt, firstRunPrompt, interruptedPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
 import {
@@ -251,6 +251,14 @@ export class Board {
   /** Why a plan child waits on the user (questions, a proposal to apply, in Planning), or null. */
   userWait(t: Ticket): string | null {
     return userWaitReason(t, t.sessionId ? this.sessionSummary(t.sessionId) : null);
+  }
+
+  /** The card still needs the user (questions, a proposal or new tickets to apply, a failed run), not just a look. */
+  waitsOnUser(slug: string, id: string): boolean {
+    const t = this.store.getTicket(slug, id);
+    if (!t) return false;
+    const a = ticketAttention(this.store, slug, t, t.sessionId ? this.sessionSummary(t.sessionId) : null, this.isRunning(slug, id));
+    return !!a && a.kind !== "review";
   }
 
   /** Runs holding a maxParallel slot (see takesSlot). */

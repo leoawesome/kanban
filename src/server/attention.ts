@@ -1,4 +1,6 @@
+import { childrenOf, isComplete, planActive } from "./plan";
 import type { SessionSummary } from "./session";
+import type { Store } from "./store";
 import type { Ticket } from "./types";
 
 export type AttentionKind = "failed" | "blocked" | "questions" | "proposal" | "review" | "reply";
@@ -37,6 +39,20 @@ export function attentionFor(
   // A reply cut off by a restart isn't a reply yet: recover() resumes it.
   if (t.status === "planning" && s?.lastMessage?.role === "assistant" && !t.interrupted) return { kind: "reply", label: "Claude replied" };
   return null;
+}
+
+/** attentionFor with its options read from the board; the other tickets are only listed when they matter. */
+export function ticketAttention(store: Store, slug: string, t: Ticket, s: SessionSummary | null, running: boolean): Attention | null {
+  const planComplete = () => {
+    const kids = childrenOf(store.listTickets(slug), t.id);
+    return kids.length > 0 && kids.every(isComplete);
+  };
+  return attentionFor(t, s, running, {
+    createdTitles: s?.pendingNewTickets.length
+      ? new Set(store.listTickets(slug).filter((c) => c.parentId === t.id).map((c) => c.title)) : undefined,
+    managed: t.parentId ? planActive(store.getTicket(slug, t.parentId)?.plan) : false,
+    planComplete: t.plan?.state === "stuck" ? planComplete() : undefined,
+  });
 }
 
 /**

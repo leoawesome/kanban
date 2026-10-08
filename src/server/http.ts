@@ -12,8 +12,8 @@ import { cronError, describeCron, nextRuns, parseCron } from "./cron";
 import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
 import { SnippetError, Snippets } from "./snippets";
 import { QuestionError, Questions } from "./questions";
-import { attentionFor, userWaitReason } from "./attention";
-import { childrenOf, isComplete, MAX_RETRIES, planActive } from "./plan";
+import { ticketAttention, userWaitReason } from "./attention";
+import { isComplete, MAX_RETRIES, planActive } from "./plan";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
 import { FileError, listDir, openWithSystem, readFileForView } from "./files";
@@ -150,9 +150,6 @@ export function createServer(deps: ServerDeps) {
     if (!t) throw new HttpError(404, `ticket ${id} not found`);
     return t;
   };
-  // Only read when a planner has proposed tickets, so listing the board stays cheap.
-  const childTitles = (slug: string, id: string) =>
-    new Set(store.listTickets(slug).filter((c) => c.parentId === id).map((c) => c.title));
   /**
    * Board runs send RUN_HEADER ("<profile>/<ticket id>") with ticket changes. Runs can't change the board, except
    * a planner on its own child tickets: any run of a running plan, or a reply to the user's message in the
@@ -182,11 +179,6 @@ export function createServer(deps: ServerDeps) {
   };
   const strings = (v: unknown): string[] | undefined =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : undefined;
-  // Only read for stuck plans, so listing the board stays cheap.
-  const planComplete = (slug: string, id: string) => {
-    const kids = childrenOf(store.listTickets(slug), id);
-    return kids.length > 0 && kids.every(isComplete);
-  };
   const view = (p: Profile, t: Ticket) => {
     const running = board.isRunning(p.slug, t.id);
     const session = t.sessionId ? sessions.summary(t.sessionId) : null;
@@ -207,11 +199,7 @@ export function createServer(deps: ServerDeps) {
       resources: board.resourceState(p.slug, t),
       /** A plan child waiting on the user (never started by the plan until then). */
       userWait: t.parentId && !isComplete(t) ? userWaitReason(t, session) : null,
-      attention: attentionFor(t, session, running, {
-        createdTitles: session?.pendingNewTickets.length ? childTitles(p.slug, t.id) : undefined,
-        managed: t.parentId ? planActive(store.getTicket(p.slug, t.parentId)?.plan) : false,
-        planComplete: t.plan?.state === "stuck" ? planComplete(p.slug, t.id) : undefined,
-      }),
+      attention: ticketAttention(store, p.slug, t, session, running),
     };
   };
 
