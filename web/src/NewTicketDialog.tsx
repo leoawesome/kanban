@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { ClaudeSession, Status, TicketMode } from "./api";
 import { useImagePaste } from "./imagePaste";
 import { ModeToggle } from "./ModeToggle";
+import { KeyHint } from "./KeyHint";
 import { Modal } from "./Modal";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
 import { useSnippetPicker } from "./SnippetPicker";
@@ -77,10 +78,11 @@ export function NewTicketDialog({ slug, folder, onClose, onCreate }: {
         </div>
         {err && <div className="form-error">{err}</div>}
         <div className="form-actions">
-          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel<KeyHint keys="Esc" /></button>
           <button type="button" className="btn" disabled={busy || !title.trim() || images.uploading} onClick={() => submit("backlog")} title="Park it in Backlog; nothing runs">Create</button>
           <button type="button" className="btn primary icon-label" onClick={() => submit(startStatus)} disabled={busy || !title.trim() || images.uploading}>
             {images.uploading ? "Uploading image…" : <>{startLabel} <kbd className="kbd-on-primary">⌘↵</kbd></>}
+            <KeyHint keys="⌘↵" />
           </button>
         </div>
         <div className="muted small form-where">

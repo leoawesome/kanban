@@ -51,6 +51,7 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
       [["Enter"], "Send a chat message"],
       [["Shift", "Enter"], "New line"],
       [["E"], "Edit the description"],
+      [["R"], "Refine with Claude (Backlog)"],
       [[MOD, "Enter"], "Save the description"],
       [["Esc"], "Cancel the description edit"],
       [[MOD, "\\"], "Show / hide details"],

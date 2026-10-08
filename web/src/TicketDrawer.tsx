@@ -394,14 +394,17 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  // E: edit the description (the panel has the keyboard, not already editing).
-  const startEditRef = useRef(() => {});
-  startEditRef.current = () => { if (!editing) startEdit(); };
+  // E: edit the description; R: Refine with Claude (Backlog). Only when the panel has the keyboard.
+  const letterRef = useRef<(k: string) => boolean>(() => false);
+  letterRef.current = (k) => {
+    if (k === "e" && !editing) return startEdit(), true;
+    if (k === "r" && !working && !editing && ticket.status === "backlog") return setStatus("planning"), true;
+    return false;
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key !== "e" && e.key !== "E") || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || !panelKeysRef.current(e)) return;
-      e.preventDefault();
-      startEditRef.current();
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || !panelKeysRef.current(e)) return;
+      if (letterRef.current(e.key.toLowerCase())) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -480,7 +483,9 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                   </button>
                 )}
                 {!working && ticket.status === "backlog" && (
-                  <button className="btn" onClick={() => setStatus("planning")}>Refine with Claude</button>
+                  <button className="btn" onClick={() => setStatus("planning")} title="Move to Planning: Claude interviews you (R)">
+                    Refine with Claude<KeyHint keys={startTarget === "planning" && !proposalPending ? "⌘⇧↵ · R" : "R"} />
+                  </button>
                 )}
                 {ticket.status === "review" && (
                   <button className="btn primary" onClick={() => setStatus("done")} title={`Mark done (${MOD}⇧Enter)`}>Mark done{!working && <KeyHint keys={proposalPending ? "⌘⇧↵ after Apply" : "⌘⇧↵"} />}</button>

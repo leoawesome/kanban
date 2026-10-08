@@ -1,5 +1,6 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import { useFocusTrap, useLayer } from "./layers";
+import { KeyHint } from "./KeyHint";
 
 export function ConfirmDialog({ title, children, confirmLabel, busyLabel = "Working…", tone = "danger", onConfirm, onCancel }: {
   title: string;
@@ -38,8 +39,8 @@ export function ConfirmDialog({ title, children, confirmLabel, busyLabel = "Work
         </div>
         <div className="form-actions confirm-actions">
           {/* A primary (non-destructive) confirm takes the focus, so Enter confirms (e.g. ⌘⇧Enter then Enter starts work). */}
-          <button ref={cancelRef} className="btn ghost" onClick={onCancel} autoFocus={tone !== "primary"}>Cancel</button>
-          <button className={`btn ${tone}`} onClick={confirm} disabled={busy} autoFocus={tone === "primary"}>{busy ? busyLabel : confirmLabel}</button>
+          <button ref={cancelRef} className="btn ghost" onClick={onCancel} autoFocus={tone !== "primary"}>Cancel<KeyHint keys="Esc" /></button>
+          <button className={`btn ${tone}`} onClick={confirm} disabled={busy} autoFocus={tone === "primary"}>{busy ? busyLabel : confirmLabel}{tone === "primary" && <KeyHint keys="↵" />}</button>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useId, useRef, useState, type ReactNode } from "react";
+import { KeyHint } from "./KeyHint";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CloseIcon } from "./icons";
 import { useFocusTrap, useLayer } from "./layers";
@@ -25,7 +26,7 @@ export function Modal({ title, onClose, children, wide, guard }: {
       <div ref={box} className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={id} tabIndex={-1}>
         <header className="modal-head">
           <h3 id={id}>{title}</h3>
-          <button className="icon-btn" onClick={tryClose} aria-label="Close"><CloseIcon /></button>
+          <button className="icon-btn" onClick={tryClose} aria-label="Close" title="Close (Esc)"><CloseIcon /><KeyHint keys="Esc" /></button>
         </header>
         {children}
       </div>

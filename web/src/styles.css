@@ -87,6 +87,9 @@ kbd {
 }
 .key-hint.inset { top: 4px; right: 4px; }
 body.show-hints .key-hint { display: block; animation: key-hint-in 0.12s ease-out; }
+/* Only the topmost layer shows its keys: a dialog over the ticket panel over the board. */
+body.show-hints:has(.drawer-wrap) .key-hint:not(.drawer-wrap .key-hint):not(.overlay .key-hint) { display: none; }
+body.show-hints:has(.overlay) .key-hint:not(.overlay .key-hint) { display: none; }
 /* A card's keys only show on the focused card. */
 body.show-hints .sortable-card:not(:focus) .key-hint.card-keys { display: none; }
 @keyframes key-hint-in { from { opacity: 0; transform: translateY(3px) scale(0.92); } }
