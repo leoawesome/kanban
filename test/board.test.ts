@@ -994,6 +994,8 @@ test("planning-only message in Review: Claude marks it and the card moves to Pla
   const got = store.getTicket("p", t.id)!;
   expect(got.status).toBe("planning");
   expect(got.outcome).toBeNull();
+  // The reply's summary is still recorded, like any other reply.
+  expect(store.listComments("p", t.id).at(-1)).toMatchObject({ author: "ai", text: "fake done" });
   const prompt = readArgs()[1].prompt;
   expect(prompt).toContain('<ckanban-move to="planning"/>');
 });

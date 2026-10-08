@@ -698,8 +698,10 @@ export class Board {
       this.patch(slug, id, { ...base, lastActivity: null, error: null });
       return;
     }
+    const body = finalText.replace(/^.*CKANBAN_RESULT:.*$/gm, "").replace(MOVE_TO_PLANNING_RE, "").trim();
     // A Review/Done message that only asked for planning: show the ticket where it really is.
     if (run.chat?.mode === "act" && !run.targetStatus && result?.status !== "blocked" && MOVE_TO_PLANNING_RE.test(finalText)) {
+      this.store.addComment(slug, id, "ai", result?.summary || body || "(no output)");
       this.patch(slug, id, {
         ...base, status: "planning",
         outcome: null, error: null, refineStarted: true, lastActivity: null,
@@ -713,7 +715,6 @@ export class Board {
       return;
     }
     const current = this.store.getTicket(slug, id)!;
-    const body = finalText.replace(/^.*CKANBAN_RESULT:.*$/gm, "").trim();
     // Questions must reach the user verbatim; otherwise the short summary is enough.
     const summary = (result?.status === "questions" ? body : result?.summary) || body || "(no output)";
     this.store.addComment(slug, id, "ai", summary);

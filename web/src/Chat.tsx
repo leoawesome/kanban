@@ -15,6 +15,7 @@ import { useSnippetPicker } from "./SnippetPicker";
 import { useSlashCommands, useSlashPicker } from "./SlashPicker";
 import { commandNote, messageCommand, type SlashCommand } from "./slashText";
 import { filesByReply } from "./fileCards";
+import { handoff as handoffOf, liveView, saved, type Handoff } from "./liveReply";
 import { baseName, copyFile, downloadFile } from "./share";
 import { draftKey, formKey } from "./drafts";
 import { fullTime, timeAgo, useNow } from "./time";
@@ -83,36 +84,8 @@ function group(entries: SessionEntry[], splitAt?: string): Block[] {
   return out;
 }
 
-/** What to show of a half-written reply: hide board blocks (questions/proposal JSON) and the result line. */
-function liveView(text: string): { text: string; preparing: string | null } {
-  const cut = text.indexOf("<ckanban-");
-  const visible = (cut >= 0 ? text.slice(0, cut) : text).replace(/^CKANBAN_RESULT.*$/gm, "").trim();
-  if (cut < 0) return { text: visible, preparing: null };
-  const rest = text.slice(cut);
-  return {
-    text: visible,
-    preparing: rest.startsWith("<ckanban-questions") ? "Preparing questions…"
-      : rest.startsWith("<ckanban-mockup") ? "Drawing mockup…"
-      : rest.startsWith("<ckanban-tickets") ? "Preparing tickets…"
-      : rest.startsWith("<ckanban-ticket") ? "Preparing ticket proposal…" : null,
-  };
-}
-
-/** Reply text compared loosely: no result line, whitespace collapsed. */
-const flat = (s: string) => s.replace(/^.*CKANBAN_RESULT.*$/gm, "").replace(/\s+/g, " ").trim();
-
-/** A finished live reply kept on screen until the conversation shows its saved copy. */
-type Handoff = { text: string; flat: string; at: number; count: number };
 const HANDOFF_RETRY_MS = 500;
 const HANDOFF_MAX_MS = 5000;
-
-/** Whether the loaded entries contain the saved copy of a finished live reply. */
-function saved(entries: SessionEntry[], h: Handoff): boolean {
-  // Only board blocks (questions, proposal…): nothing to compare, so wait for any new entry.
-  if (!h.flat) return entries.length > h.count;
-  const recent = entries.filter((e) => e.role === "assistant" && e.kind === "text" && !e.peer).slice(-30);
-  return flat(recent.map((e) => e.text).join(" ")).includes(h.flat);
-}
 
 const UNREADABLE = { questions: "questions", proposal: "ticket proposal", tickets: "proposed tickets" } as const;
 
@@ -232,7 +205,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
       if (e.text) setLive(e.text);
       else if (e.final) {
         // Message finished: show all of it until the saved copy is loaded, then swap without a gap.
-        const h = { text: e.final, flat: flat(liveView(e.final).text), at: Date.now(), count: entriesRef.current.length };
+        const h = handoffOf(e.final, entriesRef.current.length);
         setHandoff((hs) => [...hs, h]);
         setLive("");
         loadTail().catch(() => {});
