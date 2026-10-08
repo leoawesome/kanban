@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { Profile } from "./api";
 import { avatarColor, avatarLetter } from "./avatar";
 import { fuzzyMatch } from "./fuzzy";
+import { boardDigit } from "./keynav";
 import { CheckIcon } from "./icons";
 import { Modal } from "./Modal";
 
@@ -108,6 +109,13 @@ export function BoardSwitcher({ profiles, current, needYou, onPick, onClose }: {
           role="combobox" aria-expanded aria-controls="board-switcher-list" aria-activedescendant={shown[active] ? `bs-${shown[active].p.slug}` : undefined}
           onChange={(e) => { setQ(e.target.value); setActive(0); }}
           onKeyDown={(e) => {
+            // 1…9 with nothing typed yet: switch to that board (the number shown on its row), don't search for the digit.
+            const digit = !q && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey ? boardDigit(e.nativeEvent.code) : null;
+            if (digit !== null) {
+              e.preventDefault();
+              if (profiles[digit]) onPick(profiles[digit].slug);
+              return;
+            }
             if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(shown.length - 1, a + 1)); }
             else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
             else if (e.key === "Enter") { e.preventDefault(); pick(active); }
@@ -136,6 +144,7 @@ export function BoardSwitcher({ profiles, current, needYou, onPick, onClose }: {
         <div className="muted small switcher-foot">
           <span><kbd>↑</kbd> <kbd>↓</kbd> pick</span>
           <span><kbd>Enter</kbd> open</span>
+          <span><kbd>1…9</kbd> go to that board</span>
           <span><kbd>[</kbd> <kbd>]</kbd> previous / next board anywhere</span>
         </div>
       </div>
