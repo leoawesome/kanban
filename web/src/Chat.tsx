@@ -4,6 +4,7 @@ import { autoGrow } from "./autoGrow";
 import { branchTicket } from "./branch";
 import { BranchCard } from "./BranchCard";
 import { AgentRows } from "./AgentRow";
+import { ToolRows } from "./ToolRows";
 import { ArrowDownIcon, BranchIcon, CloseIcon, FileCodeIcon, FileTextIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { NewTicketsCard } from "./NewTicketsCard";
@@ -381,7 +382,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
             return (
               <details key={b.items[0].uuid} className={`conv-tools${old ? " inherited" : ""}`}>
                 <summary>{b.items.length === 1 ? b.items[0].text : `${b.items.length} tool calls · ${b.items.at(-1)!.text}`}</summary>
-                <ul>{b.items.map((t) => <li key={t.uuid}>{t.text}</li>)}</ul>
+                <ToolRows slug={slug} ticketId={ticket.id} live={running && !old}
+                  items={b.items.map((t) => ({ key: t.uuid, label: t.text, toolUseId: t.toolUseId, error: t.error }))} />
               </details>
             );
           }

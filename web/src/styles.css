@@ -1373,3 +1373,35 @@ button.pill:hover { color: var(--text); }
   .snippet-names { width: auto; border-right: 0; border-bottom: 1px solid var(--border); max-height: 160px; }
 }
 .snippet-editor label > .muted { font-weight: 400; }
+/* tool calls: one-line rows; open one for a card with its full input and output (main chat and subagent steps) */
+.tool-rows { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 4px 14px; }
+.tool-row > summary { display: block; font-size: inherit; list-style: none; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 1px 4px; border-radius: 4px; }
+.tool-row > summary::-webkit-details-marker { display: none; }
+.tool-row > summary::before { content: "▸ "; color: var(--muted); }
+.tool-row[open] > summary::before { content: "▾ "; }
+.tool-row > summary:hover { background: var(--surface-2); }
+.tool-row.cur > summary { color: var(--accent); }
+.tool-row .spinner { width: 8px; height: 8px; vertical-align: -1px; }
+.tool-x { color: var(--err); }
+.tool-card { margin: 4px 0 8px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); overflow: hidden; }
+.tool-lbl {
+  display: flex; justify-content: space-between; align-items: center; font: 10.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 4px 10px; background: var(--surface-2);
+}
+.tool-lbl button {
+  font: 11px var(--mono); text-transform: none; border: 1px solid var(--border); background: var(--surface);
+  border-radius: 5px; padding: 0 6px; color: var(--muted); cursor: pointer;
+}
+.tool-lbl button:hover { color: var(--text); }
+.tool-card pre {
+  margin: 0; padding: 8px 10px; font: 12px/1.45 var(--mono); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 260px; overflow: auto;
+}
+.tool-card pre.err { color: var(--err); }
+.tool-card pre.tool-note { color: var(--muted); }
+.tool-diff .rm { display: block; background: var(--err-soft); color: var(--err); }
+.tool-diff .ad { display: block; background: var(--ok-soft); color: var(--ok); }
+.tool-diff .gap { display: block; color: var(--muted); }
+.agent-steps li.tool { white-space: normal; overflow: visible; }
+.agent-steps .tool-card { margin-left: 12px; }
+.agent-steps .tool-row > summary { padding: 0 4px; }

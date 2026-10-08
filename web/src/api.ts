@@ -270,6 +270,10 @@ export interface SessionEntry {
   /** agent: a subagent Claude started (its own row with status, steps and result). */
   kind: "text" | "tool" | "board" | "agent";
   text: string;
+  /** Tool rows: the tool_use id (api.tool loads its full input and output). */
+  toolUseId?: string;
+  /** Tool rows whose result was an error. */
+  error?: true;
   agent?: AgentInfo;
   questions?: Question[];
   proposal?: { title: string; description: string };
@@ -293,6 +297,20 @@ export type SubagentStatus = "running" | "done" | "failed" | "stopped";
 export interface AgentStep {
   kind: "tool" | "text";
   text: string;
+  /** Tool calls: the tool_use id (api.tool loads its full input and output). */
+  id?: string;
+  error?: true;
+}
+
+/** One tool call in full, loaded when its row is opened. */
+export interface ToolDetail {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+  /** null while the call has no result yet (or the session lost it). */
+  output: string | null;
+  isError: boolean;
+  truncated: boolean;
 }
 
 export interface AgentInfo {
@@ -583,6 +601,8 @@ export const api = {
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),
   /** One subagent of the ticket's conversation, with all of its steps. */
   agent: (slug: string, id: string, toolUseId: string) => req<AgentInfo>("GET", `${t(slug, id)}/agent/${encodeURIComponent(toolUseId)}`),
+  /** A tool call's full input and output (main conversation or a subagent's). */
+  tool: (slug: string, id: string, toolUseId: string) => req<ToolDetail>("GET", `${t(slug, id)}/tool/${encodeURIComponent(toolUseId)}`),
   activity: (slug: string, id: string) => req<ActivityEntry[]>("GET", `${t(slug, id)}/activity`),
   /** Cost, tokens and ≈ share of the 5h plan window per run. */
   ticketUsage: (slug: string, id: string) => req<TicketUsage>("GET", `${t(slug, id)}/usage`),

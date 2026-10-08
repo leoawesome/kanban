@@ -802,6 +802,13 @@ export function createServer(deps: ServerDeps) {
       if (!e?.agent) throw new HttpError(404, "no such subagent in this ticket's conversation");
       return json(settleAgent(e.agent, board.isRunning(slug, id)));
     }
+    if (action === "tool" && parts.length === 6 && m === "GET") {
+      // A tool call's full input and output, loaded when the user opens its row in the chat.
+      const t = store.getTicket(slug, id)!;
+      const d = t.sessionId ? sessions.toolDetail(t.sessionId, parts[5]) : null;
+      if (!d) throw new HttpError(404, "no such tool call in this ticket's conversation");
+      return json(d);
+    }
     if (action === "comments") {
       if (m === "GET") return json(store.listComments(slug, id));
       if (m === "POST") {

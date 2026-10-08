@@ -10,6 +10,10 @@ export type AgentStatus = "running" | "done" | "failed" | "stopped";
 export interface AgentStep {
   kind: "tool" | "text";
   text: string;
+  /** Tool calls: the tool_use id (its full input and output load from the tool endpoint). */
+  id?: string;
+  /** Tool calls whose result was an error. */
+  error?: true;
 }
 
 export interface AgentInfo {
@@ -59,6 +63,7 @@ const STEP_TEXT_MAX = 600;
 export function parseAgentTranscript(raw: string): AgentTranscript {
   const steps: AgentStep[] = [];
   const open = new Map<string, string>();
+  const byId = new Map<string, AgentStep>();
   let final: string | null = null;
   let startedAt: string | null = null;
   let lastAt: string | null = null;
@@ -78,7 +83,12 @@ export function parseAgentTranscript(raw: string): AgentTranscript {
     const content = ev.message?.content;
     if (!Array.isArray(content)) continue;
     if (ev.type === "user") {
-      for (const b of content) if (b?.type === "tool_result") open.delete(b.tool_use_id);
+      for (const b of content) {
+        if (b?.type !== "tool_result") continue;
+        open.delete(b.tool_use_id);
+        const step = byId.get(b.tool_use_id);
+        if (step && b.is_error) step.error = true;
+      }
       continue;
     }
     if (ev.type !== "assistant") continue;
@@ -88,8 +98,13 @@ export function parseAgentTranscript(raw: string): AgentTranscript {
     for (const b of content) {
       if (b?.type === "tool_use") {
         const label = toolLabel(b);
-        steps.push({ kind: "tool", text: label });
-        if (typeof b.id === "string") open.set(b.id, label);
+        const step: AgentStep = { kind: "tool", text: label };
+        steps.push(step);
+        if (typeof b.id === "string") {
+          step.id = b.id;
+          byId.set(b.id, step);
+          open.set(b.id, label);
+        }
       } else if (b?.type === "text" && typeof b.text === "string" && b.text.trim()) {
         const text = b.text.trim();
         if (ended) final = text;
@@ -169,6 +184,16 @@ export class SubagentCache {
       if (hit.toolUseId) out.set(hit.toolUseId, hit.transcript);
     }
     return out;
+  }
+}
+
+/** A session's subagent transcript files (empty when there are none). */
+export function subagentFiles(sessionFile: string): string[] {
+  const dir = subagentsDir(sessionFile);
+  try {
+    return readdirSync(dir).filter((n) => n.endsWith(".jsonl")).map((n) => join(dir, n));
+  } catch {
+    return [];
   }
 }
 

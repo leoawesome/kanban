@@ -4,7 +4,8 @@ import { basename, join } from "node:path";
 import type { Bus } from "./events";
 import { mockupName, stripMockups } from "./mockups";
 import type { Store } from "./store";
-import { AGENT_TOOL, notifiedStatus, parseTaskNotification, SubagentCache, toolLabel, withTranscript, type AgentInfo } from "./subagents";
+import { AGENT_TOOL, notifiedStatus, parseTaskNotification, SubagentCache, subagentFiles, toolLabel, withTranscript, type AgentInfo } from "./subagents";
+import { findToolDetailIn, type ToolDetail } from "./tooldetail";
 import { parseSetupBlock, type SetupResult } from "./worktree-setup";
 
 /** One visible item of a Claude Code session, as shown in the ticket's Conversation tab. */
@@ -43,6 +44,10 @@ export interface SessionEntry {
   /** agent: a subagent Claude started (rendered as its own row with status and steps). */
   kind: "text" | "tool" | "board" | "agent";
   text: string;
+  /** Tool rows: the tool_use id (its full input and output load from the tool endpoint). */
+  toolUseId?: string;
+  /** Tool rows whose result was an error. */
+  error?: true;
   agent?: AgentInfo;
   /** Interview questions Claude asked (rendered as a form). */
   questions?: Question[];
@@ -339,6 +344,8 @@ export function parseSession(raw: string): ParsedSession {
   /** Card tool calls (by tool_use id) and those whose result was an error: those don't render. */
   const cards = new Set<string>();
   const failed = new Set<string>();
+  /** Tool calls whose result was an error (their rows get a ✗). */
+  const errored = new Set<string>();
   /** Subagents by the Agent tool_use id; their rows update as results and notifications arrive. */
   const agents = new Map<string, AgentInfo>();
   const notified = (text: unknown, at: string) => {
@@ -387,6 +394,7 @@ export function parseSession(raw: string): ParsedSession {
         for (const [i, b] of content.entries()) {
           if (b?.type === "tool_result" && agents.has(b.tool_use_id)) agentResult(agents.get(b.tool_use_id)!, b, ev.toolUseResult, at);
           if (b?.type === "tool_result" && b.is_error && cards.has(b.tool_use_id)) failed.add(b.tool_use_id);
+          if (b?.type === "tool_result" && b.is_error) errored.add(b.tool_use_id);
           // The reply an ask_ticket call came back with: shown as that ticket's message.
           if (b?.type === "tool_result" && asks.has(b.tool_use_id) && !b.is_error) {
             const m = REPLY_HEAD.exec(resultText(b.content));
@@ -437,10 +445,13 @@ export function parseSession(raw: string): ParsedSession {
         };
         agents.set(b.id, agent);
         entries.push({ uuid: b.id, at, role: "assistant", kind: "agent", text: toolLabel(b), agent });
-      } else if (b?.type === "tool_use") entries.push({ uuid: id, at, role: "assistant", kind: "tool", text: toolLabel(b) });
+      } else if (b?.type === "tool_use") {
+        entries.push({ uuid: id, at, role: "assistant", kind: "tool", text: toolLabel(b), ...(typeof b.id === "string" ? { toolUseId: b.id } : {}) });
+      }
     });
   }
 
+  for (const e of entries) if (e.toolUseId && errored.has(e.toolUseId)) e.error = true;
   if (failed.size) entries.splice(0, entries.length, ...entries.filter((e) => !failed.has(e.uuid)));
   const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal || e.newTickets || e.branch));
   const lastText = !last ? "" : last.text
@@ -571,6 +582,12 @@ export class SessionCache {
       hit.agentKey = agentKey;
     }
     return hit.merged;
+  }
+
+  /** One tool call in full (input and output), from the session or one of its subagents' transcripts. */
+  toolDetail(sessionId: string, toolUseId: string): ToolDetail | null {
+    const f = this.locate(sessionId);
+    return f ? findToolDetailIn([f, ...subagentFiles(f)], toolUseId) : null;
   }
 
   summary(sessionId: string): SessionSummary | null {

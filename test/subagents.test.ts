@@ -90,7 +90,7 @@ const TRANSCRIPT = (done: boolean) => [
   user("Look around", "2026-10-07T01:00:02Z", { isSidechain: true }),
   asst([{ type: "thinking", thinking: "" }], "2026-10-07T01:00:03Z", { isSidechain: true }),
   asst([{ type: "tool_use", id: "s1", name: "Grep", input: { pattern: "level" } }], "2026-10-07T01:00:04Z", { isSidechain: true }),
-  user([{ type: "tool_result", tool_use_id: "s1", content: "x" }], "2026-10-07T01:00:05Z", { isSidechain: true }),
+  user([{ type: "tool_result", tool_use_id: "s1", content: "x", is_error: true }], "2026-10-07T01:00:05Z", { isSidechain: true }),
   asst([{ type: "text", text: "Share flow is in ShareSheet.tsx." }], "2026-10-07T01:00:06Z", { isSidechain: true }),
   asst([{ type: "tool_use", id: "s2", name: "Read", input: { file_path: "/r/notifications.ts" } }], "2026-10-07T01:00:07Z", { isSidechain: true }),
   ...(done ? [
@@ -102,9 +102,9 @@ const TRANSCRIPT = (done: boolean) => [
 test("parseAgentTranscript: steps, the tool call in flight, and the final report", () => {
   const live = parseAgentTranscript(TRANSCRIPT(false));
   expect(live.steps).toEqual([
-    { kind: "tool", text: "Grep: level" },
+    { kind: "tool", text: "Grep: level", id: "s1", error: true },
     { kind: "text", text: "Share flow is in ShareSheet.tsx." },
-    { kind: "tool", text: "Read: /r/notifications.ts" },
+    { kind: "tool", text: "Read: /r/notifications.ts", id: "s2" },
   ]);
   expect(live.current).toBe("Read: /r/notifications.ts");
   expect(live.final).toBeNull();
@@ -215,6 +215,9 @@ test("conversation endpoint sends the last steps of each agent; the agent endpoi
     const full = (await (await fetch(`${base}/api/profiles/p/tickets/${t.id}/agent/ag1`)).json()) as any;
     expect(full.steps.length).toBe(30);
     expect((await fetch(`${base}/api/profiles/p/tickets/${t.id}/agent/nope`)).status).toBe(404);
+    // A subagent's tool call in full, from its own transcript.
+    const step = (await (await fetch(`${base}/api/profiles/p/tickets/${t.id}/tool/s7`)).json()) as any;
+    expect(step).toEqual({ id: "s7", name: "Grep", input: { pattern: "p7" }, output: "x", isError: false, truncated: false });
   } finally {
     server.stop(true);
   }

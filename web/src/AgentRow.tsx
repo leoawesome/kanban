@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type AgentInfo, type AgentStep, type SessionEntry } from "./api";
 import { duration, fullTime } from "./time";
+import { ToolRow } from "./ToolRows";
 import { Markdown } from "./Transcript";
 
 /** Rows the user opened; module-level so they stay open across live refreshes and ticket switches. */
@@ -72,9 +73,11 @@ function AgentRow({ slug, ticketId, agent: a }: { slug: string; ticketId: string
               <ul className="agent-steps">
                 {steps.map((s, i) => {
                   const cur = running && s.kind === "tool" && i === steps.length - 1 && s.text === a.current;
+                  if (s.kind === "text") return <li key={hidden + i} className="txt">{s.text}</li>;
                   return (
-                    <li key={hidden + i} className={s.kind === "text" ? "txt" : cur ? "cur" : undefined} title={s.kind === "tool" ? s.text : undefined}>
-                      {cur && <><span className="spinner" /> </>}{s.text}
+                    <li key={hidden + i} className="tool">
+                      <ToolRow slug={slug} ticketId={ticketId} live={running}
+                        item={{ key: s.id ?? `${a.toolUseId}:${hidden + i}`, label: s.text, toolUseId: s.id, error: s.error, current: cur }} />
                     </li>
                   );
                 })}
