@@ -2,6 +2,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useEffect, useMemo, useRef } from "react";
 import type { ActivityEntry } from "./api";
+import { opensNewTab } from "./links";
 
 function textOf(content: unknown): string {
   if (typeof content === "string") return content;
@@ -32,6 +33,12 @@ function thumbnails(html: string): string {
     if (!m) return;
     img.setAttribute("src", `/api/attachments/${m[1]}`);
     img.classList.add("attachment");
+  });
+  // Clicking a link must not replace the board: open it in a new tab.
+  doc.querySelectorAll("a").forEach((a) => {
+    if (!opensNewTab(a.getAttribute("href"))) return;
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
   });
   return doc.body.innerHTML;
 }

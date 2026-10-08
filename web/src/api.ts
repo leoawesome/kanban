@@ -1,26 +1,11 @@
 import type { SlashCommand } from "./slashText";
 import type { TicketUsage, UsageResult } from "./usage";
-export type Status = "backlog" | "planning" | "ready" | "in_progress" | "review" | "done";
+import type { Status } from "./columns";
+export type { Status } from "./columns";
 export type Outcome = null | "done" | "blocked" | "failed" | "stopped" | "needs_input";
 export type TicketMode = "interview" | "auto";
 
-/** claude: dropping a card here makes Claude start (or it is running). */
-export const COLUMNS: { id: Status; label: string; hint: string; claude: boolean }[] = [
-  { id: "backlog", label: "Backlog", hint: "Park ideas. Nothing runs.", claude: false },
-  { id: "planning", label: "Planning", hint: "Claude interviews you and shapes the ticket", claude: true },
-  { id: "ready", label: "Queued", hint: "Waits for a free slot, then Claude starts the work on its own", claude: true },
-  { id: "in_progress", label: "In Progress", hint: "Claude is working, or queued for a free slot", claude: true },
-  { id: "review", label: "Review", hint: "Your turn: check the result", claude: false },
-  { id: "done", label: "Done", hint: "Finished", claude: false },
-];
-
-/** Columns the board shows: queued (`ready`) tickets sit in In Progress, under the running ones. */
-export const BOARD_COLUMNS = COLUMNS.filter((c) => c.id !== "ready");
-
-/** A chat reply waiting for a free run slot: the board shows it in the queue, ahead of Ready tickets. */
-export function waitsForSlot(t: Ticket): boolean {
-  return t.status === "in_progress" && !!t.slotWait && !t.running;
-}
+export { BOARD_COLUMNS, COLUMNS, waitsForSlot } from "./columns";
 
 /** Start work on a Backlog ticket nobody shaped yet goes through the Planning interview first. */
 export function startWorkTarget(t: Ticket): "planning" | "ready" {

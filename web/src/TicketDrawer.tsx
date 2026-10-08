@@ -263,15 +263,16 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
     if (title !== ticket.title) saveTitle();
     nav.go(id);
   };
-  const stepRef = useRef(step);
-  stepRef.current = step;
+  // Latest prev/next for the key handler below, which is bound once.
+  const stepRef = useRef((_to: "prev" | "next") => {});
+  stepRef.current = (to) => step(nav?.[to]);
   useEffect(() => {
     // Alt+↑ / Alt+↓ open the previous / next ticket, also while typing.
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || e.isComposing) return;
       if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
       e.preventDefault();
-      stepRef.current(e.key === "ArrowUp" ? nav?.prev : nav?.next);
+      stepRef.current(e.key === "ArrowUp" ? "prev" : "next");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -348,7 +349,13 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
       .then((t) => { setBaseBody(t.body); setEditing(false); })
       .catch((e) => onError(e.message));
   };
-  const setStatus = (status: Status) => act(() => api.updateTicket(slug, ticket.id, { status }));
+  // Marked Done: on to the next ticket of the column the drawer walks, or back to the board after its last one.
+  const setStatus = (status: Status) => act(async () => {
+    await api.updateTicket(slug, ticket.id, { status });
+    if (status !== "done" || ticket.status === "done") return;
+    if (nav?.next) step(nav.next);
+    else if (!editing) onClose();
+  });
   const markDoneRef = useRef(() => {});
   markDoneRef.current = () => { if (ticket.status === "review") setStatus("done"); };
   useEffect(() => {
