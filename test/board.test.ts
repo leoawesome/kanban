@@ -1391,3 +1391,91 @@ test("cleanup command runs in the worktree before it is removed", async () => {
   expect(existsSync(wt)).toBe(false);
   expect(readFileSync(marker, "utf8").trim()).toBe(wt);
 });
+
+/** A user skill in the fake Claude config dir: `/echoargs` then runs as a slash command. */
+function userSkill(name: string) {
+  const dir = join(process.env.CLAUDE_CONFIG_DIR!, "skills", name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Echo\n---\nSay $ARGUMENTS`);
+}
+
+test("a slash command is sent alone; the board's instructions go in the system prompt", async () => {
+  await setup();
+  userSkill("echoargs");
+  const t = await board.createTicket("p", { title: "Idea", body: "", status: "backlog" });
+  await board.chat("p", t.id, "/echoargs hello world");
+  await board.whenIdle();
+  const call = readArgs()[0];
+  expect(call.prompt).toBe("/echoargs hello world");
+  const system = call.args[call.args.indexOf("--append-system-prompt") + 1];
+  expect(system).toContain("slash command");
+  expect(system).toContain("<ckanban-context");
+  expect(system).toContain("propose_ticket");
+  expect(store.getTicket("p", t.id)!.queued ?? []).toEqual([]);
+
+  // Unknown names and paths stay plain messages with the board's note.
+  await board.chat("p", t.id, "/notacommand hi");
+  await board.whenIdle();
+  await board.chat("p", t.id, "/Users/leo/x.ts looks wrong");
+  await board.whenIdle();
+  for (const c of readArgs().slice(1)) {
+    expect(c.args).not.toContain("--append-system-prompt");
+    expect(c.prompt).toContain("<ckanban-context");
+  }
+});
+
+test("a slash command sent while Claude works goes alone too", async () => {
+  await setup();
+  userSkill("echoargs");
+  process.env.FAKE_STEP_MS = "200";
+  try {
+    const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+    await Bun.sleep(400);
+    expect(board.isRunning("p", t.id)).toBe(true);
+    await board.chat("p", t.id, "/echoargs steer");
+    await board.whenIdle();
+    expect(readArgs().length).toBe(1);
+    expect(replays(t.id).slice(1)).toEqual(["/echoargs steer"]);
+    expect(store.getTicket("p", t.id)!.queued ?? []).toEqual([]);
+  } finally {
+    delete process.env.FAKE_STEP_MS;
+  }
+});
+
+test("/compact runs natively without moving the card; /model and /clear are the board's", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await board.whenIdle();
+  const before = store.getTicket("p", t.id)!;
+  expect(before.status).toBe("review");
+
+  await board.chat("p", t.id, "/compact");
+  await board.whenIdle();
+  let got = store.getTicket("p", t.id)!;
+  expect(readArgs()[1].prompt).toBe("/compact");
+  expect(got.status).toBe("review");
+  expect(got.runCount).toBe(before.runCount);
+  expect(got.queued ?? []).toEqual([]);
+
+  await board.chat("p", t.id, "/model sonnet");
+  got = store.getTicket("p", t.id)!;
+  expect(got.model).toBe("sonnet");
+  expect(got.notice).toContain("sonnet");
+  expect(readArgs().length).toBe(2);
+  await board.chat("p", t.id, "go on");
+  await board.whenIdle();
+  const call = readArgs()[2];
+  expect(call.args[call.args.indexOf("--model") + 1]).toBe("sonnet");
+  await board.chat("p", t.id, "/model default");
+  expect(store.getTicket("p", t.id)!.model).toBeNull();
+  await expect(board.chat("p", t.id, "/model $(rm -rf)")).rejects.toThrow("not a model name");
+
+  await board.chat("p", t.id, "/clear");
+  got = store.getTicket("p", t.id)!;
+  expect(got.sessionId).not.toBe(before.sessionId);
+  expect(got.sessionStarted).toBe(false);
+  expect(got.notice).toContain("fresh Claude session");
+  await board.chat("p", t.id, "start over");
+  await board.whenIdle();
+  expect(readArgs()[3].args).toContain("--session-id");
+});

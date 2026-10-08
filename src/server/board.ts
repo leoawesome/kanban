@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { extractFinalText, summarizeEvent } from "./activity";
-import { copyAttachments, deleteAttachments, localizeImages, referencedAttachments } from "./attachments";
+import { copyAttachments, deleteAttachments, localizeImages, localizeUrls, referencedAttachments } from "./attachments";
 import type { Bus } from "./events";
 import { isSessionLive as psSessionLive, sessionTitle } from "./claude";
 import { addWorktree, branchesWithPrefix, branchExists, isGitRepo, listWorktrees, removeWorktree, resolveBaseBranch, worktreeDir } from "./git";
@@ -19,6 +19,7 @@ import { run as runCmd } from "./git";
 import { parseResult } from "./result";
 import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
+import { BOARD_COMMANDS, commandText, listCommands, rememberInit, slashMessage, type SlashCommand } from "./commands";
 import { mcpConfig } from "./agents";
 import type { Store } from "./store";
 import type { Interrupted, Plan, Profile, QueuedMessage, Status, Ticket, TicketMode } from "./types";
@@ -62,7 +63,11 @@ interface ActiveRun {
    * user: answers a message the user typed in this ticket's chat, so the run may manage the ticket's own children
    * (see plannerRights); plan wake-ups, peer replies and messages from a planner's run don't.
    */
-  chat?: { text: string; mode: ChatMode; raw?: boolean; returnTo?: Status; quiet?: boolean; from?: Pick<Ticket, "status" | "outcome">; user?: boolean };
+  chat?: {
+    text: string; mode: ChatMode; raw?: boolean; returnTo?: Status; quiet?: boolean; from?: Pick<Ticket, "status" | "outcome">; user?: boolean;
+    /** text is a slash command (see QueuedMessage.slash). */
+    slash?: "prompt" | "local";
+  };
   /** Queued messages (ticket.queued) written to this claude process, keyed by id, with the text it was given. */
   inFlight: Map<string, string>;
   /** Queued message this chat run was started with; it leaves the queue once Claude reads the prompt. */
@@ -81,8 +86,9 @@ function hasText(ev: any): boolean {
 function replayText(ev: any): string | null {
   if (ev?.type !== "user" || !ev.isReplay) return null;
   const c = ev.message?.content;
-  if (typeof c === "string") return c;
-  return Array.isArray(c) ? c.map((b: any) => (b?.type === "text" ? b.text : "")).join("") : null;
+  const text = typeof c === "string" ? c : Array.isArray(c) ? c.map((b: any) => (b?.type === "text" ? b.text : "")).join("") : null;
+  // A slash command comes back as Claude Code's command tags: match it with the `/name args` the board sent.
+  return text === null ? null : commandText(text) ?? text;
 }
 
 /** Backlog/Planning chats refine the ticket (read-only); everywhere else Claude acts on the message. */
@@ -91,16 +97,18 @@ export function chatModeFor(status: Status): ChatMode {
 }
 
 /** How a chat run handles a queued message: a peer message (from another ticket's Claude) is sent as-is, quietly. */
-function chatFor(t: Pick<Ticket, "status" | "outcome">, msg: { text: string; peer?: boolean; fromPlanner?: boolean }): NonNullable<ActiveRun["chat"]> {
+function chatFor(t: Pick<Ticket, "status" | "outcome">, msg: { text: string; peer?: boolean; fromPlanner?: boolean; slash?: "prompt" | "local" }): NonNullable<ActiveRun["chat"]> {
   const mode = chatModeFor(t.status);
-  return msg.peer
-    ? { text: msg.text, mode, raw: true, quiet: true }
-    : { text: msg.text, mode, from: { status: t.status, outcome: t.outcome }, ...(msg.fromPlanner ? {} : { user: true }) };
+  if (msg.peer) return { text: msg.text, mode, raw: true, quiet: true };
+  const chat: NonNullable<ActiveRun["chat"]> = { text: msg.text, mode, from: { status: t.status, outcome: t.outcome }, ...(msg.fromPlanner ? {} : { user: true }) };
+  if (!msg.slash) return chat;
+  // A local command (/compact) gets no reply from Claude: like a peer reply, the card and outcome stay as they were.
+  return { ...chat, slash: msg.slash, ...(msg.slash === "local" ? { quiet: true } : {}) };
 }
 
 /** Queued-message flags from Board.chat options. */
-function flags(o: { peer?: boolean; fromPlanner?: boolean }): Pick<QueuedMessage, "peer" | "fromPlanner"> {
-  return { ...(o.peer ? { peer: true } : {}), ...(o.fromPlanner ? { fromPlanner: true } : {}) };
+function flags(o: { peer?: boolean; fromPlanner?: boolean; slash?: "prompt" | "local" }): Pick<QueuedMessage, "peer" | "fromPlanner" | "slash"> {
+  return { ...(o.peer ? { peer: true } : {}), ...(o.fromPlanner ? { fromPlanner: true } : {}), ...(o.slash ? { slash: o.slash } : {}) };
 }
 
 /** Holding a resource: Claude works on the ticket (In progress or a chat reply), or it is queued in Ready. */
@@ -314,12 +322,17 @@ export class Board {
    * While Claude is working the message steers the run instead: Claude reads it at its next step.
    * peer: the message comes from another ticket's Claude (see questions.ts) and is already a full prompt.
    */
-  async chat(slug: string, id: string, text: string, opts: { peer?: boolean; fromPlanner?: boolean } = {}): Promise<Ticket> {
+  async chat(slug: string, id: string, text: string, opts: { peer?: boolean; fromPlanner?: boolean; slash?: "prompt" | "local" } = {}): Promise<Ticket> {
     const t = this.store.getTicket(slug, id);
     if (!t) throw new Error(`ticket ${id} not found`);
     if (!text.trim()) throw new Error("message is empty");
     if (t.error?.startsWith("corrupt")) throw new Error("ticket file is corrupt");
     const active = this.runs.get(this.key(slug, id));
+    if (!opts.peer && !opts.slash) {
+      const slash = slashMessage(text, this.commands(slug, id));
+      if (slash && BOARD_COMMANDS.has(slash.command.name)) return this.boardCommand(slug, id, slash.command.name, slash.args);
+      if (slash) [text, opts] = [slash.text, { ...opts, slash: slash.command.local ? "local" : "prompt" }];
+    }
     if (active) {
       if (active.stopRequested || this.shuttingDown) throw new ConflictError("Claude is stopping; send your message once it has stopped");
       // Saved on the ticket until Claude reads it, so closing the chat, Stop or a restart can't lose it.
@@ -346,13 +359,44 @@ export class Board {
     return this.store.getTicket(slug, id)!;
   }
 
+  /** What `/` can run in this ticket's chat (the composer's picker lists the same). */
+  commands(slug: string, id: string): SlashCommand[] {
+    const t = this.store.getTicket(slug, id);
+    const profile = this.store.getProfile(slug);
+    if (!t || !profile) return [];
+    return listCommands(t.workdir ?? t.worktree ?? profile.path, { projects: [profile.path] });
+  }
+
+  /** /clear and /model: the board's own commands. Claude Code's versions don't fit board runs (see commands.ts). */
+  private boardCommand(slug: string, id: string, name: string, args: string): Ticket {
+    const t = this.store.getTicket(slug, id)!;
+    if (name === "model") {
+      const profile = this.store.getProfile(slug)!;
+      const fallback = profile.model ? `the board's model (${profile.model})` : "Claude Code's default model";
+      if (!args) {
+        return this.patch(slug, id, { notice: t.model ? `This ticket uses model ${t.model}. Change it with /model <name>, or /model default.` : `This ticket uses ${fallback}. Change it with /model <name>, e.g. /model sonnet.` });
+      }
+      if (!/^[\w.:\[\]-]+$/.test(args)) throw new Error(`"${args}" is not a model name`);
+      const reset = args === "default" || args === "reset";
+      const when = this.isRunning(slug, id) ? "from the next run (the current one keeps its model)" : "from the next run";
+      return this.patch(slug, id, { model: reset ? null : args, notice: reset ? `Model reset: this ticket uses ${fallback} ${when}.` : `Model set to ${args} for this ticket, ${when}.` });
+    }
+    // clear
+    if (this.isRunning(slug, id)) throw new ConflictError("Claude is working on this ticket; stop it before /clear");
+    if (t.workdir) throw new Error("This ticket is linked to a Claude session you started yourself; /clear only works on the board's own sessions");
+    return this.patch(slug, id, {
+      sessionId: crypto.randomUUID(), sessionStarted: false, error: null,
+      notice: "Started a fresh Claude session (/clear). The earlier conversation isn't shown here any more; Claude won't remember it in the next reply.",
+    });
+  }
+
   /** Send a message that was left unsent by Stop, as if the user typed it now. */
   async sendQueued(slug: string, id: string, msgId: string): Promise<Ticket> {
     const msg = this.store.getTicket(slug, id)?.queued?.find((m) => m.id === msgId);
     if (!msg) throw new Error("message not found");
     if (msg.state !== "unsent") throw new ConflictError("message is already on its way to Claude");
     this.dropQueued(slug, id, [msgId]);
-    return this.chat(slug, id, msg.text, { peer: msg.peer, fromPlanner: msg.fromPlanner });
+    return this.chat(slug, id, msg.text, { peer: msg.peer, fromPlanner: msg.fromPlanner, slash: msg.slash });
   }
 
   discardQueued(slug: string, id: string, msgId: string): Ticket {
@@ -370,9 +414,12 @@ export class Board {
   /** Hand a queued message to the live claude process; false when there is none to take it yet. */
   private steer(run: ActiveRun, msg: QueuedMessage): boolean {
     if (run.inFlight.has(msg.id) || run.promptMsgId === msg.id) return true;
-    const text = localizeImages(msg.peer ? msg.text : steerPrompt(msg.text), this.store.attachmentsDir);
-    if (!run.handle?.send(text)) return false;
-    run.inFlight.set(msg.id, text);
+    // A slash command goes alone: anything after it would become the command's arguments.
+    const text = msg.slash ? localizeUrls(msg.text, this.store.attachmentsDir) : localizeImages(msg.peer ? msg.text : steerPrompt(msg.text), this.store.attachmentsDir);
+    if (!run.handle?.send(text, { local: msg.slash === "local" })) return false;
+    // Claude never echoes a local command back: it is read once it is written.
+    if (msg.slash === "local") this.dropQueued(run.slug, run.id, [msg.id]);
+    else run.inFlight.set(msg.id, text);
     return true;
   }
 
@@ -516,7 +563,7 @@ export class Board {
     const runNo = t.runCount + 1;
     const newComments = this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt));
     const outputDir = this.store.outputsDir(slug, id);
-    const prompt = withSetup(localizeImages(run.chat?.raw
+    let prompt = withSetup(localizeImages(run.chat?.raw
       ? run.chat.text
       : run.chat
       ? chatPrompt(t, run.chat.text, run.chat.mode, outputDir)
@@ -526,6 +573,17 @@ export class Board {
         schedule: t.scheduleId ? { id: t.scheduleId, name: this.store.getSchedule(slug, t.scheduleId)?.name ?? null, board: slug } : undefined,
       })
       : resumePrompt(t, newComments, outputDir), this.store.attachmentsDir), this.takeSetup(slug, id));
+    // A slash command only runs when it is the whole message: Claude Code passes everything after the name to
+    // it as arguments (the board's note too). So the command goes alone and the board's instructions go in
+    // the system prompt for this run.
+    let systemPrompt: string | undefined;
+    if (run.chat?.slash) {
+      const cut = prompt.indexOf("\n\n<ckanban-context");
+      if (cut >= 0) {
+        systemPrompt = `The user's message in this turn is a slash command sent from the kanban board's ticket chat. The board's instructions for this run:\n\n${prompt.slice(cut + 2)}`;
+        prompt = prompt.slice(0, cut);
+      }
+    }
 
     let lastWrite = 0;
     let pendingActivity: string | null = null;
@@ -543,8 +601,9 @@ export class Board {
     run.handle = startRun({
       bin: this.opts.claudeBin,
       cwd: session.dir,
-      args: buildArgs(session.sessionId, session.existed, profile.model, refine ? "plan" : "bypassPermissions", mcpConfig()),
+      args: buildArgs(session.sessionId, session.existed, t.model ?? profile.model, refine ? "plan" : "bypassPermissions", mcpConfig(), systemPrompt),
       input: prompt,
+      inputLocal: run.chat?.slash === "local",
       // CKANBAN_TICKET marks board runs: the ckanban MCP/CLI refuses board changes there (no runs starting runs).
       env: { CKANBAN_OUTPUT_DIR: outputDir, CKANBAN_TICKET: `${slug}/${id}` },
       onEvent: (ev) => {
@@ -559,6 +618,7 @@ export class Board {
           } else if (!draftTimer) draftTimer = setTimeout(emitDraft, DRAFT_THROTTLE_MS);
         }
         if (ev?.type === "stream_event") return;
+        rememberInit(session.dir, ev);
         if (refine && ev?.type === "assistant") this.saveMockups(slug, id, outputDir, ev);
         if (showsInterrupted && !this.shuttingDown && hasText(ev)) {
           showsInterrupted = false;
@@ -587,6 +647,11 @@ export class Board {
       },
     });
 
+    // A local command is never echoed back: it was read once it was written.
+    if (run.chat?.slash === "local" && run.promptMsgId) {
+      this.dropQueued(slug, id, [run.promptMsgId]);
+      run.promptMsgId = undefined;
+    }
     // Messages sent while the run was starting up, or left over from a run the daemon restarted.
     for (const msg of this.waiting(slug, id)) this.steer(run, msg);
 

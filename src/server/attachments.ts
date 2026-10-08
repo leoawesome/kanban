@@ -76,6 +76,11 @@ export function referencedAttachments(...texts: string[]): string[] {
  * Prompts for Claude: swap image URLs for absolute file paths (Claude's Read tool can view them) and add a
  * short note saying so, inside the board's context block when there is one.
  */
+/** Attachment URLs in `text` replaced with their files' paths, without the note localizeImages adds. */
+export function localizeUrls(text: string, dir: string): string {
+  return text.includes("/api/attachments/") ? text.replace(URL_RE, (_, name) => join(dir, name)) : text;
+}
+
 export function localizeImages(prompt: string, dir: string): string {
   if (!prompt.includes("/api/attachments/")) return prompt;
   const out = prompt.replace(URL_RE, (_, name) => join(dir, name));

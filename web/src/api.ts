@@ -1,3 +1,4 @@
+import type { SlashCommand } from "./slashText";
 import type { TicketUsage, UsageResult } from "./usage";
 export type Status = "backlog" | "planning" | "ready" | "in_progress" | "review" | "done";
 export type Outcome = null | "done" | "blocked" | "failed" | "stopped" | "needs_input";
@@ -139,6 +140,8 @@ export interface Ticket {
   error: string | null;
   /** Non-fatal heads-up about how the ticket runs (e.g. no worktree yet); dismissible. */
   notice?: string | null;
+  /** Model set for this ticket with /model (overrides the board's). */
+  model?: string | null;
   /** Created by this schedule. */
   scheduleId?: string | null;
   /** Planner ticket whose chat proposed this one. */
@@ -289,6 +292,10 @@ export interface SessionEntry {
   peer?: { dir: "in" | "out"; ticketId: string | null };
   /** Worktree setup that ran before this prompt (shown as a row before it). */
   setup?: SetupResult;
+  /** A user message that ran this slash command (name without the slash). */
+  command?: string;
+  /** Output of a built-in command (/context), not a reply from Claude. */
+  commandOutput?: boolean;
 }
 
 export type SubagentStatus = "running" | "done" | "failed" | "stopped";
@@ -603,6 +610,8 @@ export const api = {
   agent: (slug: string, id: string, toolUseId: string) => req<AgentInfo>("GET", `${t(slug, id)}/agent/${encodeURIComponent(toolUseId)}`),
   /** A tool call's full input and output (main conversation or a subagent's). */
   tool: (slug: string, id: string, toolUseId: string) => req<ToolDetail>("GET", `${t(slug, id)}/tool/${encodeURIComponent(toolUseId)}`),
+  /** What `/` can run in this ticket's chat (skills, custom commands, built-ins). */
+  commands: (slug: string, id: string) => req<SlashCommand[]>("GET", `${t(slug, id)}/commands`),
   activity: (slug: string, id: string) => req<ActivityEntry[]>("GET", `${t(slug, id)}/activity`),
   /** Cost, tokens and ≈ share of the 5h plan window per run. */
   ticketUsage: (slug: string, id: string) => req<TicketUsage>("GET", `${t(slug, id)}/usage`),

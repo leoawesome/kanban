@@ -30,6 +30,8 @@ test("parseSession: timeline, artifacts deduped, last message", () => {
   const s = parseSession(RAW);
   expect(s.title).toBe("flight proposal.");
   expect(s.entries.map((e) => [e.role, e.kind, e.text])).toEqual([
+    // A slash command the user ran shows as typed.
+    ["user", "text", "/clear"],
     ["user", "text", "Draft the flight proposal"],
     ["assistant", "text", "On it."],
     ["assistant", "tool", "Artifact: /x/flight-autopilot.html"],

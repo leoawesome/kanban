@@ -12,6 +12,8 @@ import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
 import { SetupRow } from "./SetupRow";
 import { useSnippetPicker } from "./SnippetPicker";
+import { useSlashCommands, useSlashPicker } from "./SlashPicker";
+import { commandNote, messageCommand, type SlashCommand } from "./slashText";
 import { filesByReply } from "./fileCards";
 import { baseName, copyFile, downloadFile } from "./share";
 import { draftKey, formKey } from "./drafts";
@@ -44,6 +46,20 @@ function WaitingCard({ tasks }: { tasks: NonNullable<Ticket["waitingOn"]> }) {
       </ul>
       <div className="waiting-note">Claude continues automatically when they finish.</div>
     </div>
+  );
+}
+
+/** A message the user sent: a slash command shows as a chip with what runs it, anything else as markdown. */
+function UserText({ text, commands, command }: { text: string; commands: SlashCommand[] | null; command?: string }) {
+  const c = command ? commands?.find((x) => x.name === command) ?? null : messageCommand(text, commands);
+  if (!command && !c) return <Markdown text={text} />;
+  const name = command ?? c!.name;
+  const args = text.trim().slice(name.length + 1).trim();
+  return (
+    <>
+      <div className="cmd-line"><span className="cmd-chip">/{name}</span>{args && <span className="cmd-args">{args}</span>}</div>
+      <div className="cmd-note">{commandNote(c)}</div>
+    </>
   );
 }
 
@@ -164,6 +180,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   const [draft, setDraft] = usePersistentState(draftKey(slug, ticket.id), () => "", (v) => !v.trim(), (v) => typeof v === "string");
   const images = useImagePaste(setDraft);
   const snippets = useSnippetPicker({ slug, ref: composer, setValue: setDraft });
+  const commands = useSlashCommands(slug, ticket.id);
+  const slash = useSlashPicker({ commands, ref: composer, setValue: setDraft });
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   // Text Claude is writing right now (from the run's partial-message stream); not yet in the session file.
   const [live, setLive] = useState("");
@@ -291,7 +309,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   };
 
   const send = async (text: string) => {
-    const t = text.trim();
+    // A command goes as `/name args`, the way the server queues it and the session shows it.
+    const t = messageCommand(text, commands) ? text.trim().replace(/^(\S+)\s+/, "$1 ") : text.trim();
     if (!t || stopping || images.uploading) return;
     images.clearError();
     stickToBottom.current = true;
@@ -299,8 +318,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
     setDraft("");
     try {
       const r = await api.chat(slug, ticket.id, t);
-      // Steering: the server queue now shows it.
-      if (r.queued?.some((q) => q.text === t)) setPending((ps) => ps.filter((p) => p.text !== t));
+      // Steering: the server queue now shows it. /clear and /model: the board ran them, nothing reaches the session.
+      if (r.queued?.some((q) => q.text === t) || messageCommand(t, commands)?.source === "board") setPending((ps) => ps.filter((p) => p.text !== t));
     } catch (e: any) {
       setPending((ps) => ps.filter((p) => p.text !== t));
       setDraft(t);
@@ -403,12 +422,14 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
             );
           }
           return (
-            <div key={e.uuid} className={`conv-msg ${e.role}${old ? " inherited" : ""}`}>
+            <div key={e.uuid} className={`conv-msg ${e.role}${e.commandOutput ? " command-output" : ""}${old ? " inherited" : ""}`}>
               <div className="conv-head">
-                <b>{e.role === "user" ? "You" : "Claude"}</b>
+                <b>{e.role === "user" ? "You" : e.commandOutput ? "Claude Code" : "Claude"}</b>
                 {e.at && <time className="muted small" dateTime={e.at} title={fullTime(e.at)}>{timeAgo(e.at)}</time>}
               </div>
-              {e.text && <Markdown text={e.text.replace(/^.*CKANBAN_RESULT:.*$/m, "").trim()} />}
+              {e.text && (e.role === "user"
+                ? <UserText text={e.text} commands={commands} command={e.command} />
+                : <Markdown text={e.text.replace(/^.*CKANBAN_RESULT:.*$/m, "").trim()} />)}
               {e.questions && (
                 <QuestionsForm questions={e.questions} answered={answeredAfter(b.index)} disabled={running} onSubmit={send}
                   onPreview={onOpenOutput && ((m) => onOpenOutput(`mockups/${m}`))}
@@ -531,7 +552,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
         {/* Replies sent while Claude wasn't working are part of the timeline: plain bubbles, before Claude's reply. */}
         {pending.filter((p) => !p.steer).map((p, i) => (
           <div key={i} className="conv-msg user">
-            <Markdown text={p.text} />
+            <UserText text={p.text} commands={commands} />
           </div>
         ))}
         {ticket.interrupted?.partial && (
@@ -561,7 +582,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
         {pending.filter((p) => p.steer && !queued.some((q) => q.text === p.text)).map((p, i) => (
           <div key={i} className="conv-msg user pending">
             <div className="conv-head"><b>You</b><span className="muted small">sending…</span></div>
-            <Markdown text={p.text} />
+            <UserText text={p.text} commands={commands} />
           </div>
         ))}
         {queued.filter((q) => q.peer).map((q) => (
@@ -587,7 +608,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
               <b>You</b>
               <span className="muted small">{q.state === "queued" ? "queued · Claude reads this at its next step" : "not sent · Claude was stopped before reading it"}</span>
             </div>
-            <Markdown text={q.text} />
+            <UserText text={q.text} commands={commands} />
             {q.state === "unsent" && (
               <div className="queued-actions">
                 <button className="btn primary small" disabled={stopping}
@@ -632,8 +653,11 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
       <div className="composer">
         <textarea ref={composer} rows={2} value={draft} disabled={stopping} className={images.dragOver ? "drop-target" : undefined} {...images.handlers}
           placeholder={running ? "Steer Claude: it reads this at its next step, no restart…" : refine ? "Describe your idea or answer Claude…" : "Ask Claude to change or continue something…"}
-          onChange={(e) => setDraft(e.target.value)} {...snippets.handlers}
+          onChange={(e) => setDraft(e.target.value)}
+          onSelect={() => { snippets.handlers.onSelect(); slash.handlers.onSelect(); }}
+          onBlur={() => { snippets.handlers.onBlur(); slash.handlers.onBlur(); }}
           onKeyDown={(e) => {
+            if (slash.onKeyDown(e)) return;
             if (snippets.onKeyDown(e)) return;
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -641,6 +665,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
             }
           }} />
         {snippets.popup}
+        {slash.popup}
         {images.error && <div className="form-error">{images.error}</div>}
         <div className="composer-foot">
           <span className="muted small composer-hint">

@@ -70,6 +70,8 @@ export interface Ticket {
   error: string | null;
   /** Non-fatal heads-up about how the ticket runs (e.g. no worktree yet); the user can dismiss it. */
   notice?: string | null;
+  /** Model for this ticket's runs, set with /model in its chat; overrides the board's model. */
+  model?: string | null;
   /** Set on tickets created by a schedule (see Schedule). */
   scheduleId?: string | null;
   /** Planner ticket whose Planning chat proposed this one. Missing on most tickets. */
@@ -184,6 +186,11 @@ export interface QueuedMessage {
   peer?: boolean;
   /** Sent by a planner's run (chat_ticket), not typed by the user: the reply run gets no planner rights of its own. */
   fromPlanner?: boolean;
+  /**
+   * The text is a slash command Claude Code runs itself (see commands.ts): sent alone, without the board's note.
+   * local: a built-in that runs without a model turn (/compact), so Claude never echoes it back.
+   */
+  slash?: "prompt" | "local";
 }
 
 /** A question one ticket's Claude asked another's (ask_ticket), kept per board in questions.json. */

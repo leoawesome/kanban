@@ -778,6 +778,10 @@ export function createServer(deps: ServerDeps) {
         throw e;
       }
     }
+    // What `/` runs in this ticket's chat: skills, custom commands and built-ins (the composer's picker).
+    if (action === "commands" && m === "GET") {
+      return json(board.commands(slug, id).map(({ local, ...c }) => c));
+    }
     if (action === "conversation" && m === "GET") {
       // Read-only view of the ticket's Claude session file (terminal chat + board runs), newest last.
       const t = store.getTicket(slug, id)!;

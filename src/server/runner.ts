@@ -12,8 +12,10 @@ export interface RunHandle {
   /**
    * Hand Claude another user message while it works; it reads it at its next step, like typing
    * in an interactive session. False once input is closed (the run is finishing).
+   * local: a built-in slash command (/compact) Claude Code runs without a model turn; it is never echoed back,
+   * so it must not hold input open waiting for that.
    */
-  send(text: string): boolean;
+  send(text: string, opts?: { local?: boolean }): boolean;
   readonly stopped: boolean;
 }
 
@@ -37,6 +39,8 @@ export function buildArgs(
   permissionMode: "bypassPermissions" | "plan" = "bypassPermissions",
   /** Inline MCP config (see mcpConfig) so every run has the board's tools. */
   mcp?: string,
+  /** Board instructions for a run whose message is a slash command (they can't share its text, see Board.executeOnce). */
+  systemPrompt?: string,
 ): string[] {
   // Prompts go in on stdin (see startRun) so more messages can follow while Claude works;
   // --replay-user-messages echoes each one back when Claude picks it up.
@@ -46,6 +50,7 @@ export function buildArgs(
   args.push(resume ? "--resume" : "--session-id", sessionId);
   if (model) args.push("--model", model);
   if (mcp) args.push("--mcp-config", mcp);
+  if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
   // Claude in Chrome. Its tools ask for permission even under bypassPermissions; with
   // --permission-prompt-tool stdio those asks reach the board as control requests (see controlResponse).
   args.push("--chrome", "--permission-prompt-tool", "stdio");
@@ -88,6 +93,8 @@ export function startRun(opts: {
   env?: Record<string, string>;
   /** First user message, written to stdin (needs --input-format stream-json in args). */
   input?: string;
+  /** The first message is a local slash command (see RunHandle.send). */
+  inputLocal?: boolean;
   onEvent: (ev: any) => void;
   /**
    * Claude ended its turn but background tasks it waits on are still running (the run stays
@@ -138,9 +145,9 @@ export function startRun(opts: {
     }
     return true;
   };
-  const write = (text: string): boolean => {
+  const write = (text: string, local = false): boolean => {
     if (!writeLine(userMessage(text))) return false;
-    unread++;
+    if (!local) unread++;
     return true;
   };
 
@@ -157,7 +164,7 @@ export function startRun(opts: {
     const p = proc;
     if (opts.input !== undefined) {
       stdin = p.stdin as import("bun").FileSink;
-      write(opts.input);
+      write(opts.input, opts.inputLocal);
     }
 
     const trackTasks = (ev: any) => {
@@ -236,7 +243,7 @@ export function startRun(opts: {
 
   return {
     done,
-    send: (text) => !stopped && write(text),
+    send: (text, o) => !stopped && write(text, o?.local),
     get stopped() {
       return stopped;
     },

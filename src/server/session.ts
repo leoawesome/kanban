@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { commandText, localCommandOutput } from "./commands";
 import type { Bus } from "./events";
 import { mockupName, stripMockups } from "./mockups";
 import type { Store } from "./store";
@@ -67,6 +68,10 @@ export interface SessionEntry {
   peer?: { dir: "in" | "out"; ticketId: string | null };
   /** The board prepared a new worktree before this prompt (copied files, setup command): shown as a row before it. */
   setup?: SetupResult;
+  /** A user message that ran a slash command (its name, without the slash); text is `/name args`. */
+  command?: string;
+  /** Output of a built-in command Claude Code ran itself (/context), not a reply from Claude. */
+  commandOutput?: boolean;
 }
 
 export type BlockKind = "questions" | "proposal" | "tickets";
@@ -272,7 +277,7 @@ function isPublisher(block: any): boolean {
   return block.name === "Bash" && typeof block.input?.command === "string" && HELPER_PUBLISH.test(block.input.command);
 }
 
-function userText(content: unknown): { kind: "text" | "board"; text: string; from?: string; question?: string; setup?: SetupResult } | null {
+function userText(content: unknown): { kind: "text" | "board"; text: string; from?: string; question?: string; setup?: SetupResult; command?: string } | null {
   if (Array.isArray(content)) {
     if (content.some((c: any) => c?.type === "tool_result")) return null;
     content = content.map((c: any) => (c?.type === "text" ? c.text : "")).join("\n");
@@ -293,7 +298,10 @@ function userText(content: unknown): { kind: "text" | "board"; text: string; fro
     return { kind: "board", text: note || "Board sent instructions to Claude", ...extra };
   }
   const t = content.trim();
-  // Slash-command wrappers, hook output and skill preambles are stored as user messages too.
+  // A slash command the user ran: Claude Code stores it as tags; show it as typed.
+  const cmd = commandText(t);
+  if (cmd) return { kind: "text", text: cmd, command: cmd.slice(1).split(" ")[0] };
+  // Other slash-command wrappers, hook output and skill preambles are stored as user messages too.
   if (!t || t.startsWith("<") || /^(Base directory for this skill|Caveat:|\[Request interrupted)/.test(t)) return null;
   return { kind: "text", text: t };
 }
@@ -361,7 +369,7 @@ export function parseSession(raw: string): ParsedSession {
   const peerEntry = (u: NonNullable<ReturnType<typeof userText>>, uuid: string, at: string): SessionEntry => {
     if (u.from && u.question) askers.set(u.question, u.from);
     return {
-      uuid, at, role: "user", kind: u.kind, text: u.text,
+      uuid, at, role: "user", kind: u.kind, text: u.text, ...(u.command ? { command: u.command } : {}),
       ...(u.from ? { peer: { dir: "in" as const, ticketId: u.from } } : {}), ...(u.setup ? { setup: u.setup } : {}),
     };
   };
@@ -385,10 +393,24 @@ export function parseSession(raw: string): ParsedSession {
       if (u) entries.push(peerEntry(u, uuid, at));
       continue;
     }
+    if (ev.type === "system" && !ev.isSidechain) {
+      // What a built-in command printed (/context, /model), and where /compact summarised the conversation.
+      const out = ev.subtype === "local_command" && typeof ev.content === "string" ? localCommandOutput(ev.content) : null;
+      if (out) entries.push({ uuid, at, role: "assistant", kind: "text", text: out, commandOutput: true });
+      else if (ev.subtype === "compact_boundary") entries.push({ uuid, at, role: "user", kind: "board", text: "Conversation compacted" });
+      continue;
+    }
     if ((ev.type !== "user" && ev.type !== "assistant") || ev.isSidechain) continue;
     const content = ev.message?.content;
 
     if (ev.type === "user") {
+      // The summary /compact left behind: the boundary above already says so.
+      if (ev.isCompactSummary) continue;
+      const out = typeof content === "string" ? localCommandOutput(content) : null;
+      if (out !== null) {
+        if (out) entries.push({ uuid, at, role: "assistant", kind: "text", text: out, commandOutput: true });
+        continue;
+      }
       notified(typeof content === "string" ? content : Array.isArray(content) ? content.map((c: any) => (c?.type === "text" ? c.text : "")).join("\n") : "", at);
       if (Array.isArray(content)) {
         for (const [i, b] of content.entries()) {
