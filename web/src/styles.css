@@ -78,6 +78,18 @@ kbd {
   border: 1px solid var(--border); border-bottom-width: 2px; background: var(--surface); color: var(--muted);
 }
 .spacer { flex: 1; }
+/* Hold ⌘: key badges on controls (KeyHint.tsx). Hidden until body.show-hints; absolute, so layout never moves. */
+:where(:has(> .key-hint)) { position: relative; }
+.key-hint {
+  display: none; position: absolute; top: -9px; right: -6px; z-index: 30; pointer-events: none;
+  font: 600 11px/1 var(--mono); white-space: nowrap; padding: 4px 6px; border-radius: 5px;
+  background: var(--text); color: var(--surface); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+.key-hint.inset { top: 4px; right: 4px; }
+body.show-hints .key-hint { display: block; animation: key-hint-in 0.12s ease-out; }
+/* A card's keys only show on the focused card. */
+body.show-hints .sortable-card:not(:focus) .key-hint.card-keys { display: none; }
+@keyframes key-hint-in { from { opacity: 0; transform: translateY(3px) scale(0.92); } }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 

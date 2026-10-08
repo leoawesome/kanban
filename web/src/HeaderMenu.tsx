@@ -15,7 +15,7 @@ export interface MenuItem {
 }
 
 /** "⋯" overflow menu at the end of the top bar for things you need now and then. ↑↓ move, Esc closes. */
-export function HeaderMenu({ items, footer, alert }: { items: MenuItem[]; footer?: string | null; alert?: boolean }) {
+export function HeaderMenu({ items, footer, alert, keyHint }: { items: MenuItem[]; footer?: string | null; alert?: boolean; keyHint?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -50,6 +50,7 @@ export function HeaderMenu({ items, footer, alert }: { items: MenuItem[]; footer
         onClick={() => setOpen((v) => !v)}>
         <MoreIcon size={16} />
         {alert && <span className="more-dot" aria-hidden />}
+        {keyHint}
       </button>
       {open && (
         <div className="inbox-menu header-menu-list" role="menu" ref={menu} onKeyDown={onKey}>

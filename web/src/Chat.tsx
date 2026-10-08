@@ -8,6 +8,7 @@ import { ToolRows } from "./ToolRows";
 import { ArrowDownIcon, BranchIcon, CloseIcon, FileCodeIcon, FileTextIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { NewTicketsCard } from "./NewTicketsCard";
+import { KeyHint } from "./KeyHint";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
 import { SetupRow } from "./SetupRow";
@@ -128,7 +129,7 @@ export function useStop(slug: string, ticket: Ticket, working: boolean, onError:
   return { stopping, stop };
 }
 
-export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onError }: {
+export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onError, onPendingProposal }: {
   slug: string;
   ticket: Ticket;
   /** The board's tickets, to tell which proposed new tickets already exist. */
@@ -137,6 +138,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   /** Show a file of the ticket's outputs folder (path relative to it) in the Outputs tab. */
   onOpenOutput?: (name: string) => void;
   onError: (m: string) => void;
+  /** The newest proposal card not applied yet, as its Apply action (null when none): ⌘⇧Enter in the panel applies it. */
+  onPendingProposal?: (apply: (() => Promise<void>) | null) => void;
 }) {
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -362,6 +365,14 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
     }
   };
 
+  const pendingProposal = entries.findLast((e) => e.proposal && !isApplied(e.proposal));
+  const applyPendingRef = useRef(() => Promise.resolve());
+  applyPendingRef.current = () => (pendingProposal?.proposal ? applyProposal(pendingProposal.proposal) : Promise.resolve());
+  useEffect(() => {
+    onPendingProposal?.(pendingProposal ? () => applyPendingRef.current() : null);
+  }, [pendingProposal?.uuid]);
+  useEffect(() => () => onPendingProposal?.(null), []);
+
   /** One block of the conversation; old = copied history of a branched ticket (shown dimmed). */
   const renderBlock = (b: Block, old: boolean) => {
     const el = renderEntry(b, old);
@@ -409,7 +420,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
                   storageKey={formKey(slug, ticket.id, e.uuid)} />
               )}
               {e.proposal && (
-                <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)} onApply={() => applyProposal(e.proposal!)} />
+                <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)} onApply={() => applyProposal(e.proposal!)} keyHint={e === pendingProposal} />
               )}
               {e.newTickets && (
                 <NewTicketsCard drafts={e.newTickets} created={childFor} onCreate={createChild} onOpen={onOpenTicket} />
@@ -647,7 +658,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
           </span>
           <span className="composer-actions">
             {running && <button className="btn danger small" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop"}</button>}
-            <button className="btn primary small" disabled={!draft.trim() || stopping || images.uploading} onClick={() => send(draft)}>{images.uploading ? "Uploading…" : "Send"}</button>
+            <button className="btn primary small" disabled={!draft.trim() || stopping || images.uploading} onClick={() => send(draft)}>{images.uploading ? "Uploading…" : "Send"}<KeyHint keys="↵" /></button>
           </span>
         </div>
       </div>

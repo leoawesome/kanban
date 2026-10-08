@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { boardDigit, cardDir, stepBoard, stepCard } from "../web/src/keynav";
+import { boardDigit, cardDir, hintStep, isTyping, nextStep, panelStep, stepBoard, stepCard } from "../web/src/keynav";
 
 test("cardDir maps J/K/H/L and arrows, ignores other keys", () => {
   expect(cardDir("j")).toBe("down");
@@ -53,4 +53,50 @@ test("boardDigit reads the physical key, 1-9 only", () => {
   expect(boardDigit("Numpad2")).toBe(1);
   expect(boardDigit("Digit0")).toBeNull();
   expect(boardDigit("KeyA")).toBeNull();
+});
+
+test("panelStep: plain arrows and J/K step tickets, modifiers and other keys don't", () => {
+  const k = (key: string, mods: Partial<Record<"metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>> = {}) =>
+    panelStep({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
+  expect(k("ArrowUp")).toBe("prev");
+  expect(k("k")).toBe("prev");
+  expect(k("ArrowDown")).toBe("next");
+  expect(k("J")).toBe("next");
+  expect(k("ArrowLeft")).toBeNull();
+  expect(k("e")).toBeNull();
+  expect(k("ArrowUp", { altKey: true })).toBeNull();
+  expect(k("ArrowDown", { shiftKey: true })).toBeNull();
+  expect(k("j", { metaKey: true })).toBeNull();
+});
+
+test("nextStep applies a pending proposal first, then the column's action", () => {
+  expect(nextStep({ status: "planning", working: false, proposalPending: true })).toBe("apply");
+  expect(nextStep({ status: "planning", working: false, proposalPending: false })).toBe("start");
+  expect(nextStep({ status: "backlog", working: false, proposalPending: false })).toBe("start");
+  expect(nextStep({ status: "review", working: false, proposalPending: false })).toBe("done");
+  expect(nextStep({ status: "review", working: false, proposalPending: true })).toBe("apply");
+  expect(nextStep({ status: "ready", working: false, proposalPending: false })).toBeNull();
+  expect(nextStep({ status: "done", working: false, proposalPending: false })).toBeNull();
+  expect(nextStep({ status: "planning", working: true, proposalPending: true })).toBeNull();
+});
+
+test("hintStep: holding ⌘ arms, any other key or releasing hides", () => {
+  expect(hintStep({ type: "keydown", key: "Meta" }, true)).toBe("arm");
+  expect(hintStep({ type: "keydown", key: "Meta", repeat: true }, true)).toBe("none");
+  expect(hintStep({ type: "keydown", key: "c" }, true)).toBe("hide");
+  expect(hintStep({ type: "keydown", key: "Shift" }, true)).toBe("hide");
+  expect(hintStep({ type: "keyup", key: "Meta" }, true)).toBe("hide");
+  expect(hintStep({ type: "keyup", key: "c" }, true)).toBe("none");
+  // Ctrl is the hint key off Mac only.
+  expect(hintStep({ type: "keydown", key: "Control" }, true)).toBe("hide");
+  expect(hintStep({ type: "keydown", key: "Control" }, false)).toBe("arm");
+  expect(hintStep({ type: "keydown", key: "Meta" }, false)).toBe("hide");
+});
+
+test("isTyping is true in text fields only", () => {
+  expect(isTyping({ target: { tagName: "INPUT" } as any })).toBe(true);
+  expect(isTyping({ target: { tagName: "TEXTAREA" } as any })).toBe(true);
+  expect(isTyping({ target: { tagName: "DIV", isContentEditable: true } as any })).toBe(true);
+  expect(isTyping({ target: { tagName: "BUTTON", isContentEditable: false } as any })).toBe(false);
+  expect(isTyping({ target: null })).toBe(false);
 });

@@ -37,8 +37,9 @@ export function ConfirmDialog({ title, children, confirmLabel, busyLabel = "Work
           {err && <div className="form-error">{err}</div>}
         </div>
         <div className="form-actions confirm-actions">
-          <button ref={cancelRef} className="btn ghost" onClick={onCancel} autoFocus>Cancel</button>
-          <button className={`btn ${tone}`} onClick={confirm} disabled={busy}>{busy ? busyLabel : confirmLabel}</button>
+          {/* A primary (non-destructive) confirm takes the focus, so Enter confirms (e.g. ⌘⇧Enter then Enter starts work). */}
+          <button ref={cancelRef} className="btn ghost" onClick={onCancel} autoFocus={tone !== "primary"}>Cancel</button>
+          <button className={`btn ${tone}`} onClick={confirm} disabled={busy} autoFocus={tone === "primary"}>{busy ? busyLabel : confirmLabel}</button>
         </div>
       </div>
     </div>

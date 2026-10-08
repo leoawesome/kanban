@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { safeHref, waitsForSlot, type Ticket } from "./api";
 import { ClockIcon } from "./icons";
+import { KeyHint } from "./KeyHint";
 import { ResourceChip, resourceWait } from "./Needs";
 import { elapsed, fullTime, plainPreview, timeAgo, useNow } from "./time";
 
@@ -63,6 +64,7 @@ export function Card({ ticket, onClick, dragging, queued, held }: { ticket: Tick
           <span className="yt-why" title={ticket.error ?? undefined}>{att.label}</span>
         </div>
       )}
+      <KeyHint inset className="card-keys" keys={ticket.status === "review" ? "↵ open · D done · Space move" : "↵ open · Space move"} />
       <div className="card-title" title={ticket.title}>{ticket.title}</div>
       {showActivity ? (
         <div className="card-activity" title={ticket.lastActivity!}>{ticket.lastActivity}</div>

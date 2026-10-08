@@ -17,7 +17,8 @@ import { SnippetsDialog } from "./SnippetsDialog";
 import { Select } from "./Select";
 import { BoardSwitcher, ShortcutsDialog } from "./Shortcuts";
 import { CommandBar, type CommandAction } from "./CommandBar";
-import { boardDigit, cardDir, stepBoard, stepCard, type CardPos } from "./keynav";
+import { boardDigit, cardDir, isTyping, stepBoard, stepCard, type CardPos } from "./keynav";
+import { KeyHint, useHintReveal } from "./KeyHint";
 import { TicketDrawer } from "./TicketDrawer";
 import { toast, Toaster } from "./toast";
 
@@ -48,11 +49,6 @@ function parseHash(): { slug: string | null; ticket: string | null } {
 function hashFor(slug: string | null, ticket?: string | null): string {
   if (!slug) return "#/";
   return `#/${encodeURIComponent(slug)}${ticket ? `/${encodeURIComponent(ticket)}` : ""}`;
-}
-
-function isTyping(e: KeyboardEvent): boolean {
-  const el = e.target as HTMLElement | null;
-  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 }
 
 /** Cards on screen, per expanded column, in board order. */
@@ -143,6 +139,7 @@ export function App() {
   const [filters, setFilters] = useState<Set<FilterId>>(new Set());
   const [dismissed, setDismissed] = useState(readDismissed);
   const [shortcuts, setShortcuts] = useState(false);
+  useHintReveal();
   const [bugReport, setBugReport] = useState(false);
   // ⌘K command bar; the inbox and usage popovers open from it too (n makes repeats count).
   const [commandBar, setCommandBar] = useState(false);
@@ -518,6 +515,7 @@ export function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
+          <KeyHint keys="⌘K" />
           <Logo />
           <span className="brand-name">ckanban</span>
           <span className="brand-tagline">Kanban for Claude Code</span>
@@ -545,6 +543,7 @@ export function App() {
               </>
             )}
             renderValue={() => profile?.name}
+            badge={<KeyHint keys="B  [ ]" />}
             footer={[
               ...(profile ? [{
                 label: "Copy folder path",
@@ -575,22 +574,22 @@ export function App() {
           <button className={`btn ghost icon-label${dockOpen && !chatOpen ? " on" : ""}`}
             onClick={() => (chatOpen ? openDockOn("terminal") : setDockOpen((o) => !o))}
             aria-pressed={dockOpen && !chatOpen} title="Terminal and files for this folder (Ctrl+`)" aria-label="Terminal and files">
-            <TerminalIcon /><span className="label">Terminal & files</span>
+            <TerminalIcon /><span className="label">Terminal & files</span><KeyHint keys="Ctrl+`" />
           </button>
         )}
         {profile && (
           <button className={`btn ghost icon-label${chatOpen ? " on" : ""}`}
             onClick={() => (chatOpen ? setDockOpen(false) : openDockOn("claude"))}
             aria-pressed={chatOpen} title="Quick chat with Claude in this folder, no ticket needed (C)" aria-label="Quick Claude chat">
-            <ChatIcon /><span className="label">Claude</span>
+            <ChatIcon /><span className="label">Claude</span><KeyHint keys="C" />
           </button>
         )}
         {profile && (
           <button className="btn primary" onClick={() => setNewTicket(true)} title="New ticket (N)">
-            New ticket
+            New ticket<KeyHint keys="N" />
           </button>
         )}
-        <HeaderMenu alert={scheduleErrors > 0 || mcpAttention > 0} items={[
+        <HeaderMenu alert={scheduleErrors > 0 || mcpAttention > 0} keyHint={<KeyHint keys="?" />} items={[
           ...(profile ? [{
             label: "Schedules", icon: <ClockIcon />, onSelect: () => setSchedulesOpen(true),
             title: scheduleErrors ? `${scheduleErrors} schedule${scheduleErrors === 1 ? "" : "s"} could not start their last run` : "Recurring tickets on a cron schedule",
@@ -663,6 +662,7 @@ export function App() {
                   <CloseIcon size={12} />
                 </button>
               ) : <kbd className="search-kbd" aria-hidden>/</kbd>}
+              <KeyHint keys="/" />
             </div>
             <div className="filter-chips" role="group" aria-label="Filter tickets">
               {FILTERS.map((f) => {

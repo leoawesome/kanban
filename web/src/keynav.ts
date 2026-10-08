@@ -44,3 +44,40 @@ export function boardDigit(code: string): number | null {
   const m = /^(?:Digit|Numpad)([1-9])$/.exec(code);
   return m ? Number(m[1]) - 1 : null;
 }
+
+/** Focus is in a text field (input, textarea, contenteditable): single-letter and arrow shortcuts stay quiet. */
+export function isTyping(e: { target: EventTarget | null }): boolean {
+  const el = e.target as { tagName?: string; isContentEditable?: boolean } | null;
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || !!el.isContentEditable);
+}
+
+/** Plain ↑/K and ↓/J in the ticket panel: previous / next ticket. Null for other keys or with a modifier held. */
+export function panelStep(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }): "prev" | "next" | null {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null;
+  switch (e.key) {
+    case "ArrowUp": case "k": case "K": return "prev";
+    case "ArrowDown": case "j": case "J": return "next";
+    default: return null;
+  }
+}
+
+/** ⌘⇧Enter in the ticket panel does the ticket's next step: apply a pending proposal first, then the column's action. */
+export type NextStep = "apply" | "start" | "done" | null;
+export function nextStep(t: { status: string; working: boolean; proposalPending: boolean }): NextStep {
+  if (t.working) return null;
+  if (t.proposalPending) return "apply";
+  if (t.status === "backlog" || t.status === "planning") return "start";
+  if (t.status === "review") return "done";
+  return null;
+}
+
+/**
+ * Hold ⌘ (Ctrl off Mac) to show key hints. "arm" starts the short reveal timer, "hide" cancels it and hides
+ * the hints. Any other key hides them, so ⌘C / ⌘K never flash hints; key repeat of the held key changes nothing.
+ */
+export function hintStep(e: { type: "keydown" | "keyup"; key: string; repeat?: boolean }, mac: boolean): "arm" | "hide" | "none" {
+  const hold = e.key === (mac ? "Meta" : "Control");
+  if (e.type === "keyup") return hold ? "hide" : "none";
+  if (!hold) return "hide";
+  return e.repeat ? "none" : "arm";
+}

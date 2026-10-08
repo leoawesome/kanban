@@ -17,9 +17,11 @@ function onKey(e: KeyboardEvent) {
   top.close();
 }
 
+/** Returns isTop(): true while this layer is the topmost one (nothing opened above it). */
 export function useLayer(onEscape: () => void, opts: { active?: boolean; skipInInputs?: boolean } = {}) {
   const fn = useRef(onEscape);
   fn.current = onEscape;
+  const mine = useRef<Layer | null>(null);
   const active = opts.active ?? true;
   useEffect(() => {
     if (!active) return;
@@ -29,11 +31,14 @@ export function useLayer(onEscape: () => void, opts: { active?: boolean; skipInI
     }
     const layer: Layer = { close: () => fn.current(), skipInInputs: !!opts.skipInInputs };
     stack.push(layer);
+    mine.current = layer;
     return () => {
       const i = stack.indexOf(layer);
       if (i >= 0) stack.splice(i, 1);
+      mine.current = null;
     };
   }, [active, opts.skipInInputs]);
+  return () => !!mine.current && stack[stack.length - 1] === mine.current;
 }
 
 /** True while any panel, dialog or menu is open (board shortcuts stay quiet then). */

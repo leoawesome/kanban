@@ -5,7 +5,7 @@ import { fuzzyMatch } from "./fuzzy";
 import { CheckIcon } from "./icons";
 import { Modal } from "./Modal";
 
-const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 export const MOD = isMac ? "⌘" : "Ctrl";
 
 const GROUPS: { title: string; keys: [string[], string][] }[] = [
@@ -28,6 +28,7 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
       [["Ctrl", "`"], "Terminal & files panel"],
       [["C"], "Quick Claude chat (no ticket)"],
       [["?"], "This list"],
+      [["Hold", MOD], "Show key hints on buttons"],
     ],
   },
   {
@@ -44,11 +45,14 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
   {
     title: "Ticket panel",
     keys: [
-      [["Alt", "↑", "↓"], "Previous / next ticket"],
-      [[MOD, "Shift", "Enter"], "Mark done (in Review)"],
+      [["↑", "↓", "K", "J"], "Previous / next ticket"],
+      [["Alt", "↑", "↓"], "Previous / next ticket, also while typing"],
+      [[MOD, "Shift", "Enter"], "Next step: apply proposal / start work / mark done"],
       [["Enter"], "Send a chat message"],
       [["Shift", "Enter"], "New line"],
+      [["E"], "Edit the description"],
       [[MOD, "Enter"], "Save the description"],
+      [["Esc"], "Cancel the description edit"],
       [[MOD, "\\"], "Show / hide details"],
       [["Esc"], "Close (one layer at a time)"],
     ],

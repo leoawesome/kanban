@@ -23,7 +23,7 @@ function textOf(n: ReactNode): string {
 }
 
 /** Styled dropdown replacing the native <select>. Keyboard: Enter/Space/↓ open, ↑↓ move, type to jump, Enter pick, Esc close. */
-export function Select<T extends string>({ value, options, onChange, footer, className, ariaLabel, renderValue, menuClassName, renderOption, menuMaxHeight = 320 }: {
+export function Select<T extends string>({ value, options, onChange, footer, className, ariaLabel, renderValue, menuClassName, renderOption, menuMaxHeight = 320, badge }: {
   value: T;
   options: SelectOption<T>[];
   onChange: (v: T) => void;
@@ -37,6 +37,8 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
   /** Custom row content instead of the left check + label/hint column. */
   renderOption?: (o: SelectOption<T>, selected: boolean) => ReactNode;
   menuMaxHeight?: number;
+  /** Extra content inside the root, e.g. a <KeyHint>. */
+  badge?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -162,6 +164,7 @@ export function Select<T extends string>({ value, options, onChange, footer, cla
           <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
+      {badge}
       {open && createPortal(
         <div className={`select-menu ${menuClassName ?? ""}`} role="listbox" id={listId} aria-label={ariaLabel} ref={menu} style={pos}>
           {items.map((it, i) =>

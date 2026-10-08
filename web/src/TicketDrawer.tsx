@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, COLUMNS, safeHref, startWorkTarget, subscribe, type ClaudeSession, type Profile, type Status, type Ticket } from "./api";
 import { outcomeBadge } from "./Card";
 import { branchTicket } from "./branch";
@@ -9,6 +9,9 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon, ExternalIcon, FileTextIcon, LinkIcon, SparkIcon } from "./icons";
 import { useImagePaste } from "./imagePaste";
 import { useFocusTrap, useLayer } from "./layers";
+import { isTyping, nextStep, panelStep } from "./keynav";
+import { KeyHint } from "./KeyHint";
+import { MOD } from "./Shortcuts";
 import { complete, PlanPanel, PlanSummary } from "./PlanPanel";
 import { Outputs } from "./Outputs";
 import { Select } from "./Select";
@@ -223,7 +226,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const [outputFocus, setOutputFocus] = useState<string | null>(null);
   const [titleSave, setTitleSave] = useState<"saving" | "saved" | null>(null);
   const panelRef = useRef<HTMLElement>(null);
-  useLayer(onClose, { skipInInputs: true });
+  const isTopLayer = useLayer(onClose, { skipInInputs: true });
   useFocusTrap(panelRef, true);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [reportingBug, setReportingBug] = useState(false);
@@ -266,13 +269,20 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   // Latest prev/next for the key handler below, which is bound once.
   const stepRef = useRef((_to: "prev" | "next") => {});
   stepRef.current = (to) => step(nav?.[to]);
+  // Plain-key shortcuts (↑↓ J K, E) only when the panel itself has the keyboard: not typing, no menu, popup or dialog above it.
+  const panelKeys = (e: KeyboardEvent) => !e.isComposing && !e.defaultPrevented && !isTyping(e) && isTopLayer() && !document.querySelector(".overlay");
+  const panelKeysRef = useRef(panelKeys);
+  panelKeysRef.current = panelKeys;
   useEffect(() => {
-    // Alt+↑ / Alt+↓ open the previous / next ticket, also while typing.
+    // Alt+↑ / Alt+↓ open the previous / next ticket, also while typing; plain ↑/↓ and K/J when not typing.
     const onKey = (e: KeyboardEvent) => {
-      if (!e.altKey || e.metaKey || e.ctrlKey || e.shiftKey || e.isComposing) return;
-      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      if (e.isComposing) return;
+      let dir: "prev" | "next" | null = null;
+      if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) dir = e.key === "ArrowUp" ? "prev" : "next";
+      else if (panelKeysRef.current(e)) dir = panelStep(e);
+      if (!dir) return;
       e.preventDefault();
-      stepRef.current(e.key === "ArrowUp" ? "prev" : "next");
+      stepRef.current(dir);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -356,22 +366,47 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
     if (nav?.next) step(nav.next);
     else if (!editing) onClose();
   });
-  const markDoneRef = useRef(() => {});
-  markDoneRef.current = () => { if (ticket.status === "review") setStatus("done"); };
+  const col = COLUMNS.find((c) => c.id === ticket.status);
+  const startTarget = startWorkTarget(ticket);
+  const startWork = () => (startTarget === "planning" ? setStatus("planning") : setConfirmStart(true));
+  // The chat's newest unapplied proposal (Chat reports it), so ⌘⇧Enter can apply it before moving the ticket on.
+  const applyProposalRef = useRef<(() => Promise<void>) | null>(null);
+  const [proposalPending, setProposalPending] = useState(false);
+  const onPendingProposal = useCallback((apply: (() => Promise<void>) | null) => {
+    applyProposalRef.current = apply;
+    setProposalPending(!!apply);
+  }, []);
+  const next = nextStep({ status: ticket.status, working, proposalPending });
+  const nextStepRef = useRef(() => {});
+  nextStepRef.current = () => {
+    if (next === "apply") applyProposalRef.current?.();
+    else if (next === "start") startWork();
+    else if (next === "done") setStatus("done");
+  };
   useEffect(() => {
-    // ⌘⇧Enter / Ctrl+Shift+Enter: Mark done (Review only), also while typing.
+    // ⌘⇧Enter / Ctrl+Shift+Enter: the ticket's next step (apply proposal, Start work, Mark done), also while typing.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !e.shiftKey || !(e.metaKey || e.ctrlKey) || e.altKey || e.isComposing) return;
       if (document.querySelector(".overlay")) return;
       e.preventDefault();
-      markDoneRef.current();
+      nextStepRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const col = COLUMNS.find((c) => c.id === ticket.status);
-  const startTarget = startWorkTarget(ticket);
-  const startWork = () => (startTarget === "planning" ? setStatus("planning") : setConfirmStart(true));
+  // E: edit the description (the panel has the keyboard, not already editing).
+  const startEditRef = useRef(() => {});
+  startEditRef.current = () => { if (!editing) startEdit(); };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.key !== "e" && e.key !== "E") || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || !panelKeysRef.current(e)) return;
+      e.preventDefault();
+      startEditRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const cancelEdit = () => { setBody(baseBody); setEditing(false); images.clearError(); };
 
   return (
     <div className="drawer-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -383,6 +418,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
           <button className={`icon-btn sidebar-toggle ${detailsOpen ? "on" : ""}`} onClick={() => setDetailsOpen((v) => !v)}
             aria-label={detailsOpen ? "Hide details" : "Show details"} aria-pressed={detailsOpen}
             title={`${detailsOpen ? "Hide" : "Show"} details (⌘\\)`}>
+            <KeyHint keys="⌘\" />
             <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
               <rect x="2" y="3" width="14" height="12" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
               <line x1="7" y1="3.5" x2="7" y2="14.5" stroke="currentColor" strokeWidth="1.5" />
@@ -407,9 +443,10 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
           {nav && (
             <span className="ticket-nav">
               <button className="icon-btn" disabled={!nav.prev || editing} onClick={() => step(nav.prev)} aria-label="Previous ticket"
-                title={editing ? "Save or cancel the description first" : "Previous ticket (Alt+↑)"}><ChevronUpIcon size={16} /></button>
+                title={editing ? "Save or cancel the description first" : "Previous ticket (↑ or K)"}><ChevronUpIcon size={16} /></button>
               <button className="icon-btn" disabled={!nav.next || editing} onClick={() => step(nav.next)} aria-label="Next ticket"
-                title={editing ? "Save or cancel the description first" : "Next ticket (Alt+↓)"}><ChevronDownIcon size={16} /></button>
+                title={editing ? "Save or cancel the description first" : "Next ticket (↓ or J)"}><ChevronDownIcon size={16} /></button>
+              <KeyHint keys="↑↓ J K" />
             </span>
           )}
           <TicketMenu ticket={ticket} working={working} live={!!(ticket.terminalOpen || linked?.live)}
@@ -420,7 +457,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
             onCheckPr={() => act(() => api.checkPr(slug, ticket.id))}
             onReportBug={() => setReportingBug(true)}
             onDelete={() => setConfirmDelete(true)} />
-          <button className="icon-btn" onClick={onClose} aria-label="Close" title="Close (Esc)"><CloseIcon /></button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close" title="Close (Esc)"><CloseIcon /><KeyHint keys="Esc" /></button>
         </header>
 
         <div ref={bodyRef} className={`panel-body ${detailsOpen ? "" : "details-closed"} ${side.dragging ? "resizing" : ""}`}
@@ -438,12 +475,16 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                 {working && <button className="btn danger" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop Claude"}</button>}
                 {!working && (ticket.status === "backlog" || ticket.status === "planning") && (
                   <button className={`btn ${att?.kind === "questions" || att?.kind === "proposal" ? "" : "primary"}`}
-                    onClick={startWork} title={startTarget === "planning" ? "Claude interviews you first" : "Claude works on its own"}>Start work</button>
+                    onClick={startWork} title={`${startTarget === "planning" ? "Claude interviews you first" : "Claude works on its own"} (${MOD}⇧Enter${proposalPending ? " after applying the proposal" : ""})`}>
+                    Start work<KeyHint keys={proposalPending ? "⌘⇧↵ after Apply" : "⌘⇧↵"} />
+                  </button>
                 )}
                 {!working && ticket.status === "backlog" && (
                   <button className="btn" onClick={() => setStatus("planning")}>Refine with Claude</button>
                 )}
-                {ticket.status === "review" && <button className="btn primary" onClick={() => setStatus("done")}>Mark done</button>}
+                {ticket.status === "review" && (
+                  <button className="btn primary" onClick={() => setStatus("done")} title={`Mark done (${MOD}⇧Enter)`}>Mark done{!working && <KeyHint keys={proposalPending ? "⌘⇧↵ after Apply" : "⌘⇧↵"} />}</button>
+                )}
                 {ticket.prUrl && (
                   <a className="btn icon-label" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer">Open PR #{ticket.prUrl.split("/").pop()} <ExternalIcon size={12} /></a>
                 )}
@@ -518,7 +559,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
             <section className={`details-desc ${descScrolled && !editing ? "scrolled" : ""}`}>
               <div className="section-head">
                 <h4>Description</h4>
-                {!editing && <button className="btn ghost small" onClick={startEdit}>Edit</button>}
+                {!editing && <button className="btn ghost small" onClick={startEdit} title="Edit the description (E)">Edit<KeyHint keys="E" /></button>}
               </div>
               {editing ? (
                 <div className="desc-edit">
@@ -527,12 +568,13 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                     onKeyDown={(e) => {
                       if (snippets.onKeyDown(e)) return;
                       if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) saveBody();
+                      else if (e.key === "Escape" && !e.nativeEvent.isComposing) { e.preventDefault(); cancelEdit(); }
                     }} />
                   {snippets.popup}
                   {images.error && <div className="form-error">{images.error}</div>}
                   <div className="form-actions">
-                    <button className="btn ghost small" onClick={() => { setBody(baseBody); setEditing(false); images.clearError(); }}>Cancel</button>
-                    <button className="btn primary small" disabled={images.uploading} onClick={saveBody}>{images.uploading ? "Uploading…" : "Save"}</button>
+                    <button className="btn ghost small" onClick={cancelEdit} title="Cancel (Esc)">Cancel<KeyHint keys="Esc" /></button>
+                    <button className="btn primary small" disabled={images.uploading} onClick={saveBody} title={`Save (${MOD}Enter)`}>{images.uploading ? "Uploading…" : "Save"}<KeyHint keys="⌘↵" /></button>
                   </div>
                 </div>
               ) : (
@@ -593,7 +635,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
             ) : tab === "outputs" ? (
               <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticket={ticket} onCount={setOutputCount} focus={outputFocus} /></div>
             ) : (
-              <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError}
+              <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError} onPendingProposal={onPendingProposal}
                 onOpenOutput={(name) => { setOutputFocus(name); setTab("outputs"); }} />
             )}
           </div>
