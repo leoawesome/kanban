@@ -20,7 +20,7 @@ const TOOL_NOTE = "(ckanban MCP tool; if it's deferred, load it with ToolSearch 
 
 /** How Claude asks questions so the board can render them as a clickable form. */
 export const QUESTIONS_FORMAT = `To ask the user questions, call the \`ask_questions\` tool ${TOOL_NOTE}, e.g. questions: [{"question":"Who will read the result?","options":[{"label":"My manager","description":"decision-oriented, 1 page","recommended":true},{"label":"Engineering team","description":"technical depth"}],"multiSelect":false}]
-The board shows them as a form (the user can also add free text) and sends the answers back as the user's next message. Rules: at most 5 questions per round, 2-4 options each, mark exactly one option "recommended", set "multiSelect": true only when several options can apply. If the tool returns an error, fix the input and call it again. Put a one-line intro in your reply; don't repeat the questions as plain text. After the call, end your turn.
+The board shows them as a form (the user can also add free text) and sends the answers back as the user's next message. Rules: ask every open question that matters in one round (no cap), 2-8 options each, mark exactly one option "recommended", set "multiSelect": true only when several options can apply. If the tool returns an error, fix the input and call it again. Put a one-line intro in your reply; don't repeat the questions as plain text. After the call, end your turn.
 Only if the ckanban tools aren't available: put the same JSON array in ONE <ckanban-questions>[...]</ckanban-questions> block in your message instead. ${BLOCK_RULE}`;
 
 /** How Claude proposes an improved ticket so the board can show an Apply button. */

@@ -180,6 +180,24 @@ test("move marker is hidden from text and exposed as moved", () => {
   expect(s.entries[0].moved).toBe("planning");
 });
 
+test("move marker on a blocked reply shows no move: the board kept the card", () => {
+  const tag = '<ckanban-move to="planning"/>';
+  const result = (status: string) => `CKANBAN_RESULT: {"status":"${status}","prUrl":null,"summary":"x"}`;
+  const blocked = parseSession(asst([{ type: "text", text: `Fixes A-H.\n${tag}\n${result("blocked")}` }], "2026-09-29T04:00:00Z"));
+  expect(blocked.entries[0].moved).toBeUndefined();
+  expect(blocked.entries[0].text).not.toContain("ckanban-move");
+  const done = parseSession(asst([{ type: "text", text: `Fixes A-H.\n${tag}\n${result("done")}` }], "2026-09-29T04:00:00Z"));
+  expect(done.entries[0].moved).toBe("planning");
+  // The result line in a later block of the same reply still counts; the next user message ends the reply.
+  const split = parseSession([
+    asst([{ type: "text", text: `Fixes A-H.\n${tag}` }], "2026-09-29T04:00:00Z"),
+    asst([{ type: "text", text: result("blocked") }], "2026-09-29T04:00:01Z"),
+    user("Ideas?", "2026-09-29T04:01:00Z"),
+    asst([{ type: "text", text: `Some ideas.\n${tag}` }], "2026-09-29T04:01:01Z"),
+  ].join("\n"));
+  expect(split.entries.map((e) => e.moved)).toEqual([undefined, undefined, undefined, "planning"]);
+});
+
 test("stay marker is hidden from text", () => {
   const s = parseSession(asst([{ type: "text", text: "Proposed 1 ticket.\n<ckanban-stay/>" }], "2026-09-29T04:00:00Z"));
   expect(s.entries[0].text).toBe("Proposed 1 ticket.");

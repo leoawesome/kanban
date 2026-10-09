@@ -814,7 +814,7 @@ textarea { resize: vertical; font-size: 13.5px; }
 .qcard.answered .qcard-head { border-bottom: 0; }
 .qcard-title { font-size: 12px; font-weight: 650; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
 .qcard.answered .qcard-title { color: var(--ok); }
-.qsteps { display: flex; align-items: center; gap: 5px; }
+.qsteps { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; }
 .qstep { width: 8px; height: 8px; border-radius: 50%; border: 0; padding: 0; background: var(--border); cursor: pointer; }
 .qstep.done { background: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .qstep.on { background: var(--accent); width: 18px; border-radius: 4px; }

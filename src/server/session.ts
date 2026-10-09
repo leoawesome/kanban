@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { commandText, localCommandOutput, TERMINAL_COMMANDS } from "./commands";
 import type { Bus } from "./events";
 import { mockupName, stripMockups } from "./mockups";
+import { parseResult } from "./result";
 import type { Store } from "./store";
 import { AGENT_TOOL, notifiedStatus, parseTaskNotification, SubagentCache, subagentFiles, toolLabel, withTranscript, type AgentInfo } from "./subagents";
 import { findToolDetailIn, type ToolDetail } from "./tooldetail";
@@ -204,6 +205,17 @@ function assistantBlock(text: string): Pick<SessionEntry, "text" | "questions" |
     ...(moved ? { moved } : {}),
     ...(unreadable ? { unreadable } : {}),
   };
+}
+
+/** The board doesn't move a blocked run to Planning; its reply (up to the next user message) mustn't claim it did. */
+function dropBlockedMoves(entries: SessionEntry[]): void {
+  entries.forEach((e, i) => {
+    if (!e.moved) return;
+    for (let j = i; j < entries.length && !(entries[j].role === "user" && !entries[j].peer); j++) {
+      const r = entries[j].role === "assistant" && entries[j].kind === "text" ? parseResult(entries[j].text) : null;
+      if (r?.status === "blocked") return void delete e.moved;
+    }
+  });
 }
 
 export interface SessionArtifact {
@@ -491,6 +503,7 @@ export function parseSession(raw: string): ParsedSession {
 
   for (const e of entries) if (e.toolUseId && errored.has(e.toolUseId)) e.error = true;
   if (failed.size) entries.splice(0, entries.length, ...entries.filter((e) => !failed.has(e.uuid)));
+  dropBlockedMoves(entries);
   const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal || e.newTickets || e.branch));
   const lastText = !last ? "" : last.text
     || (last.questions ? `Asked ${last.questions.length} question${last.questions.length > 1 ? "s" : ""}`

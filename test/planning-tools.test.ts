@@ -4,15 +4,18 @@ import { callTool, proposalError, questionsError, ticketsError, type ToolContext
 const opt = (label: string, recommended?: boolean) => ({ label, ...(recommended ? { recommended } : {}) });
 const q = (options = [opt("Red", true), opt("Blue")], extra = {}) => ({ question: "Color?", options, ...extra });
 
-test("ask_questions: 1-5 questions, 2-4 labelled options, exactly one recommended", () => {
+const opts = (n: number) => Array.from({ length: n }, (_, i) => opt(`o${i}`, i === 0));
+
+test("ask_questions: any number of questions, 2-8 labelled options, exactly one recommended", () => {
   expect(questionsError({ questions: [q()] })).toBeNull();
   expect(questionsError({ questions: [q(), q([opt("a"), opt("b", true), opt("c"), opt("d")], { multiSelect: true })] })).toBeNull();
-  expect(questionsError({ questions: [] })).toContain("1-5 questions");
-  expect(questionsError({ questions: Array(6).fill(q()) })).toContain("1-5 questions");
-  expect(questionsError({})).toContain("1-5 questions");
+  expect(questionsError({ questions: Array(12).fill(q()) })).toBeNull();
+  expect(questionsError({ questions: [q(opts(8))] })).toBeNull();
+  expect(questionsError({ questions: [] })).toBe("questions must be a non-empty list");
+  expect(questionsError({})).toBe("questions must be a non-empty list");
   expect(questionsError({ questions: [{ ...q(), question: " " }] })).toBe("question 1: question text is required");
-  expect(questionsError({ questions: [q([opt("Red", true)])] })).toContain("2-4 options");
-  expect(questionsError({ questions: [q([opt("a", true), opt("b"), opt("c"), opt("d"), opt("e")])] })).toContain("2-4 options");
+  expect(questionsError({ questions: [q([opt("Red", true)])] })).toBe("question 1: give 2-8 options");
+  expect(questionsError({ questions: [q(opts(9))] })).toBe("question 1: give 2-8 options");
   expect(questionsError({ questions: [q([opt("a", true), opt("")])] })).toContain("needs a label");
   expect(questionsError({ questions: [q(), q([opt("a", true), opt("b", true)])] })).toBe("question 2: mark exactly one option recommended (found 2)");
   expect(questionsError({ questions: [q([opt("a"), opt("b")])] })).toContain("found 0");

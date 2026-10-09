@@ -384,12 +384,12 @@ function titleError(title: unknown, where: string): string | null {
 /** Checks ask_questions input; returns what's wrong, or null when it's fine. */
 export function questionsError(args: any): string | null {
   const qs = args?.questions;
-  if (!Array.isArray(qs) || qs.length < 1 || qs.length > 5) return "questions must be a list of 1-5 questions";
+  if (!Array.isArray(qs) || qs.length < 1) return "questions must be a non-empty list";
   for (const [i, q] of qs.entries()) {
     const at = `question ${i + 1}: `;
     if (!isText(q?.question)) return `${at}question text is required`;
     const opts = q.options;
-    if (!Array.isArray(opts) || opts.length < 2 || opts.length > 4) return `${at}give 2-4 options`;
+    if (!Array.isArray(opts) || opts.length < 2 || opts.length > 8) return `${at}give 2-8 options`;
     if (opts.some((o: any) => !isText(o?.label))) return `${at}every option needs a label`;
     const rec = opts.filter((o: any) => o?.recommended === true).length;
     if (rec !== 1) return `${at}mark exactly one option recommended (found ${rec})`;
@@ -436,20 +436,20 @@ const PLANNING_TOOLS: Tool[] = [
     name: "ask_questions",
     description:
       "Board planning chat only: ask the user questions as a form in the board's ticket chat (they can also add free text). " +
-      "Their answers come back as the user's next message. At most 5 questions per round, 2-4 options each, exactly one option recommended; " +
+      "Their answers come back as the user's next message. Ask every open question that matters, 2-8 options each, exactly one option recommended; " +
       "multiSelect true only when several options can apply. Put a one-line intro in your reply; don't repeat the questions as text. " +
       "Nothing is created or changed. After the call, end your turn and wait for the answers.",
     inputSchema: {
       type: "object",
       properties: {
         questions: {
-          type: "array", minItems: 1, maxItems: 5,
+          type: "array", minItems: 1,
           items: {
             type: "object",
             properties: {
               question: { type: "string" },
               options: {
-                type: "array", minItems: 2, maxItems: 4,
+                type: "array", minItems: 2, maxItems: 8,
                 items: {
                   type: "object",
                   properties: {
