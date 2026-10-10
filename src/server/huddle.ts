@@ -20,9 +20,10 @@
 // after a new message. It is a sweep from the huddle's times, so it carries over a daemon restart, and it pauses while
 // the daemon shuts down or a restart is pending.
 //
-// Lifecycle: @main or a lead writes outputs/huddle-summary.md and asks the user to close (huddle_close); only the
-// user closes, or the host ticket moving to Done does. Closing removes the agents' clean own worktrees and the
-// read-only agents' snapshots.
+// Lifecycle: @main or a lead writes outputs/huddles/<id>/summary.md and asks the user to close (huddle_close); only
+// the user closes, or the host ticket moving to Done does. Closing removes the agents' clean own worktrees and the
+// read-only agents' snapshots. A huddle closed without a summary gets one: @main is asked to write it, or, when the
+// host ticket can't run (Done, no session), the board writes one from the huddle's data (fallbackSummary).
 //
 // Workspaces: the shared worktree is the coordinator's. A read-only agent (shared, can't edit) works in a detached
 // snapshot worktree at the host branch's committed HEAD, reset at every wake, so its shell can't touch the
@@ -32,7 +33,7 @@
 // Brakes, so a huddle can't loop or overspend: it stops at maxCostUsd (agents' runs and @main's huddle replies; the
 // leads are warned at 80%) and at maxMessages; routing pauses after AGENT_ONLY_MAX messages without the user; two
 // participants answering each other PING_PONG times in a row stop waking each other and their lead is tagged.
-import { existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { summarizeEvent } from "./activity";
 import { mcpConfig } from "./agents";
@@ -40,8 +41,8 @@ import { claudeSessionExists, type Board } from "./board";
 import type { Bus } from "./events";
 import { addWorktree, branchExists, isGitRepo, removeWorktree, run as git, worktreeDir } from "./git";
 import {
-  DEFAULT_MAX_PARTICIPANTS, handleBase, HUDDLE_AGENT_ENV, MAIN_HANDLE, NO_EDIT_TOOLS, parseMentions, RESERVED_HANDLES, rosterEntryError,
-  rosterError, USER_HANDLE, type RosterEntry,
+  DEFAULT_MAX_PARTICIPANTS, handleBase, HUDDLE_AGENT_ENV, LEGACY_SUMMARY_FILE, MAIN_HANDLE, NO_EDIT_TOOLS, parseMentions, RESERVED_HANDLES,
+  rosterEntryError, rosterError, summaryFile, USER_HANDLE, type RosterEntry,
 } from "./huddle-roster";
 import {
   BUILTIN_PRESETS, deletePreset, type HuddlePreset, type HuddlePresetView, MAIN_PRESET, mergePresets, presetName, savePreset,
@@ -115,6 +116,8 @@ export type ParticipantView = Omit<HuddleParticipant, "token"> & { running: bool
 export type HuddleView = Omit<Huddle, "participants"> & {
   participants: ParticipantView[]; hostTitle: string | null; quiet: boolean; idleSince: string | null; forYou: number; forYouSince: number;
   learningsPending: number;
+  /** The huddle's summary, relative to the host ticket's outputs folder; null while there is none. */
+  summary: string | null;
 };
 
 /** Lessons waiting for the user to save or discard them. */
@@ -130,8 +133,49 @@ export function userSeenSeq(h: Huddle, msgs: HuddleMessage[]): number {
 /** A message that needs the user: it tags @you (brake and close-request system lines included) after `since`. */
 export const isForYou = (m: HuddleMessage, since: number) => m.seq > since && m.from !== USER_HANDLE && m.mentions.includes(USER_HANDLE);
 
-/** The file @main or a lead writes in the host ticket's outputs before asking to close the huddle. */
-export const SUMMARY_FILE = "huddle-summary.md";
+export { LEGACY_SUMMARY_FILE, summaryFile };
+
+/**
+ * The summary the board writes itself when a huddle closed without one and @main can't write it: the brief, the
+ * roster with costs, the findings, each lead's last message and the output files the messages mention.
+ */
+export function fallbackSummary(h: Huddle, msgs: HuddleMessage[], outputs: string[]): string {
+  const span = `${h.createdAt.slice(0, 16).replace("T", " ")}${h.closedAt ? ` to ${h.closedAt.slice(0, 16).replace("T", " ")}` : ""} UTC`;
+  const agents = h.participants.filter((p) => p.kind !== "human");
+  const leads = agents.filter((p) => p.lead || p.handle === MAIN_HANDLE);
+  const last = leads.map((p) => ({ p, m: msgs.findLast((m) => m.from === p.handle && m.kind !== "system") })).filter((x) => x.m);
+  const said = msgs.map((m) => m.text).join("\n");
+  const mine = summaryFile(h.id);
+  const mentioned = new Set(outputs.filter((f) => f !== mine && said.includes(f)));
+  for (const m of said.matchAll(/outputs\/([\w.\/-]+\.\w+)/g)) if (m[1] !== mine) mentioned.add(m[1]);
+  const finding = (f: HuddleFinding) =>
+    `- [${f.status === "resolved" ? "x" : " "}] ${f.text.replace(/\s*\n\s*/g, " ")} (pinned by @${f.by}${f.resolvedBy ? `, resolved by @${f.resolvedBy}` : ""})`;
+  return [
+    "# Huddle summary",
+    "",
+    `_Written by the board: huddle ${h.id} closed without a summary. ${span}, ${h.seq} messages, ${money(huddleCost(h))} spent._`,
+    "",
+    "## Brief",
+    "",
+    h.brief?.text.trim() || "No brief was pinned.",
+    "",
+    "## Participants",
+    "",
+    ...(agents.length ? agents.map((p) => `- @${p.handle}: ${p.role}${p.lead ? " (lead)" : ""} · ${p.status} · ${money(p.costUsd ?? 0)}`) : ["None."]),
+    "",
+    "## Findings",
+    "",
+    ...(h.findings.length ? h.findings.map(finding) : ["None pinned."]),
+    "",
+    "## Last word from the leads",
+    "",
+    ...(last.length ? last.flatMap(({ p, m }) => [`### @${p.handle} (#${m!.seq})`, "", m!.text.trim(), ""]) : ["No lead posted.", ""]),
+    "## Output files mentioned",
+    "",
+    ...(mentioned.size ? [...mentioned].sort().map((f) => `- ${f}`) : ["None."]),
+    "",
+  ].join("\n");
+}
 
 /** Who is calling, from the request: a board run's ticket (RUN_HEADER) and a huddle agent (HUDDLE_HEADER). Neither: the user. */
 export interface Caller {
@@ -164,6 +208,14 @@ interface AgentRun {
 const isCoordinator = (h: Huddle, p: HuddleParticipant) => p.kind === "ticket-main" && p.ticketId === h.hostTicket;
 const canManage = (h: Huddle, p: HuddleParticipant) => p.kind === "human" || isCoordinator(h, p) || p.lead;
 /** A read-only agent in the shared workspace: it works in a detached snapshot of the host's HEAD. */
+/** closeForTicket's default reason: the host ticket is gone, so nobody writes a summary. */
+const DELETED = "the host ticket was deleted";
+
+/** The queued message asking @main for a closed huddle's summary. */
+const summaryAsk = (h: Huddle, file: string) =>
+  `Huddle ${h.id} was closed without a summary. Write it to ${file}: what was decided, the findings and their state, what is left to do. ` +
+  "The huddle is closed, so don't post there; just write the file and end your turn.";
+
 const isSnapshot = (p: HuddleParticipant) => p.kind === "agent" && p.workspace === "shared" && !p.canEdit;
 /** done / blocked: set by the participant itself; its runs' turns ending don't change it. */
 const settled = (p: HuddleParticipant | undefined) => p?.status === "done" || p?.status === "blocked";
@@ -172,6 +224,8 @@ export class Huddles {
   private runs = new Map<string, AgentRun>();
   /** Ticket sessions (monitor mode) with messages waiting until their current run ends, "<slug>/<huddle>/<handle>". */
   private mainPending = new Set<string>();
+  /** Closed huddles ("slug/hid") whose summary @main was asked to write; see ensureSummary. */
+  private summaryOwed = new Set<string>();
   /** Ticket sessions by "<slug>/<ticket>": the huddle participant that last woke them (its peer runs' cost is that huddle's). */
   private mainWoken = new Map<string, { hid: string; handle: string }>();
   private shuttingDown = false;
@@ -198,6 +252,15 @@ export class Huddles {
         if (this.store.listHuddles(profile).some((h) => h.hostTicket === ticket.id && h.status !== "closed")) {
           queueMicrotask(() => this.closeForTicket(profile, ticket.id, "the host ticket moved to Done"));
         }
+      }
+      // @main was asked for a closed huddle's summary: once its run is over, the board writes it if it didn't.
+      for (const key of [...this.summaryOwed]) {
+        const [slug, hid] = key.split("/");
+        if (slug !== e.profile) continue;
+        const h = this.load(slug, hid);
+        if (h && (h.hostTicket !== e.ticket.id || this.board.isRunning(slug, e.ticket.id) || e.ticket.queued?.some((m) => m.state === "queued"))) continue;
+        this.summaryOwed.delete(key);
+        if (h) queueMicrotask(() => this.writeFallbackSummary(slug, hid));
       }
       if (!this.mainPending.size) return;
       for (const key of [...this.mainPending]) {
@@ -336,6 +399,7 @@ export class Huddles {
       forYou: msgs.filter((m) => isForYou(m, since)).length + learningsPending,
       forYouSince: since,
       learningsPending,
+      summary: this.summaryOf(slug, h),
     };
   }
 
@@ -369,6 +433,13 @@ export class Huddles {
       });
     }
     return out;
+  }
+
+  /** The huddle's summary file in the host's outputs: its own, or for a closed one the single file older huddles wrote. */
+  private summaryOf(slug: string, h: Huddle): string | null {
+    const dir = this.store.outputsPath(slug, h.hostTicket);
+    if (existsSync(join(dir, summaryFile(h.id)))) return summaryFile(h.id);
+    return h.status === "closed" && existsSync(join(dir, LEGACY_SUMMARY_FILE)) ? LEGACY_SUMMARY_FILE : null;
   }
 
   /** Live, nobody working, nobody with an unanswered tag and no open findings; idleSince: the last message or turn. */
@@ -1030,13 +1101,13 @@ export class Huddles {
     const h = this.get(slug, hid);
     this.assertOpen(h);
     if (!canManage(h, by)) throw new HuddleError(403, "only @main or a lead can ask to close the huddle; tell your lead you are done (huddle_status done)");
-    const summary = join(this.store.outputsDir(slug, h.hostTicket), SUMMARY_FILE);
+    const summary = join(this.store.outputsDir(slug, h.hostTicket), summaryFile(hid));
     if (!existsSync(summary)) {
       throw new HuddleError(409, `write the huddle summary first: ${summary} (what was decided, the findings and their state, what is left to do), then call huddle_close again`);
     }
     const why = reason.trim() || "the work is done";
     this.update(slug, hid, (x) => void (x.closeRequest = { by: by.handle, at: nowIso(), reason: why }));
-    this.system(slug, hid, `@${by.handle} asks to close the huddle: ${why}. The summary is in the host ticket's outputs (${SUMMARY_FILE}). @you: press Close huddle to end it; only you can close it.`, [USER_HANDLE]);
+    this.system(slug, hid, `@${by.handle} asks to close the huddle: ${why}. The summary is in the host ticket's outputs (${summaryFile(hid)}). @you: press Close huddle to end it; only you can close it.`, [USER_HANDLE]);
     return this.get(slug, hid);
   }
 
@@ -1606,7 +1677,7 @@ export class Huddles {
    * The user closes a huddle (or the host ticket is done or deleted: `why`): the huddle's runs stop, the history
    * stays read-only, and the agents' own worktrees are removed when clean. The tickets' own work is untouched.
    */
-  close(slug: string, hid: string, why?: string): Huddle {
+  close(slug: string, hid: string, why?: string, summarize = true): Huddle {
     const h = this.get(slug, hid);
     if (h.status === "closed") return h;
     for (const p of h.participants) if (p.kind !== "human") this.stopParticipantRun(slug, h, p);
@@ -1617,12 +1688,58 @@ export class Huddles {
       for (const p of x.participants) if (p.kind === "agent" && p.status === "working") p.status = "stopped";
     });
     if (h.participants.some((p) => p.kind === "agent" && p.worktree)) this.chore(this.removeWorktrees(slug, hid));
+    if (summarize) this.ensureSummary(slug, hid);
     return out;
   }
 
-  /** The host ticket was deleted or moved to Done: its huddles close. */
-  closeForTicket(slug: string, ticketId: string, why = "the host ticket was deleted"): void {
-    for (const h of this.store.listHuddles(slug)) if (h.hostTicket === ticketId && h.status !== "closed") this.close(slug, h.id, why);
+  /** The host ticket was deleted or moved to Done: its huddles close (a deleted one's without a summary). */
+  closeForTicket(slug: string, ticketId: string, why = DELETED): void {
+    for (const h of this.store.listHuddles(slug)) if (h.hostTicket === ticketId && h.status !== "closed") this.close(slug, h.id, why, why !== DELETED);
+  }
+
+  /**
+   * A huddle just closed: make sure it has a summary. @main writes it when the host ticket can run (a queued chat
+   * message); otherwise, or when that run ends without it, the board writes fallbackSummary. An older huddle's summary
+   * in the single legacy file, written during this huddle, becomes this huddle's.
+   */
+  private ensureSummary(slug: string, hid: string): void {
+    const h = this.load(slug, hid);
+    const t = h && this.store.getTicket(slug, h.hostTicket);
+    if (!h || !t) return;
+    const dir = this.store.outputsDir(slug, t.id);
+    const file = join(dir, summaryFile(hid));
+    if (existsSync(file)) return;
+    const legacy = join(dir, LEGACY_SUMMARY_FILE);
+    if (existsSync(legacy) && statSync(legacy).mtime.toISOString() >= h.createdAt) {
+      mkdirSync(dirname(file), { recursive: true });
+      copyFileSync(legacy, file);
+      return this.touch(slug, hid);
+    }
+    const canRun = t.status !== "done" && !!t.sessionId && !!t.sessionStarted && this.sessionExists(t.sessionId);
+    if (!canRun) return this.writeFallbackSummary(slug, hid);
+    this.summaryOwed.add(`${slug}/${hid}`);
+    this.board.chat(slug, t.id, summaryAsk(h, file), { peer: true }).catch(() => {
+      this.summaryOwed.delete(`${slug}/${hid}`);
+      this.writeFallbackSummary(slug, hid);
+    });
+  }
+
+  /** The board's own summary (fallbackSummary), unless one exists by now. */
+  writeFallbackSummary(slug: string, hid: string): void {
+    const h = this.load(slug, hid);
+    if (!h || !this.store.getTicket(slug, h.hostTicket)) return;
+    const file = join(this.store.outputsDir(slug, h.hostTicket), summaryFile(hid));
+    if (existsSync(file)) return;
+    mkdirSync(dirname(file), { recursive: true });
+    const outputs = this.store.listOutputs(slug, h.hostTicket).map((o) => o.name);
+    writeFileSync(file, fallbackSummary(h, this.store.readHuddleMessages(slug, hid), outputs));
+    this.touch(slug, hid);
+  }
+
+  /** Tell the UI the huddle changed (its summary appeared) without changing it. */
+  private touch(slug: string, hid: string) {
+    const h = this.load(slug, hid);
+    if (h) this.bus.emit({ type: "huddle.updated", profile: slug, huddle: this.view(slug, h) });
   }
 
   private chore(p: Promise<void>) {

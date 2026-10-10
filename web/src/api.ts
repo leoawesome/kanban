@@ -624,6 +624,8 @@ export interface Huddle {
   learnings?: HuddleLearning[];
   /** Learnings waiting for review (they count in forYou). */
   learningsPending?: number;
+  /** Its summary, relative to the host ticket's outputs folder (huddles/<id>/summary.md, or the older huddle-summary.md); null while there is none. */
+  summary?: string | null;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;

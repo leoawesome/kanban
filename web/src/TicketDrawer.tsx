@@ -199,7 +199,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   /** Slide in when opened; off when stepping from the neighbouring ticket. */
   slideIn?: boolean;
   /** Show this tab (e.g. a card's huddle badge); `n` changes for each new request. */
-  tabRequest?: { tab: "huddle"; n: number } | null;
+  tabRequest?: { tab: "huddle"; n: number; huddleId?: string } | null;
   /** The Team tab's Start huddle: fill this roster in on the Huddle tab; `n` changes for each new request. */
   huddleSeed?: { seed: HuddleSeed; n: number } | null;
   /** Open the dock's Team tab on a teammate or a proposal to edit (teammate cards). */
@@ -224,11 +224,16 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   // Body the current edit started from; the server rejects the save if the file changed meanwhile.
   const [baseBody, setBaseBody] = useState(ticket.body);
   const [tabPick, setTab] = useState<"chat" | "plan" | "changes" | "huddle" | "outputs" | "usage">(tabRequest?.tab ?? "chat");
+  // The huddle round picked in the Huddle tab (null: the default one); kept while the drawer stays on this ticket.
+  const [huddlePick, setHuddlePick] = useState<string | null>(tabRequest?.huddleId ?? null);
   useEffect(() => {
-    if (tabRequest) setTab(tabRequest.tab);
+    if (!tabRequest) return;
+    setTab(tabRequest.tab);
+    // A card badge or Start huddle shows the current round; a dock row its own.
+    setHuddlePick(tabRequest.huddleId ?? null);
   }, [tabRequest?.n]);
-  const huddleState = useHuddle(slug, ticket.id);
-  const huddle = huddleState.huddle;
+  const huddleState = useHuddle(slug, ticket.id, huddlePick);
+  const huddle = huddleState.latest;
   // The Plan tab exists only while the ticket has children; Changes only while it has a worktree.
   const tab = (tabPick === "plan" && !children.length) || (tabPick === "changes" && !ticket.worktree) ? "chat" : tabPick;
   const diffState = useTicketDiff(slug, ticket);
@@ -653,7 +658,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                 <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
               </div>
             ) : tab === "huddle" ? (
-              <HuddlePanel slug={slug} ticket={ticket} tickets={tickets} state={huddleState} onError={onError} seed={huddleSeed ?? null}
+              <HuddlePanel slug={slug} ticket={ticket} tickets={tickets} state={huddleState} onError={onError} seed={huddleSeed ?? null} onSelect={setHuddlePick}
+                onOpenOutput={(name) => { setOutputFocus(name); setTab("outputs"); }}
                 onOpenChat={() => setTab("chat")} onOpenTicket={onOpenTicket} onOpenTeam={onOpenTeam} />
             ) : tab === "changes" ? (
               <Changes slug={slug} ticket={ticket} state={diffState} onSent={() => setTab("chat")} onError={onError} />

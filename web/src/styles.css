@@ -1724,6 +1724,36 @@ div.huddle { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .hd-close-learnings ul { margin: 0 0 8px; padding-left: 18px; max-height: 140px; overflow-y: auto; }
 .huddle-close-ask { padding: 7px 24px; border-bottom: 1px solid var(--border); background: var(--info-soft); font-size: 12.5px; }
 .huddle-bar .btn.small { color: var(--text); }
+/* huddle round picker (2+ huddles on a ticket) */
+.hd-rounds { position: relative; flex: none; }
+.hd-rounds-btn {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 360px; border: 1px solid var(--border); border-radius: 8px; padding: 3px 10px;
+  background: var(--surface); color: var(--text); font-weight: 600; font-size: 12.5px; cursor: pointer;
+}
+.hd-rounds-btn:hover, .hd-rounds-btn.on { background: var(--surface-2); }
+.hd-rounds-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hd-rounds-menu {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 80; width: 470px; max-width: calc(100vw - 48px); max-height: 60vh; overflow-y: auto; padding: 6px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+}
+.hd-round { display: grid; grid-template-columns: 1fr auto; align-items: start; border-radius: 7px; }
+.hd-round:hover { background: var(--surface-2); }
+.hd-round.on { background: var(--accent-soft); }
+.hd-round-pick {
+  grid-row: 1 / 3; grid-column: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; text-align: left; border: 0; background: none;
+  padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--text);
+}
+.hd-round-pick:disabled { cursor: default; opacity: 0.6; }
+.hd-round-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.hd-round-title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hd-round-new .hd-round-title { color: var(--accent); }
+.hd-round-meta { font-size: 12px; color: var(--muted); }
+.hd-round-pill { grid-column: 2; margin: 8px 10px 0 0; font-size: 11px; border-radius: 99px; padding: 1px 7px; white-space: nowrap; }
+.hd-round-pill.live { background: var(--ok-soft); color: var(--ok); }
+.hd-round-pill.stopped { background: var(--warn-soft); color: var(--warn); }
+.hd-round-pill.closed { background: var(--surface-2); color: var(--muted); }
+.hd-round.on .hd-round-pill.closed { background: var(--surface); }
+.hd-round-sum { grid-column: 2; align-self: end; margin: 0 10px 8px 0; font-size: 12px; }
 .btn.hd-danger { color: var(--err); border-color: var(--err-soft); }
 .btn.hd-danger:hover:not(:disabled) { background: var(--err-soft); }
 .huddle-add { border-bottom: 1px solid var(--border); background: var(--bg); }

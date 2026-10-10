@@ -14,10 +14,30 @@ interface ParticipantLike {
 }
 interface EntryLike { preset?: string; role?: string; count?: number; handle?: string }
 
-/** The huddle a ticket's Huddle tab shows: its open one, else the newest closed one (history). */
-export function pickHuddle<H extends HuddleLike>(list: H[], ticketId: string): H | null {
-  const mine = list.filter((h) => h.hostTicket === ticketId);
-  return mine.find((h) => h.status !== "closed") ?? mine.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+/** The huddle a ticket's Huddle tab shows: the one picked by `id`, else its open one, else the newest closed one (history). */
+export function pickHuddle<H extends HuddleLike & { id: string }>(list: H[], ticketId: string, id?: string | null): H | null {
+  const mine = ticketHuddles(list, ticketId);
+  return (id ? mine.find((h) => h.id === id) : undefined) ?? mine.find((h) => h.status !== "closed") ?? mine[0] ?? null;
+}
+
+/** The huddles a ticket hosted (its rounds), newest first. */
+export function ticketHuddles<H extends HuddleLike>(list: H[], ticketId: string): H[] {
+  return list.filter((h) => h.hostTicket === ticketId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** A huddle's round on its ticket: 1 for the first one started. */
+export const huddleRound = <H extends HuddleLike & { id: string }>(list: H[], h: H) =>
+  list.filter((x) => x.hostTicket === h.hostTicket && x.createdAt <= h.createdAt).length;
+
+const TITLE_MAX = 48;
+
+/** What the switcher calls a huddle: the brief's goal (or first line), else its template, else the day it started. */
+export function huddleTitle(h: HuddleLike & { brief?: { text: string } | null; template?: string | null }): string {
+  const lines = (h.brief?.text ?? "").split("\n").map((l) => l.replace(/^[\s#>*-]+/, "").replace(/\*\*|__/g, "").trim()).filter(Boolean);
+  const goal = lines.map((l) => /^goal\s*[:\-–]\s*(.+)/i.exec(l)?.[1]).find(Boolean);
+  const line = goal ?? lines[0];
+  const text = line ? line[0].toUpperCase() + line.slice(1) : h.template ?? new Date(h.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  return text.length > TITLE_MAX ? `${text.slice(0, TITLE_MAX - 1).trimEnd()}…` : text;
 }
 
 /** Messages by seq, without duplicates (live events and fetched pages overlap). */

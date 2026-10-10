@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { resetTitle, scopeChip, usageText } from "../web/src/teamText";
 import {
-  applyTemplate, brakeLabel, cardHuddleBadge, digestPreview, digestSenders, parseDigest, draftError, draftTags, idleFor, isForYou, untaggedHint, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, sourceLabel, upsertHuddle, withActivity,
+  applyTemplate, brakeLabel, cardHuddleBadge, digestPreview, digestSenders, parseDigest, draftError, draftTags, idleFor, isForYou, untaggedHint, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, huddleRound, huddleTitle, ticketHuddles, rosterDraft, rowHandle, shortTicketId, sortHuddles, sourceLabel, upsertHuddle, withActivity,
 } from "../web/src/huddleText";
 import { mergeSteps, modelLabel, sessionMeta, sessionState, shortSession, toolIcon } from "../web/src/sessionText";
 
@@ -22,6 +22,29 @@ test("pickHuddle: the open one hosted here, else the newest closed one", () => {
   expect(pickHuddle([closedOld, open, closedNew, elsewhere], "t1")?.id).toBe("c");
   expect(pickHuddle([closedOld, closedNew, elsewhere], "t1")?.id).toBe("b");
   expect(pickHuddle([elsewhere], "t1")).toBeNull();
+});
+
+test("pickHuddle by id: the picked round, the default when it isn't this ticket's; ticketHuddles and huddleRound", () => {
+  const r1 = huddle({ id: "a", status: "closed", createdAt: "2026-10-01T00:00:00Z" });
+  const r2 = huddle({ id: "b", status: "live", createdAt: "2026-10-05T00:00:00Z" });
+  const elsewhere = huddle({ id: "d", hostTicket: "t2" });
+  const all = [r2, elsewhere, r1];
+  expect(pickHuddle(all, "t1", "a")?.id).toBe("a");
+  expect(pickHuddle(all, "t1", null)?.id).toBe("b");
+  expect(pickHuddle(all, "t1", "d")?.id).toBe("b");
+  expect(pickHuddle(all, "t1", "gone")?.id).toBe("b");
+  expect(ticketHuddles(all, "t1").map((h) => h.id)).toEqual(["b", "a"]);
+  expect(huddleRound(all, r1)).toBe(1);
+  expect(huddleRound(all, r2)).toBe(2);
+});
+
+test("huddleTitle: the brief's goal or first line, shortened; else the template; else the date", () => {
+  const base = { hostTicket: "t1", status: "closed", createdAt: "2026-10-10T11:20:00Z" };
+  expect(huddleTitle({ ...base, brief: { text: "## Brief\n**Goal:** Competitor study: Paperclip\nDecisions: none" } })).toBe("Competitor study: Paperclip");
+  expect(huddleTitle({ ...base, brief: { text: "\n# What to improve next\nmore" } })).toBe("What to improve next");
+  expect(huddleTitle({ ...base, brief: { text: "x".repeat(80) } })).toBe(`X${"x".repeat(46)}…`);
+  expect(huddleTitle({ ...base, brief: null, template: "design-review" })).toBe("design-review");
+  expect(huddleTitle({ ...base })).toContain("2026");
 });
 
 test("mergeMessages: by seq, no duplicates", () => {

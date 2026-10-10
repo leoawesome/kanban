@@ -53,7 +53,8 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
   /** The board's huddles (kept live by the App), for the Huddles tab. */
   huddles?: Huddle[];
   /** Open a ticket's Huddle tab. */
-  onOpenHuddle?: (ticketId: string) => void;
+  /** Open a ticket's Huddle tab; with huddleId, on that huddle (an earlier round). */
+  onOpenHuddle?: (ticketId: string, huddleId?: string) => void;
   /** The ticket open in the drawer (the Team tab's Start huddle goes there). */
   openTicket?: { id: string; title: string } | null;
   /** The Team tab's Start huddle: a roster with a teammate, or a template. */
@@ -222,8 +223,8 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
   );
 }
 
-/** The Huddles tab: live and recent huddles on this board; a row opens its host ticket's Huddle tab. */
-function HuddleList({ huddles, onOpen }: { huddles: Huddle[]; onOpen?: (ticketId: string) => void }) {
+/** The Huddles tab: live and recent huddles on this board; a row opens that huddle in its host ticket's Huddle tab. */
+function HuddleList({ huddles, onOpen }: { huddles: Huddle[]; onOpen?: (ticketId: string, huddleId: string) => void }) {
   const now = useNow();
   const list = sortHuddles(huddles);
   if (!list.length) {
@@ -239,7 +240,7 @@ function HuddleList({ huddles, onOpen }: { huddles: Huddle[]; onOpen?: (ticketId
         const failed = members(h).filter((p) => p.status === "failed").length;
         const forYou = h.status === "closed" ? 0 : h.forYou ?? 0;
         return (
-          <button key={h.id} role="listitem" className={`huddle-row ${h.status}${brake ? " brake" : quiet ? " quiet" : ""}`} onClick={() => onOpen?.(h.hostTicket)}
+          <button key={h.id} role="listitem" className={`huddle-row ${h.status}${brake ? " brake" : quiet ? " quiet" : ""}`} onClick={() => onOpen?.(h.hostTicket, h.id)}
             title={`Open the huddle of ${h.hostTitle ?? h.hostTicket}`}>
             <span className="hr-dot" aria-label={brake ?? (quiet ? "quiet" : h.status)} />
             <span className="hr-title">{h.hostTitle ?? h.hostTicket}</span>

@@ -15,6 +15,7 @@ import { KeyHint } from "./KeyHint";
 import { useLayer } from "./layers";
 import { Select } from "./Select";
 import { fullTime, useNow } from "./time";
+import { HuddleRounds } from "./HuddleRounds";
 import { SessionPanel } from "./HuddleSession";
 import { Markdown } from "./Transcript";
 import { usePersistentState } from "./usePersistentState";
@@ -44,11 +45,15 @@ function Avatar({ handle, small }: { handle: string; small?: boolean }) {
 }
 
 /** The Huddle tab: the ticket's huddle (feed, roster, findings, composer), or a roster editor to start one. */
-export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat, onOpenTicket, onOpenTeam, seed = null }: {
+export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat, onOpenTicket, onOpenTeam, onSelect, onOpenOutput, seed = null }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
   state: HuddleState;
+  /** Show another of the ticket's huddles (an earlier round, read-only); null: the current one. */
+  onSelect: (id: string | null) => void;
+  /** Show a file of the ticket's outputs (a huddle's summary). */
+  onOpenOutput: (name: string) => void;
   /** The Team tab's Start huddle: a roster to fill in (a new huddle, or + Add agent on an open one); `n` changes per request. */
   seed?: { seed: HuddleSeed; n: number } | null;
   onError: (m: string) => void;
@@ -58,14 +63,14 @@ export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat,
   /** Show a teammate in the dock's Team tab (a saved proposal's Open in Team). */
   onOpenTeam?: (r: TeamRequest) => void;
 }) {
-  // Starting a new huddle after the last one closed (its history stays a click away).
+  // Starting a new huddle after the last one closed (the earlier rounds stay a click away).
   const [fresh, setFresh] = useState(false);
   const h = state.huddle;
   useEffect(() => setFresh(false), [h?.id]);
-  // A closed huddle: Start huddle from the Team tab starts a new one.
+  // The current huddle is closed: Start huddle from the Team tab starts a new one.
   useEffect(() => {
-    if (seed && h?.status === "closed") setFresh(true);
-  }, [seed?.n, h?.id]);
+    if (seed && state.latest?.status === "closed") setFresh(true);
+  }, [seed?.n, state.latest?.id]);
   if (!state.loaded) return <div className="panel-scroll muted"><span className="spinner" /> Loading the huddle…</div>;
   if (state.error && !h) {
     return (
@@ -76,10 +81,10 @@ export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat,
   }
   if (!h || fresh) {
     return <StartHuddle slug={slug} ticket={ticket} tickets={tickets} onError={onError} onBack={h ? () => setFresh(false) : undefined}
-      onStarted={() => state.reload()} seed={seed} />;
+      onStarted={() => { onSelect(null); state.reload(); }} seed={seed} />;
   }
   return <HuddleRoom slug={slug} ticket={ticket} tickets={tickets} huddle={h} state={state} onError={onError} onNew={() => setFresh(true)}
-    onOpenChat={onOpenChat} onOpenTicket={onOpenTicket} onOpenTeam={onOpenTeam} seed={seed} />;
+    onOpenChat={onOpenChat} onOpenTicket={onOpenTicket} onOpenTeam={onOpenTeam} onSelect={onSelect} onOpenOutput={onOpenOutput} seed={seed} />;
 }
 
 /** No huddle yet: pick a roster and start one by hand. */
@@ -147,7 +152,7 @@ function StartHuddle({ slug, ticket, tickets, onError, onBack, onStarted, seed }
         <div className="huddle-card-actions">
           <span className="muted small">{err ?? "Agents start as soon as you press Start."}</span>
           <span className="spacer" />
-          {onBack && <button className="btn small" onClick={onBack}>Back to the last huddle</button>}
+          {onBack && <button className="btn small" onClick={onBack}>Back to the huddle</button>}
           <button className="btn primary small" onClick={start} disabled={busy || !!err || presets === null}>{busy ? "Starting…" : "Start huddle"}</button>
         </div>
       </div>
@@ -155,7 +160,7 @@ function StartHuddle({ slug, ticket, tickets, onError, onBack, onStarted, seed }
   );
 }
 
-function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, onOpenChat, onOpenTicket, onOpenTeam, seed }: {
+function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, onOpenChat, onOpenTicket, onOpenTeam, onSelect, onOpenOutput, seed }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
@@ -166,6 +171,8 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
   onOpenChat: () => void;
   onOpenTicket: (id: string) => void;
   onOpenTeam?: (r: TeamRequest) => void;
+  onSelect: (id: string | null) => void;
+  onOpenOutput: (name: string) => void;
   seed: { seed: HuddleSeed; n: number } | null;
 }) {
   const [confirm, setConfirm] = useState<"stop" | "close" | null>(null);
@@ -221,9 +228,14 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
     next?.scrollIntoView({ block: "center", behavior: "smooth" });
   };
 
+  // Two or more rounds: the bar's round picker (with + New huddle) replaces the New huddle button.
+  const rounds = state.list.length > 1;
+  const summary = h.summary ? <button className="link-btn" onClick={() => onOpenOutput(h.summary!)} title={`Open ${h.summary} in Outputs`}>summary</button> : null;
+
   return (
     <div className="huddle">
       <div className="huddle-bar">
+        {rounds && <HuddleRounds list={state.list} shown={h} onPick={onSelect} onNew={onNew} onSummary={(x) => onOpenOutput(x.summary!)} />}
         {brake ? (
           <span className="huddle-state brake">■ Paused</span>
         ) : quiet ? (
@@ -251,8 +263,8 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
         )}
         {closed ? (
           <>
-            {h.closedAt && <span title={fullTime(h.closedAt)}>closed {clock(h.closedAt)} · read-only</span>}
-            <button className="btn small" onClick={onNew}>New huddle</button>
+            {h.closedAt && <span title={fullTime(h.closedAt)}>closed {clock(h.closedAt)} · read-only{summary && <> · {summary}</>}</span>}
+            {!rounds && <button className="btn small" onClick={onNew}>New huddle</button>}
           </>
         ) : (
           <>
@@ -307,14 +319,15 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
       )}
       {h.closeRequest && !closed && (
         <div className="huddle-close-ask">
-          <b>@{h.closeRequest.by}</b> asks to close the huddle: {h.closeRequest.reason}. The summary is in the ticket's outputs (huddle-summary.md).
+          <b>@{h.closeRequest.by}</b> asks to close the huddle: {h.closeRequest.reason}.{" "}
+          {h.summary ? <>Read the <button className="link-btn" onClick={() => onOpenOutput(h.summary!)}>summary</button> in the ticket's outputs.</> : "The summary is in the ticket's outputs."}
         </div>
       )}
       {adding && !closed && <AddAgent key={seed?.n} slug={slug} huddle={h} preset={addSeed ?? undefined} onDone={() => setAdding(false)} onError={onError} />}
       <div className="huddle-body">
         <div className="huddle-feed">
           <Feed huddle={h} state={state} handles={handles} scroller={log} onSeen={(seq) => run(api.huddleSeen(slug, h.id, seq))} />
-          <Composer slug={slug} ticket={ticket} huddle={h} onError={onError} prefill={prefill} />
+          <Composer slug={slug} ticket={ticket} huddle={h} onError={onError} prefill={prefill} onOpenOutput={onOpenOutput} />
         </div>
         {viewed && (
           <SessionPanel slug={slug} huddle={h} participant={viewed} onClose={() => setViewing(null)} onStep={stepViewing}
@@ -634,8 +647,8 @@ function MentionText({ text, handles }: { text: string; handles: string[] }) {
 }
 
 /** The user's message box, with @ autocomplete (@main, @all, handles). */
-function Composer({ slug, ticket, huddle: h, onError, prefill }: {
-  slug: string; ticket: Ticket; huddle: Huddle; onError: (m: string) => void; prefill: { handle: string; n: number } | null;
+function Composer({ slug, ticket, huddle: h, onError, prefill, onOpenOutput }: {
+  slug: string; ticket: Ticket; huddle: Huddle; onError: (m: string) => void; prefill: { handle: string; n: number } | null; onOpenOutput: (name: string) => void;
 }) {
   const [draft, setDraft] = usePersistentState(draftKey(slug, `${ticket.id}.huddle`), () => "", (v) => !v.trim(), (v) => typeof v === "string");
   const [sending, setSending] = useState(false);
@@ -713,7 +726,14 @@ function Composer({ slug, ticket, huddle: h, onError, prefill }: {
       send();
     }
   };
-  if (closed) return <div className="huddle-closed muted small">This huddle is closed: the history stays, read-only.</div>;
+  if (closed) {
+    return (
+      <div className="huddle-closed muted small">
+        This huddle is closed: the history stays, read-only.
+        {h.summary && <> <button className="link-btn" onClick={() => onOpenOutput(h.summary!)} title={`Open ${h.summary} in Outputs`}>Read its summary</button></>}
+      </div>
+    );
+  }
   return (
     <div className="composer huddle-composer">
       {open && (

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, onReconnect, subscribe, type Huddle, type HuddleMessage } from "./api";
 import { AVATAR_COLORS } from "./avatar";
-import { mergeMessages, pickHuddle, upsertHuddle, withActivity } from "./huddleText";
+import { mergeMessages, pickHuddle, ticketHuddles, upsertHuddle, withActivity } from "./huddleText";
 
-export { brakeLabel, cardHuddleBadge, dollars, guestTickets, idleFor, quietLabel, sortHuddles, type CardHuddleBadge } from "./huddleText";
+export { brakeLabel, cardHuddleBadge, dollars, guestTickets, huddleRound, huddleTitle, idleFor, quietLabel, sortHuddles, type CardHuddleBadge } from "./huddleText";
 export { handleInitials, isForYou, mentionCandidates, mentionQuery, participantActivity, sourceLabel, untaggedHint } from "./huddleText";
 
 /** Participants that count toward the cap (everyone but the user). */
@@ -23,7 +23,12 @@ export function handleColor(handle: string): string {
 }
 
 export interface HuddleState {
+  /** The huddle shown: the one picked, else the ticket's open one, else its newest. */
   huddle: Huddle | null;
+  /** Every huddle the ticket hosted (its rounds), newest first. */
+  list: Huddle[];
+  /** The one shown when nothing is picked (the tab's counts and the chat's huddle cards follow this one). */
+  latest: Huddle | null;
   messages: HuddleMessage[];
   hasMore: boolean;
   loaded: boolean;
@@ -32,21 +37,35 @@ export interface HuddleState {
   loadEarlier: () => Promise<void>;
 }
 
-/** The ticket's huddle and its messages, kept live from huddle.updated / huddle.message events. */
-export function useHuddle(slug: string, ticketId: string): HuddleState {
+/**
+ * The ticket's huddles, and the picked one (`huddleId`, else the default) with its messages. Only the shown huddle's
+ * huddle.message / huddle.activity events reach its feed; huddle.updated keeps the whole list current.
+ */
+export function useHuddle(slug: string, ticketId: string, huddleId: string | null = null): HuddleState {
+  const [list, setList] = useState<Huddle[]>([]);
   const [huddle, setHuddle] = useState<Huddle | null>(null);
   const [messages, setMessages] = useState<HuddleMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const idRef = useRef<string | null>(null);
+  const listRef = useRef<Huddle[] | null>(null);
+  const pickRef = useRef(huddleId);
+  pickRef.current = huddleId;
   const seq = useRef(0);
 
-  const reload = useCallback(async () => {
+  // fetchList: false when only the pick changed (the list is already here).
+  const load = useCallback(async (fetchList: boolean) => {
     const mine = ++seq.current;
     try {
-      const h = pickHuddle(await api.huddles(slug, ticketId), ticketId);
-      if (mine !== seq.current) return;
+      let hs = listRef.current;
+      if (fetchList || !hs) {
+        hs = ticketHuddles(await api.huddles(slug, ticketId), ticketId);
+        if (mine !== seq.current) return;
+        listRef.current = hs;
+        setList(hs);
+      }
+      const h = pickHuddle(hs, ticketId, pickRef.current);
       if (!h) {
         idRef.current = null;
         setHuddle(null);
@@ -68,24 +87,44 @@ export function useHuddle(slug: string, ticketId: string): HuddleState {
       if (mine === seq.current) setLoaded(true);
     }
   }, [slug, ticketId]);
+  const reload = useCallback(() => load(true), [load]);
 
   useEffect(() => {
     idRef.current = null;
+    listRef.current = null;
+    setList([]);
     setHuddle(null);
     setMessages([]);
     setLoaded(false);
     reload();
   }, [reload]);
 
+  // Another round picked: its feed replaces this one, and this one's live events stop reaching it.
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) return void (first.current = false);
+    idRef.current = null;
+    load(false);
+  }, [huddleId]);
+
   useEffect(() => subscribe((e) => {
     if (e.type === "huddle.updated" && e.profile === slug && e.huddle.hostTicket === ticketId) {
+      const known = listRef.current?.some((h) => h.id === e.huddle.id);
+      if (listRef.current) {
+        listRef.current = ticketHuddles(upsertHuddle(listRef.current, e.huddle), ticketId);
+        setList(listRef.current);
+      }
       if (e.huddle.id === idRef.current) setHuddle(e.huddle);
       // A new huddle on this ticket (started here, from the chat card or another window).
-      else if (e.huddle.status !== "closed") reload();
+      else if (!known && e.huddle.status !== "closed") reload();
     } else if (e.type === "huddle.message" && e.profile === slug && e.huddleId === idRef.current) {
       setMessages((ms) => mergeMessages(ms, [e.message]));
-    } else if (e.type === "huddle.activity" && e.profile === slug && e.huddleId === idRef.current) {
-      setHuddle((h) => h && withActivity(h, e.handle, e.lastActivity));
+    } else if (e.type === "huddle.activity" && e.profile === slug) {
+      if (e.huddleId === idRef.current) setHuddle((h) => h && withActivity(h, e.handle, e.lastActivity));
+      if (listRef.current?.some((h) => h.id === e.huddleId)) {
+        listRef.current = listRef.current.map((h) => (h.id === e.huddleId ? withActivity(h, e.handle, e.lastActivity) : h));
+        setList(listRef.current);
+      }
     }
   }), [slug, ticketId, reload]);
 
@@ -101,7 +140,9 @@ export function useHuddle(slug: string, ticketId: string): HuddleState {
     setHasMore(r.hasMore);
   }, [slug, messages]);
 
-  return { huddle, messages, hasMore, loaded, error, reload, loadEarlier };
+  // The live copy of the shown huddle is fresher than the list's.
+  const latest = pickHuddle(list, ticketId);
+  return { huddle, list, latest: latest && huddle && latest.id === huddle.id ? huddle : latest, messages, hasMore, loaded, error, reload, loadEarlier };
 }
 
 /** Every huddle on the board, kept live from huddle.updated events (card badges and the dock's Huddles list). */

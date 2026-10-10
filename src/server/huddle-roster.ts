@@ -17,6 +17,10 @@ export const USER_HANDLE = "you";
 export const RESERVED_HANDLES = new Set([MAIN_HANDLE, USER_HANDLE, "all", "system", "current"]);
 /** Agents that may not edit tracked files run without these tools. */
 export const NO_EDIT_TOOLS = "Edit,Write,NotebookEdit";
+/** Where a huddle's summary goes, relative to the host ticket's outputs folder: one per huddle, so rounds don't overwrite each other. */
+export const summaryFile = (hid: string) => `huddles/${hid}/summary.md`;
+/** The single summary file older huddles wrote; still read for closed huddles that have no summary of their own. */
+export const LEGACY_SUMMARY_FILE = "huddle-summary.md";
 const MAX_COUNT = 8;
 
 /** One line of a roster: `count` participants made from a preset (or a free-form role with its own prompt). */

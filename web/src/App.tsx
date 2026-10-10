@@ -242,9 +242,9 @@ export function App() {
   }, [slug]);
 
   // A huddle badge or the dock's Huddles list: open the ticket on its Huddle tab.
-  const [huddleTab, setHuddleTab] = useState<{ id: string; n: number } | null>(null);
-  const openHuddle = useCallback((id: string) => {
-    setHuddleTab({ id, n: Date.now() });
+  const [huddleTab, setHuddleTab] = useState<{ id: string; n: number; huddleId?: string } | null>(null);
+  const openHuddle = useCallback((id: string, huddleId?: string) => {
+    setHuddleTab({ id, n: Date.now(), huddleId });
     if (id !== openId) openTicket(id);
   }, [openId, openTicket]);
   const huddles = useBoardHuddles(slug);
@@ -774,7 +774,7 @@ export function App() {
       {snippetsOpen && profile && <SnippetsDialog profile={profile} onClose={() => setSnippetsOpen(false)} />}
       {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} tickets={tickets} onOpenTicket={openTicket} onClose={closeTicket}
         nav={{ prev: prevId, next: nextId, go: stepTicket }} slideIn={!stepped.current}
-        tabRequest={huddleTab?.id === open.id ? { tab: "huddle", n: huddleTab.n } : null}
+        tabRequest={huddleTab?.id === open.id ? { tab: "huddle", n: huddleTab.n, huddleId: huddleTab.huddleId } : null}
         huddleSeed={huddleSeed?.id === open.id ? { seed: huddleSeed.seed, n: huddleSeed.n } : null}
         onOpenTeam={(r) => { closeTicket(); openDockOn("team", r); }} />}
       {profileDialog && (

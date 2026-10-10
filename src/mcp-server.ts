@@ -783,7 +783,7 @@ const HUDDLE_TOOLS: Tool[] = [
   {
     name: "huddle_close",
     description:
-      "@main and leads: ask the user to close the huddle once its work is done. First write the summary to outputs/huddle-summary.md " +
+      "@main and leads: ask the user to close the huddle once its work is done. First write the summary to outputs/huddles/<huddle id>/summary.md " +
       "in the host ticket's outputs folder (what was decided, the findings and their state, what is left). This tags the user; only the user closes the huddle.",
     inputSchema: {
       type: "object",

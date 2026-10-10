@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BoardClient } from "../src/client";
 import { callTool, type ToolContext } from "../src/mcp-server";
 import { Board } from "../src/server/board";
 import { Bus, type BusEvent } from "../src/server/events";
 import { createServer } from "../src/server/http";
-import { findingTitle, HUDDLE_IDLE_MS, Huddles, POST_MAX, SUMMARY_FILE } from "../src/server/huddle";
+import { fallbackSummary, findingTitle, HUDDLE_IDLE_MS, Huddles, LEGACY_SUMMARY_FILE, POST_MAX, summaryFile } from "../src/server/huddle";
 import { BUILTIN_PRESETS, deletePreset, mergePresets, presetSourceText, savePreset } from "../src/server/huddle-presets";
 import { huddleUsage } from "../src/server/huddle-usage";
 import { cleanLessons, LESSON_MAX, noteRole, parseNotes, serializeNotes } from "../src/server/huddle-notes";
@@ -1031,8 +1031,9 @@ test("huddle_close: only @main and leads ask, after writing the summary; only th
   expect(text(r)).toContain("only @main or a lead");
   const missing = await callTool("huddle_close", { reason: "all reviewed" }, mainCtx(h));
   expect(missing.isError).toBe(true);
-  expect(text(missing)).toContain(SUMMARY_FILE);
-  writeFileSync(join(store.outputsDir("p", t.id), SUMMARY_FILE), "# Summary\n");
+  expect(text(missing)).toContain(summaryFile(h.id));
+  mkdirSync(join(store.outputsDir("p", t.id), "huddles", h.id), { recursive: true });
+  writeFileSync(join(store.outputsDir("p", t.id), summaryFile(h.id)), "# Summary\n");
   expect(text(await callTool("huddle_close", { reason: "all reviewed" }, mainCtx(h)))).toContain("Only they close it");
   const s = store.getHuddle("p", h.id)!;
   expect(s.status).toBe("live");
@@ -1043,6 +1044,89 @@ test("huddle_close: only @main and leads ask, after writing the summary; only th
     method: "POST", headers: { "content-type": "application/json", "x-ckanban-run": `p/${t.id}` }, body: "{}",
   });
   expect(res.status).toBe(403);
+}, 20000);
+
+test("fallbackSummary: brief, roster with costs, findings, each lead's last word, output files mentioned", () => {
+  const h = {
+    id: "h_1", hostTicket: "t1", status: "closed", maxParticipants: 8, invited: [], seq: 4, createdAt: "2026-10-10T11:20:00.000Z", updatedAt: "",
+    closedAt: "2026-10-10T12:31:00.000Z", brief: { text: "Study the competitor", by: "you", at: "" },
+    participants: [
+      { handle: "main", kind: "ticket-main", role: "Coordinator", lead: false, status: "idle", costUsd: 1.5 },
+      { handle: "research", kind: "agent", role: "Researcher", lead: true, status: "done", costUsd: 2.25 },
+      { handle: "qa", kind: "agent", role: "QA", lead: false, status: "done", costUsd: 0.5 },
+      { handle: "you", kind: "human", role: "You", lead: false, status: "idle" },
+    ],
+    findings: [
+      { id: "f1", text: "pricing page is slow", by: "research", status: "resolved", resolvedBy: "main", at: "" },
+      { id: "f2", text: "no dark mode", by: "main", status: "open", resolvedBy: null, at: "" },
+    ],
+  } as unknown as Huddle;
+  const m = (seq: number, from: string, text: string, kind = "message") => ({ seq, from, text, kind, mentions: [], ts: "" }) as any;
+  const msgs = [m(1, "research", "first pass"), m(2, "research", "Report in outputs/research/report.md"), m(3, "qa", "see notes.md"), m(4, "main", "wrapping up")];
+  const md = fallbackSummary(h, msgs, ["notes.md", "other.md", summaryFile("h_1")]);
+  expect(md).toContain("Study the competitor");
+  expect(md).toContain("- @research: Researcher (lead) · done · $2.25");
+  expect(md).toContain("$4.25 spent");
+  expect(md).toContain("- [x] pricing page is slow (pinned by @research, resolved by @main)");
+  expect(md).toContain("- [ ] no dark mode (pinned by @main)");
+  expect(md).toContain("### @research (#2)\n\nReport in outputs/research/report.md");
+  expect(md).toContain("### @main (#4)");
+  expect(md).not.toContain("### @qa");
+  expect(md).not.toContain("first pass");
+  expect(md).toContain("- notes.md\n- research/report.md");
+  expect(md).not.toContain("other.md");
+});
+
+test("a huddle closed without a summary gets the board's own when the host can't run; each round keeps its own", async () => {
+  const t = await host();
+  const h1 = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  huddles.findings("p", h1.id, you(h1), "add", { text: "logout leaks the session" });
+  huddles.close("p", h1.id);
+  await idle();
+  const out = store.outputsDir("p", t.id);
+  const first = readFileSync(join(out, summaryFile(h1.id)), "utf8");
+  expect(first).toContain("Written by the board");
+  expect(first).toContain("logout leaks the session");
+  expect(huddles.list("p", t.id).find((x) => x.id === h1.id)!.summary).toBe(summaryFile(h1.id));
+  const h2 = huddles.create("p", t.id, [{ preset: "qa" }]);
+  await idle();
+  expect(huddles.list("p", t.id).find((x) => x.id === h2.id)!.summary).toBeNull();
+  huddles.close("p", h2.id);
+  await idle();
+  expect(existsSync(join(out, summaryFile(h2.id)))).toBe(true);
+  expect(readFileSync(join(out, summaryFile(h1.id)), "utf8")).toBe(first);
+}, 20000);
+
+test("closing without a summary asks @main to write it; the board writes it if @main's run ends without", async () => {
+  const t = await host();
+  await board.chat("p", t.id, "hello");
+  await idle();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  const before = heard().length;
+  huddles.close("p", h.id);
+  await until(() => heard().slice(before).some((x) => x.text.includes(`Huddle ${h.id} was closed without a summary`)));
+  await idle();
+  const file = join(store.outputsDir("p", t.id), summaryFile(h.id));
+  await until(() => existsSync(file));
+  expect(readFileSync(file, "utf8")).toContain("Written by the board");
+}, 20000);
+
+test("a summary in the older single file: a closed huddle reads it, and one written during the huddle becomes its own", async () => {
+  const t = await host();
+  const out = store.outputsDir("p", t.id);
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  writeFileSync(join(out, LEGACY_SUMMARY_FILE), "# Round summary\n");
+  expect(huddles.list("p", t.id)[0].summary).toBeNull();
+  huddles.close("p", h.id);
+  await idle();
+  expect(readFileSync(join(out, summaryFile(h.id)), "utf8")).toBe("# Round summary\n");
+  // An old closed huddle with no summary of its own reads the single file.
+  const old = { ...store.getHuddle("p", h.id)!, id: "h_old" };
+  store.saveHuddle("p", old);
+  expect(huddles.list("p", t.id).find((x) => x.id === "h_old")!.summary).toBe(LEGACY_SUMMARY_FILE);
 }, 20000);
 
 test("a pending restart waits for huddle agents mid-turn and holds new agent runs until recover", async () => {
