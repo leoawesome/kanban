@@ -8,7 +8,7 @@ const T = (p: Partial<Ticket>): Ticket => ({
   outcome: null, lastActivity: null, lastRunAt: null, runCount: 0, error: null, createdAt: "", updatedAt: "", body: "b", ...p,
 });
 const S = (p: Partial<SessionSummary>): SessionSummary => ({
-  title: null, lastMessage: null, artifacts: [], updatedAt: "", openQuestions: 0, pendingProposal: null, pendingNewTickets: [], ...p,
+  title: null, lastMessage: null, artifacts: [], updatedAt: "", openQuestions: 0, pendingProposal: null, pendingNewTickets: [], pendingTeammates: [], ...p,
 });
 
 test("running tickets never need the user", () => {
@@ -80,4 +80,13 @@ test("userWaitReason: plan children waiting on the user", () => {
   // Applied already: the ticket matches the proposal.
   expect(userWaitReason(T({ status: "backlog", title: "New", body: "d" }), S({ pendingProposal: { title: "New", description: "d" } }))).toBeNull();
   expect(userWaitReason(T({ status: "done" }), S({ openQuestions: 1 }))).toBeNull();
+});
+
+test("an unanswered teammate card asks for a review; saved or dismissed ones don't", () => {
+  const s = S({ pendingTeammates: ["toolu_a", "toolu_b"] });
+  expect(attentionFor(T({}), s, false)).toEqual({ kind: "proposal", label: "Review proposed teammate" });
+  expect(attentionFor(T({ teammateCards: { toolu_a: { state: "saved", at: "" } } }), s, false)?.kind).toBe("proposal");
+  expect(attentionFor(T({ teammateCards: { toolu_a: { state: "saved", at: "" }, toolu_b: { state: "dismissed", at: "" } } }), s, false)).toBeNull();
+  expect(attentionFor(T({ status: "review" }), S({ pendingTeammates: ["toolu_a"] }), false)?.kind).toBe("proposal");
+  expect(attentionFor(T({}), s, true)).toBeNull();
 });

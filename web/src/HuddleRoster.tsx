@@ -11,8 +11,8 @@ export type RosterRow = RosterEntry & { key: string };
 export type RosterDraft = Draft<RosterEntry, HuddleMode>;
 export { applyTemplate, DEFAULT_MAX, draftError, draftSize, rosterDraft, rowHandle };
 
-/** The board's huddle presets (null while loading). */
-export function usePresets(slug: string): HuddlePreset[] | null {
+/** The board's teammates (null while loading); a new `reload` value fetches them again. */
+export function usePresets(slug: string, reload: unknown = 0): HuddlePreset[] | null {
   const [presets, setPresets] = useState<HuddlePreset[] | null>(null);
   useEffect(() => {
     let live = true;
@@ -20,7 +20,7 @@ export function usePresets(slug: string): HuddlePreset[] | null {
     return () => {
       live = false;
     };
-  }, [slug]);
+  }, [slug, reload]);
   return presets;
 }
 

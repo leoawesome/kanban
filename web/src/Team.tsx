@@ -5,6 +5,7 @@ import { Select } from "./Select";
 import { TeamTemplates } from "./HuddleTemplates";
 import { fullTime, timeAgo } from "./time";
 import { plural, resetTitle, scopeChip, usageText } from "./teamText";
+import type { TeammateEditRequest } from "./teammateText";
 import { costText } from "./usage";
 
 const MODELS = ["opus", "sonnet", "haiku"];
@@ -20,6 +21,9 @@ const EMPTY: Draft = { name: "", role: "", prompt: "", model: null, mode: "tagge
 export type HuddleSeed = { preset: string } | { template: string };
 
 export type UsageMap = Record<string, TeamUsage>;
+
+/** What the Team tab is asked to show: the new-teammate editor, the editor prefilled (a proposal's Edit first), or a teammate. */
+export type TeamRequest = { action: "new" } | ({ action: "edit" } & TeammateEditRequest) | { action: "open"; name: string };
 
 /** Enter in these inputs must not submit anything around them. */
 const noSubmit = (e: KeyboardEvent) => {
@@ -55,8 +59,8 @@ export function TeamTab({ slug, boardName, active, openTicket, request, onStartH
   active: boolean;
   /** The ticket open in the drawer: Start huddle goes there (else to a new ticket in Planning). */
   openTicket: { id: string; title: string } | null;
-  /** "new": open the editor for a new teammate; `n` changes for each request. */
-  request?: { action: "new"; n: number } | null;
+  /** `n` changes for each request. */
+  request?: (TeamRequest & { n: number }) | null;
   onStartHuddle: (seed: HuddleSeed) => void;
   /** Open a ticket's Huddle tab (a huddle on this board). */
   onOpenHuddle?: (ticketId: string) => void;
@@ -75,7 +79,7 @@ export function TeamTab({ slug, boardName, active, openTicket, request, onStartH
   const [notes, setNotes] = useState<{ notes: HuddleNotes; cap: number } | null>(null);
   const [usage, setUsage] = useState<{ teammates: UsageMap; templates: UsageMap } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ draft: Draft; isNew: boolean; scope: Level } | null>(null);
+  const [editing, setEditing] = useState<{ draft: Draft; isNew: boolean; scope: Level; card?: TeammateEditRequest["card"] } | null>(null);
   /** Templates view: open the new-template editor; n changes per request. */
   const [newTemplate, setNewTemplate] = useState(0);
   const [err, setErr] = useState<string | null>(null);
@@ -103,7 +107,15 @@ export function TeamTab({ slug, boardName, active, openTicket, request, onStartH
     setEditing({ draft: { ...EMPTY }, isNew: true, scope: "global" });
   };
   useEffect(() => {
-    if (request?.action === "new") newTeammate();
+    if (!request) return;
+    setErr(null);
+    if (request.action === "new") return newTeammate();
+    setView("teammates");
+    setFilter("");
+    if (request.action === "edit") return setEditing({ draft: { ...request.draft }, isNew: request.isNew, scope: request.scope, card: request.card });
+    setEditing(null);
+    setSelected(request.name);
+    loadPresets();
   }, [request?.n]);
 
   const q = filter.trim().toLowerCase();
@@ -183,7 +195,13 @@ export function TeamTab({ slug, boardName, active, openTicket, request, onStartH
               <TeammateEditor key={editing.isNew ? "new" : editing.draft.name} slug={slug} boardName={boardName} {...editing}
                 current={presets?.find((p) => p.name === editing.draft.name) ?? null}
                 onCancel={() => setEditing(null)}
-                onSaved={(p) => { setEditing(null); setSelected(p.name); loadPresets(); }} />
+                onSaved={(p, scope) => {
+                  // Saved from a proposal's Edit first: the chat card says so.
+                  if (editing.card) api.answerTeammateCard(slug, editing.card.ticketId, editing.card.uuid, { state: "saved", name: p.name, scope }).catch(fail);
+                  setEditing(null);
+                  setSelected(p.name);
+                  loadPresets();
+                }} />
             ) : cur ? (
               <TeammateDetail key={cur.name} slug={slug} p={cur} usage={usage?.teammates[cur.name]} notes={notes} startHint={startHint}
                 onEdit={() => { setErr(null); setEditing({ draft: draftOf(cur), isNew: false, scope: cur.source === "board" ? "board" : "global" }); }}
@@ -314,7 +332,7 @@ function TeammateEditor({ slug, boardName, draft: initial, isNew, scope: initial
   /** The teammate as it is now (null: a new one). */
   current: HuddlePreset | null;
   onCancel: () => void;
-  onSaved: (p: HuddlePreset) => void;
+  onSaved: (p: HuddlePreset, scope: Level) => void;
 }) {
   const [draft, setDraft] = useState(initial);
   const [scope, setScope] = useState<Level>(initialScope);
@@ -326,7 +344,7 @@ function TeammateEditor({ slug, boardName, draft: initial, isNew, scope: initial
     setBusy(true);
     setErr(null);
     try {
-      onSaved(await api.saveHuddlePreset(slug, draft, scope));
+      onSaved(await api.saveHuddlePreset(slug, draft, scope), scope);
     } catch (e) {
       setErr((e as Error).message);
     } finally {

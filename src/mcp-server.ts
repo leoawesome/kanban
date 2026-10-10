@@ -5,8 +5,9 @@ import {
   ticketLine, ticketText, type HuddlePage, type ScheduleHistoryInfo, type ScheduleInfo, type ScheduleInput, type TicketPatch,
 } from "./client";
 import { BUILTIN_PRESETS, MAIN_PRESET, presetLine, presetName } from "./server/huddle-presets";
-import { huddleLine, rosterEntryError, rosterError } from "./server/huddle-roster";
+import { HUDDLE_AGENT_ENV, huddleLine, rosterEntryError, rosterError } from "./server/huddle-roster";
 import { BUILTIN_TEMPLATES, templateLine } from "./server/huddle-templates";
+import { teammateProposal } from "./server/teammate-proposal";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -109,7 +110,7 @@ export interface ToolContext {
     | "comment" | "ask" | "pollQuestion" | "replyQuestion" | "reportBug" | "listSchedules" | "createSchedule" | "updateSchedule" | "deleteSchedule" | "runSchedule"
     | "scheduleHistory" | "cronPreview" | "adopt" | "planAction" | "huddleRead" | "huddlePost" | "huddleMode" | "huddleAdd" | "huddleFindings"
     | "huddleStatus" | "huddleCloseRequest"
-    | "listHuddlePresets" | "saveHuddlePreset" | "deleteHuddlePreset" | "listHuddleTemplates" | "huddleBrief">;
+    | "listHuddlePresets" | "saveHuddlePreset" | "deleteHuddlePreset" | "listHuddleTemplates" | "huddleBrief" | "huddleProposeTeammate">;
   cwd: string;
   env: Record<string, string | undefined>;
   main?: (dir: string) => string | null;
@@ -438,6 +439,21 @@ export function ticketsError(args: any): string | null {
 
 const TITLE = { type: "string", description: "Short, specific title (under 80 characters)." };
 
+/** Teammate (huddle role preset) fields, shared by save_huddle_preset and propose_teammate. */
+const PRESET_FIELDS = {
+  name: { type: "string", description: "Preset name, also the default @handle, e.g. \"a11y\" (lowercase letters, digits, dashes)." },
+  prompt: { type: "string", description: "What this role does in a huddle: its job, what to look at, how to report." },
+  role: { type: "string", description: "Label shown in the huddle, e.g. \"Accessibility tester\". Default: from the name." },
+  model: { type: "string", description: "Default model, e.g. sonnet. Empty: the board's." },
+  mode: { type: "string", enum: ["tagged", "monitor"], description: "tagged: sleeps until @mentioned. monitor: gets every new message. Default tagged." },
+  lead: { type: "boolean", description: "May add participants and manage the findings list. Default false." },
+  canEdit: { type: "boolean", description: "May edit tracked files (only in its own worktree). Default: true for workspace own." },
+  workspace: { type: "string", enum: ["shared", "own"], description: "shared: read-only in the host ticket's worktree. own: its own worktree and branch. Default shared." },
+};
+
+const PROPOSE_INSTEAD = "Nothing was saved: inside a board or huddle run only the user saves teammates. Call propose_teammate with the same fields and a one-line why; " +
+  "the user saves it with one click (in a ticket chat it shows as a card, in a huddle under Learnings).";
+
 const PLANNING_TOOLS: Tool[] = [
   {
     name: "ask_questions",
@@ -550,6 +566,37 @@ const PLANNING_TOOLS: Tool[] = [
       const missing = ids.filter((id) => !known.has(id));
       if (missing.length === ids.length) throw new ClientError(`no such ticket on board ${slug}: ${missing.join(", ")}. Check list_tickets.`);
       return SHOWN + (missing.length ? ` Not on board ${slug}, shown as skipped: ${missing.join(", ")}.` : "");
+    },
+  },
+  {
+    name: "propose_teammate",
+    description:
+      "Board ticket chat (any column) or huddle agent: propose a teammate (huddle role preset) when no existing one fits the job, e.g. \"a teammate that watches X\". " +
+      "Call list_huddle_presets first: reuse a teammate that fits; giving an existing name proposes a change to it (fields you leave out keep its values). " +
+      "In a ticket chat the board shows a card; the user saves it for all boards or this board, edits it first, or dismisses it. " +
+      "From a huddle agent it goes to the huddle's Learnings for the user to review. Nothing is saved by the call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...PRESET_FIELDS,
+        why: { type: "string", description: "One line: why no existing teammate fits (e.g. no teammate watches a web inbox; @researcher only reads and reports)." },
+      },
+      required: ["name", "prompt", "why"],
+    },
+    annotations: { readOnlyHint: true },
+    changes: false,
+    async run(args, ctx) {
+      const { profile: _p, ...input } = args ?? {};
+      try {
+        teammateProposal(input);
+      } catch (e) {
+        throw new ClientError(`${(e as Error).message}. Fix it and call propose_teammate again.`);
+      }
+      if (!ctx.env[HUDDLE_AGENT_ENV]) return SHOWN;
+      // A huddle agent: its session is no ticket chat, so the proposal waits under the huddle's Learnings.
+      const slug = await slugFor({}, ctx);
+      const l = await ctx.client.huddleProposeTeammate(slug, "current", input, huddleCaller(ctx.env));
+      return `Proposed teammate @${l.teammate?.name ?? input.name}: the user reviews it under the huddle's Learnings and saves it with one click. Nothing is saved until then; carry on with your work.`;
     },
   },
   {
@@ -900,21 +947,14 @@ const HUDDLE_TOOLS: Tool[] = [
   {
     name: "save_huddle_preset",
     description:
-      `Create or change a teammate (huddle role preset), e.g. when a role you need keeps coming up. Saving a built-in's name (${BUILTIN_PRESETS.map((p) => p.name).join(", ")}) ` +
+      `Create or change a teammate (huddle role preset) for the user, outside board runs. Saving a built-in's name (${BUILTIN_PRESETS.map((p) => p.name).join(", ")}) ` +
       "overrides it; delete_huddle_preset resets it. scope board (default) saves it for this board only, global for every board. Fields you leave out keep the existing teammate's values. " +
-      "From a board or huddle run you can only add new names to the board, not change built-ins or the user's teammates.",
+      "Inside a board or huddle run it saves nothing: use propose_teammate, and the user saves it with one click.",
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Preset name, also the default @handle, e.g. \"a11y\" (lowercase letters, digits, dashes)." },
-        prompt: { type: "string", description: "What this role does in a huddle: its job, what to look at, how to report." },
-        role: { type: "string", description: "Label shown in the huddle, e.g. \"Accessibility tester\". Default: from the name." },
-        model: { type: "string", description: "Default model, e.g. sonnet. Empty: the board's." },
-        mode: { type: "string", enum: ["tagged", "monitor"], description: "tagged: sleeps until @mentioned. monitor: gets every new message. Default tagged." },
-        lead: { type: "boolean", description: "May add participants and manage the findings list. Default false." },
-        canEdit: { type: "boolean", description: "May edit tracked files (only in its own worktree). Default: true for workspace own." },
-        workspace: { type: "string", enum: ["shared", "own"], description: "shared: read-only in the host ticket's worktree. own: its own worktree and branch. Default shared." },
-        scope: { type: "string", enum: ["board", "global"], description: "board: this board only (default). global: every board (not from a run)." },
+        ...PRESET_FIELDS,
+        scope: { type: "string", enum: ["board", "global"], description: "board: this board only (default). global: every board." },
         profile: PROFILE,
       },
       required: ["name", "prompt"],
@@ -922,6 +962,8 @@ const HUDDLE_TOOLS: Tool[] = [
     changes: true,
     allowInRun: true,
     async run(args, ctx) {
+      // Only the user saves teammates; a run proposes one (the daemon refuses runs too).
+      if (ctx.env[RUN_ENV] || ctx.env[HUDDLE_AGENT_ENV]) return PROPOSE_INSTEAD;
       const { profile: _p, ...input } = args ?? {};
       const slug = await slugFor(args, ctx);
       const p = await ctx.client.saveHuddlePreset(slug, input, huddleCaller(ctx.env));
@@ -1334,7 +1376,7 @@ export async function handleMessage(msg: JsonRpc, ctx: ToolContext): Promise<obj
           "Tools for the user's local ckanban board. Use them when the user asks to put work on the board, " +
           "find what to do next, or check on, start or steer tickets. Tickets you create land in Backlog in interview mode by default. " +
           "Schedules (create_schedule etc.) make the board create and run a ticket on a cron, for work the user wants done regularly. " +
-          "ask_questions, propose_ticket, propose_tickets and propose_branch are for the board's ticket chats: they show a form or cards to the user. " +
+          "ask_questions, propose_ticket, propose_tickets, propose_branch and propose_teammate are for the board's ticket chats: they show a form or cards to the user. " +
           "read_artifact and publish_artifact read, update and publish claude.ai artifacts where the Artifact tool isn't available.",
       });
     }

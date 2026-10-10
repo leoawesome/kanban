@@ -168,8 +168,17 @@ test("every ticket chat can offer a branch; first runs can't", () => {
   expect(chatPrompt(t, "branch this", "refine", "/o")).toContain("`propose_branch` tool");
   const act = chatPrompt(t, "branch this", "act", "/o");
   expect(act).toContain("`propose_branch` tool");
-  expect(act).toContain("proposing tickets or a branch was all");
+  expect(act).toContain("proposing tickets, a branch or a teammate was all");
   expect(firstRunPrompt(t, { isGit: true, outputDir: "/o" })).not.toContain("propose_branch");
+});
+
+test("every ticket chat may propose a teammate; it can't save one", () => {
+  const t = { ...ticket, runCount: 1 } as Ticket;
+  for (const mode of ["refine", "act"] as const) {
+    const p = chatPrompt(t, "I want a teammate that watches our inbox", mode, "/o");
+    expect(p).toContain("`propose_teammate` tool");
+    expect(p).toContain("save_huddle_preset saves nothing here");
+  }
 });
 
 test("planner wake-ups: events or final check, scoped rights, one visible line first", () => {

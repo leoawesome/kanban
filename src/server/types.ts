@@ -1,3 +1,5 @@
+import type { TeammateProposal } from "./teammate-proposal";
+
 export type Status = "backlog" | "planning" | "ready" | "in_progress" | "review" | "done";
 export type Outcome = null | "done" | "blocked" | "failed" | "stopped" | "needs_input";
 /** interview: Claude asks clarifying questions before doing the work. auto: just do it. */
@@ -102,9 +104,19 @@ export interface Ticket {
   slotWait?: { at: string; from: Pick<Ticket, "status" | "outcome"> } | null;
   /** Output files the user published as claude.ai pages from the Outputs tab, one link per file. */
   shareLinks?: ShareLink[];
+  /** Teammate cards in this ticket's chat (propose_teammate) the user answered, by entry uuid (the tool_use id). */
+  teammateCards?: Record<string, TeammateCardState>;
   createdAt: string;
   updatedAt: string;
   body: string;
+}
+
+/** What the user did with a proposed teammate: saved it (as `name`, for all boards or this board) or dismissed it. */
+export interface TeammateCardState {
+  state: "saved" | "dismissed";
+  name?: string;
+  scope?: "global" | "board";
+  at: string;
 }
 
 export interface ShareLink {
@@ -393,6 +405,11 @@ export interface HuddleLearning {
   at: string;
   /** Saved as the first note of a new preset made from the ad-hoc role. */
   newRole?: boolean;
+  /**
+   * A teammate the agent proposed (propose_teammate) instead of a lesson: text is its why, scope general saves it for
+   * all boards, repo for this board; once saved, target is its name.
+   */
+  teammate?: TeammateProposal;
 }
 
 export type HuddleMessageKind = "message" | "finding" | "system";

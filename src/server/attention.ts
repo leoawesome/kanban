@@ -35,6 +35,7 @@ export function attentionFor(
     return { kind: "proposal", label: "Review proposal" };
   }
   if (s?.pendingNewTickets?.some((n) => !o.createdTitles?.has(n.title))) return { kind: "proposal", label: "Review proposed tickets" };
+  if (s?.pendingTeammates?.some((id) => !t.teammateCards?.[id])) return { kind: "proposal", label: "Review proposed teammate" };
   if (t.status === "review") return { kind: "review", label: "Ready for review" };
   // A reply cut off by a restart isn't a reply yet: recover() resumes it.
   if (t.status === "planning" && s?.lastMessage?.role === "assistant" && !s.lastMessage.peerReply && !t.interrupted) return { kind: "reply", label: "Claude replied" };

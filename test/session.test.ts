@@ -351,6 +351,32 @@ test("parseSession: propose_delete shows a delete card; a refused call shows non
   expect(parseSession(asst([{ type: "tool_use", id: "x", name: "propose_delete", input: { ids: [] } }], "1")).entries[0].kind).toBe("tool");
 });
 
+test("parseSession: propose_teammate shows a teammate card; refused or broken calls show none; pending until the user's next message", () => {
+  const input = { name: "WA Watcher", role: " WhatsApp responder ", prompt: " Draft replies. ", model: "", mode: "tagged", workspace: "shared", canEdit: false, why: " No teammate watches a web inbox. " };
+  const s = parseSession(asst([{ type: "tool_use", id: "toolu_t", name: "mcp__ckanban__propose_teammate", input }], "2026-10-10T01:00:00Z"));
+  expect(s.entries).toEqual([{
+    uuid: "toolu_t", at: "2026-10-10T01:00:00Z", role: "assistant", kind: "text", text: "",
+    teammate: { name: "wa-watcher", role: "WhatsApp responder", prompt: "Draft replies.", model: null, mode: "tagged", workspace: "shared", canEdit: false, why: "No teammate watches a web inbox." },
+  }]);
+  expect(s.lastMessage?.text).toBe("Proposed teammate @wa-watcher");
+  expect(s.pendingTeammates).toEqual(["toolu_t"]);
+  // Fields Claude left out stay out (an existing teammate keeps its values for them).
+  expect(parseSession(asst([{ type: "tool_use", id: "t2", name: "propose_teammate", input: { name: "qa", prompt: "p", why: "w" } }], "1")).entries[0].teammate).toEqual({ name: "qa", prompt: "p", why: "w" });
+  const refused = parseSession([
+    asst([{ type: "tool_use", id: "toolu_bad", name: "mcp__ckanban__propose_teammate", input }], "2026-10-10T01:00:00Z"),
+    user([{ type: "tool_result", tool_use_id: "toolu_bad", is_error: true, content: [{ type: "text", text: "nope" }] }], "2026-10-10T01:00:01Z"),
+  ].join("\n"));
+  expect(refused.entries.some((e) => e.teammate)).toBe(false);
+  for (const bad of [{ name: "x", prompt: "p" }, { name: "you", prompt: "p", why: "w" }, { name: "x", prompt: "p", why: "w", mode: "loud" }]) {
+    expect(parseSession(asst([{ type: "tool_use", id: "x", name: "propose_teammate", input: bad }], "1")).entries[0].kind).toBe("tool");
+  }
+  const answered = parseSession([
+    asst([{ type: "tool_use", id: "toolu_t", name: "mcp__ckanban__propose_teammate", input }], "2026-10-10T01:00:00Z"),
+    user("thanks", "2026-10-10T01:00:01Z"),
+  ].join("\n"));
+  expect(answered.pendingTeammates).toEqual([]);
+});
+
 test("parseSession: an unreadable planning tool call falls back to a tool line", () => {
   const s = parseSession(asst([{ type: "tool_use", id: "x", name: "mcp__ckanban__propose_tickets", input: { tickets: "nope" } }], "1"));
   expect(s.entries[0].kind).toBe("tool");

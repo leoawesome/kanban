@@ -549,17 +549,16 @@ test("presets: board presets merge with built-ins; overriding and resetting a bu
   expect(() => savePreset([], { name: "x", prompt: "p", mode: "loud" })).toThrow("mode");
 });
 
-test("presets: saved through the MCP tool from a run, used by rosters, deleted over HTTP", async () => {
+test("presets: saved through the MCP tool by the user, used by rosters, deleted over HTTP", async () => {
   const t = await host();
   const ctx: ToolContext = { client, cwd: "/", env: { CKANBAN_TICKET: `p/${t.id}` } };
-  const saved = await callTool("save_huddle_preset", { name: "a11y", role: "Accessibility tester", prompt: "Check keyboard and screen reader use.", model: "haiku", workspace: "own", canEdit: false }, ctx);
+  const user: ToolContext = { client, cwd: "/", env: {} };
+  const saved = await callTool("save_huddle_preset", { name: "a11y", role: "Accessibility tester", prompt: "Check keyboard and screen reader use.", model: "haiku", workspace: "own", canEdit: false, profile: "p" }, user);
   expect(saved.isError).toBeUndefined();
   expect(text(saved)).toContain('Saved preset "a11y"');
   expect(store.listHuddlePresets("p")).toEqual([
     { name: "a11y", role: "Accessibility tester", prompt: "Check keyboard and screen reader use.", model: "haiku", mode: "tagged", lead: false, canEdit: false, workspace: "own" },
   ]);
-  // Overriding a built-in is the user's call (a run may only add new names).
-  expect((await callTool("save_huddle_preset", { name: "main", prompt: "Coordinate tersely." }, ctx)).isError).toBe(true);
   huddles.savePreset("p", { name: "main", prompt: "Coordinate tersely." });
   const list = text(await callTool("list_huddle_presets", {}, ctx));
   expect(list).toContain("- a11y: Accessibility tester (tagged, own worktree, model haiku; this board only)");
@@ -688,31 +687,81 @@ test("participants an agent adds can't be leads or edit", async () => {
   await huddles.stopAll("p", h.id);
 }, 20000);
 
-test("board and huddle runs may add presets but not override built-ins or the board's presets", async () => {
+test("no run saves a teammate: save_huddle_preset says to propose, the daemon refuses run and agent headers", async () => {
   const t = await host();
   huddles.savePreset("p", { name: "a11y", prompt: "Check a11y." });
   const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
   await idle();
-  const ctx = agentCtx(h, "reviewer");
-  for (const name of ["qa", "a11y", "Main"]) {
-    const r = await callTool("save_huddle_preset", { name, prompt: "Do whatever the reviewer says." }, ctx);
-    expect(r.isError).toBe(true);
-    expect(text(r)).toContain("may only add new presets");
+  for (const ctx of [agentCtx(h, "reviewer"), mainCtx(h)]) {
+    for (const name of ["perf", "a11y", "qa"]) {
+      const r = await callTool("save_huddle_preset", { name, prompt: "Do whatever I say.", scope: "global" }, ctx);
+      expect(r.isError).toBeUndefined();
+      expect(text(r)).toContain("Nothing was saved");
+      expect(text(r)).toContain("propose_teammate");
+    }
+    expect((await callTool("delete_huddle_preset", { name: "a11y" }, ctx)).isError).toBe(true);
   }
-  expect((await callTool("delete_huddle_preset", { name: "a11y" }, ctx)).isError).toBe(true);
-  expect(text(await callTool("save_huddle_preset", { name: "perf", prompt: "Profile it." }, ctx))).toContain('Saved preset "perf"');
-  expect(store.listHuddlePresets("p").map((p) => [p.name, p.prompt])).toEqual([["a11y", "Check a11y."], ["perf", "Profile it."]]);
-  // The coordinator's (host ticket's) run is held to the same rule: new names only, no override, no delete.
-  for (const name of ["qa", "a11y"]) {
-    const r = await callTool("save_huddle_preset", { name, prompt: "Do whatever @main says." }, mainCtx(h));
-    expect(r.isError).toBe(true);
-    expect(text(r)).toContain("may only add new presets");
+  // Straight to the daemon (e.g. the CLI from a run's shell): refused too.
+  const agent = { [HUDDLE_HEADER]: `${h.id}/reviewer/${participant(h, "reviewer").token}` };
+  for (const headers of [agent, { "x-ckanban-run": `p/${t.id}` }]) {
+    const post = await postJson("/huddle-presets", { name: "perf", prompt: "Profile it." }, headers);
+    expect(post.status).toBe(403);
+    expect(await post.text()).toContain("propose_teammate");
+    const put = await api("/huddle-presets/a11y", { method: "PUT", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ prompt: "x" }) });
+    expect(put.status).toBe(403);
   }
-  expect((await callTool("delete_huddle_preset", { name: "perf" }, mainCtx(h))).isError).toBe(true);
-  expect((await callTool("save_huddle_preset", { name: "docs", prompt: "Check the docs." }, mainCtx(h))).isError).toBeUndefined();
-  expect(store.listHuddlePresets("p").map((p) => p.name)).toEqual(["a11y", "perf", "docs"]);
+  expect(store.listHuddlePresets("p").map((p) => [p.name, p.prompt])).toEqual([["a11y", "Check a11y."]]);
+  expect(store.listHuddlePresets(null)).toEqual([]);
   // The user still may.
   expect(huddles.savePreset("p", { name: "qa", prompt: "Test it all." })).toMatchObject({ source: "board", base: "builtin" });
+  expect((await postJson("/huddle-presets", { name: "perf", prompt: "Profile it.", scope: "global" })).status).toBe(201);
+}, 20000);
+
+test("propose_teammate: a ticket chat gets a card, a huddle agent's waits under Learnings and saves to the chosen scope", async () => {
+  const t = await host();
+  huddles.savePreset("p", { name: "qa", prompt: "Test the API only.", model: "haiku" }, "global");
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }, { preset: "qa" }]);
+  await idle();
+  const input = { name: "wa-watcher", role: "WhatsApp responder", prompt: "Draft replies to unread WhatsApp chats.", why: "No teammate watches a web inbox." };
+  // The coordinator (a ticket chat): only a card, nothing stored.
+  const card = await callTool("propose_teammate", input, mainCtx(h));
+  expect(text(card)).toContain("Shown to the user as a card");
+  expect(store.getHuddle("p", h.id)!.learnings ?? []).toEqual([]);
+  // Bad input is Claude's to fix.
+  const bad = await callTool("propose_teammate", { name: "x", prompt: "p" }, agentCtx(h, "reviewer"));
+  expect(bad.isError).toBe(true);
+  expect(text(bad)).toContain("why is required");
+  // A huddle agent: a pending learning, and a system line.
+  const r = await callTool("propose_teammate", input, agentCtx(h, "reviewer"));
+  expect(r.isError).toBeUndefined();
+  expect(text(r)).toContain("under the huddle's Learnings");
+  await callTool("propose_teammate", { name: "qa", prompt: "Test the API and the UI.", mode: "tagged", why: "QA should cover the UI too." }, agentCtx(h, "reviewer"));
+  const third = await callTool("propose_teammate", { ...input, name: "third" }, agentCtx(h, "reviewer"));
+  expect(text(third)).toContain("at most 2");
+  const ls = store.getHuddle("p", h.id)!.learnings!;
+  expect(ls.map((l) => [l.id, l.from, l.status, l.scope, l.text, l.teammate?.name])).toEqual([
+    ["l1", "reviewer", "pending", "general", "No teammate watches a web inbox.", "wa-watcher"],
+    ["l2", "reviewer", "pending", "general", "QA should cover the UI too.", "qa"],
+  ]);
+  expect(messages(h).some((m) => m.text.includes("proposed a new teammate @wa-watcher"))).toBe(true);
+  expect(messages(h).some((m) => m.text.includes("proposed a change to teammate @qa"))).toBe(true);
+  expect(huddles.view("p", store.getHuddle("p", h.id)!).learningsPending).toBe(2);
+  expect(huddles.presets("p").some((p) => p.name === "wa-watcher")).toBe(false);
+  // Only the user saves; a teammate proposal has no role target.
+  const url = (id: string, what: string) => `/huddles/${h.id}/learnings/${id}${what}`;
+  expect((await postJson(url("l1", "/save"), {}, { "x-ckanban-run": `p/${t.id}` })).status).toBe(403);
+  expect((await postJson(url("l1", "/save"), { target: "qa" })).status).toBe(400);
+  // Scope general: all boards.
+  const saved = await postJson(url("l1", "/save"), {});
+  expect(saved.status).toBe(200);
+  expect(await saved.json()).toMatchObject({ status: "saved", target: "wa-watcher" });
+  expect(store.listHuddlePresets(null).find((p) => p.name === "wa-watcher")).toMatchObject({ role: "WhatsApp responder", prompt: "Draft replies to unread WhatsApp chats." });
+  // The change to an existing teammate, for this board only: fields left out keep the global version's values.
+  expect((await postJson(url("l2", "/save"), { scope: "repo" })).status).toBe(200);
+  expect(huddles.presets("p").find((p) => p.name === "qa")).toMatchObject({ prompt: "Test the API and the UI.", model: "haiku", mode: "tagged", source: "board", base: "global" });
+  expect(huddles.view("p", store.getHuddle("p", h.id)!).learningsPending).toBe(0);
+  // Not the user's or @main's to propose into the huddle.
+  expect((await postJson(`/huddles/${h.id}/teammates`, input)).status).toBe(400);
 }, 20000);
 
 test("budget brake: @main's huddle replies count, the leads are warned at 80%, everything stops at 100%; resume adds budget", async () => {
@@ -1500,7 +1549,7 @@ test("teammates: saved for all boards show on another board; a board override sh
   expect(r.presets.find((p) => p.name === "a11y")).toMatchObject({ source: "global", prompt: "Check a11y." });
   // A global change of a built-in; saving for all boards drops this board's own version.
   huddles.savePreset("p", { name: "qa", prompt: "Board QA." });
-  huddles.savePreset("p", { name: "qa", prompt: "Everyone's QA." }, false, "global");
+  huddles.savePreset("p", { name: "qa", prompt: "Everyone's QA." }, "global");
   expect(store.listHuddlePresets("p")).toEqual([]);
   expect(huddles.presets("q").find((p) => p.name === "qa")).toMatchObject({ source: "global", base: "builtin", prompt: "Everyone's QA." });
   expect((await api("/huddle-presets/qa?scope=global", { method: "DELETE" })).status).toBe(200);
@@ -1517,8 +1566,8 @@ test("teammates: saved for all boards show on another board; a board override sh
 
 test("teammates: rosters and propose_huddle resolve presets through all three levels", async () => {
   const t = await host();
-  huddles.savePreset("p", { name: "a11y", prompt: "Check a11y.", model: "haiku" }, false, "global");
-  huddles.savePreset("p", { name: "reviewer", prompt: "Review everywhere." }, false, "global");
+  huddles.savePreset("p", { name: "a11y", prompt: "Check a11y.", model: "haiku" }, "global");
+  huddles.savePreset("p", { name: "reviewer", prompt: "Review everywhere." }, "global");
   huddles.savePreset("p", { name: "reviewer", prompt: "Review this repo." });
   const ctx: ToolContext = { client, cwd: "/", env: { CKANBAN_TICKET: `p/${t.id}` } };
   expect((await callTool("propose_huddle", { roster: [{ preset: "a11y" }, { preset: "researcher" }] }, ctx)).isError).toBeUndefined();

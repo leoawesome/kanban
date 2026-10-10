@@ -1,7 +1,12 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, subscribe, type Huddle, type NewTicketDraft, type OutputFile, type QueuedMessage, type SessionEntry, type Ticket } from "./api";
+import {
+  api, subscribe, type Huddle, type Level, type NewTicketDraft, type OutputFile, type QueuedMessage, type SessionEntry, type TeammateProposal, type Ticket,
+} from "./api";
 import { HuddleCard } from "./HuddleCard";
 import { HuddleDigest } from "./HuddleDigest";
+import { usePresets } from "./HuddleRoster";
+import type { TeamRequest } from "./Team";
+import { TeammateCard } from "./TeammateCard";
 import { autoGrow } from "./autoGrow";
 import { branchTicket } from "./branch";
 import { BranchCard } from "./BranchCard";
@@ -136,7 +141,7 @@ export function useStop(slug: string, ticket: Ticket, working: boolean, onError:
 /** A queued peer message that carries huddle messages (see the server's huddleMainPrompt). */
 const HUDDLE_TAG = /<ckanban-context[^>]* huddle="/;
 
-export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onError, onPendingProposal, huddle = null, onOpenHuddle }: {
+export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onError, onPendingProposal, huddle = null, onOpenHuddle, onOpenTeam }: {
   slug: string;
   ticket: Ticket;
   /** The board's tickets, to tell which proposed new tickets already exist. */
@@ -151,6 +156,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   /** The ticket's huddle, to tell whether a proposed one was started. */
   huddle?: Huddle | null;
   onOpenHuddle?: () => void;
+  /** Open the dock's Team tab: a proposed teammate's editor (Edit first) or a saved one (Open in Team). */
+  onOpenTeam?: (r: TeamRequest) => void;
 }) {
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -412,6 +419,21 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
     }
   };
 
+  // Teammate cards: the board's teammates tell a new one from a change; reloaded after each save.
+  const [presetsVersion, setPresetsVersion] = useState(0);
+  const presets = usePresets(slug, presetsVersion);
+  const saveTeammate = async (uuid: string, p: TeammateProposal, scope: Level) => {
+    try {
+      const { why: _w, ...fields } = p;
+      const saved = await api.saveHuddlePreset(slug, fields, scope);
+      await api.answerTeammateCard(slug, ticket.id, uuid, { state: "saved", name: saved.name, scope });
+      setPresetsVersion((n) => n + 1);
+    } catch (err: any) {
+      onError(err.message);
+    }
+  };
+  const dismissTeammate = (uuid: string) => api.answerTeammateCard(slug, ticket.id, uuid, { state: "dismissed" }).then(() => {}, (err) => onError(err.message));
+
   const pendingProposal = entries.findLast((e) => e.proposal && !isApplied(e.proposal));
   const applyPendingRef = useRef((_start: boolean) => Promise.resolve());
   applyPendingRef.current = (start) => (pendingProposal?.proposal
@@ -490,6 +512,13 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
               )}
               {e.deletion && (
                 <DeleteCard slug={slug} ticket={ticket} tickets={tickets} uuid={e.uuid} ids={e.deletion.ids} reason={e.deletion.reason} onError={onError} />
+              )}
+              {e.teammate && (
+                <TeammateCard proposal={e.teammate} presets={presets} answered={ticket.teammateCards?.[e.uuid]}
+                  onSave={(scope) => saveTeammate(e.uuid, e.teammate!, scope)}
+                  onEdit={onOpenTeam && ((scope, draft, isNew) => onOpenTeam({ action: "edit", draft, isNew, scope, card: { ticketId: ticket.id, uuid: e.uuid } }))}
+                  onDismiss={() => dismissTeammate(e.uuid)}
+                  onOpenTeam={onOpenTeam && ((name) => onOpenTeam({ action: "open", name }))} />
               )}
               {e.huddle && (
                 <HuddleCard slug={slug} ticket={ticket} tickets={tickets} uuid={e.uuid} at={e.at} roster={e.huddle.roster} reason={e.huddle.reason} template={e.huddle.template}

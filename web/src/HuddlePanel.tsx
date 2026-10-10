@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
-import { api, type Huddle, type HuddleLearning, type HuddleMessage, type HuddleMode, type HuddleParticipant, type HuddlePreset, type Ticket } from "./api";
+import {
+  api, type Huddle, type HuddleLearning, type HuddleMessage, type HuddleMode, type HuddleParticipant, type HuddlePreset, type Level, type TeammateProposal, type Ticket,
+} from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { draftKey, formKey } from "./drafts";
 import {
@@ -16,7 +18,9 @@ import { fullTime, useNow } from "./time";
 import { SessionPanel } from "./HuddleSession";
 import { Markdown } from "./Transcript";
 import { usePersistentState } from "./usePersistentState";
-import type { HuddleSeed } from "./Team";
+import type { HuddleSeed, TeamRequest } from "./Team";
+import { TeammateProposalView } from "./TeammateCard";
+import { savedText } from "./teammateText";
 
 const clock = (iso: string) => {
   const d = new Date(iso);
@@ -40,7 +44,7 @@ function Avatar({ handle, small }: { handle: string; small?: boolean }) {
 }
 
 /** The Huddle tab: the ticket's huddle (feed, roster, findings, composer), or a roster editor to start one. */
-export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat, onOpenTicket, seed = null }: {
+export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat, onOpenTicket, onOpenTeam, seed = null }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
@@ -51,6 +55,8 @@ export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat,
   /** The session viewer's link for @main (the ticket's own chat) and for invited tickets. */
   onOpenChat: () => void;
   onOpenTicket: (id: string) => void;
+  /** Show a teammate in the dock's Team tab (a saved proposal's Open in Team). */
+  onOpenTeam?: (r: TeamRequest) => void;
 }) {
   // Starting a new huddle after the last one closed (its history stays a click away).
   const [fresh, setFresh] = useState(false);
@@ -73,7 +79,7 @@ export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat,
       onStarted={() => state.reload()} seed={seed} />;
   }
   return <HuddleRoom slug={slug} ticket={ticket} tickets={tickets} huddle={h} state={state} onError={onError} onNew={() => setFresh(true)}
-    onOpenChat={onOpenChat} onOpenTicket={onOpenTicket} seed={seed} />;
+    onOpenChat={onOpenChat} onOpenTicket={onOpenTicket} onOpenTeam={onOpenTeam} seed={seed} />;
 }
 
 /** No huddle yet: pick a roster and start one by hand. */
@@ -149,7 +155,7 @@ function StartHuddle({ slug, ticket, tickets, onError, onBack, onStarted, seed }
   );
 }
 
-function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, onOpenChat, onOpenTicket, seed }: {
+function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, onOpenChat, onOpenTicket, onOpenTeam, seed }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
@@ -159,6 +165,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
   onNew: () => void;
   onOpenChat: () => void;
   onOpenTicket: (id: string) => void;
+  onOpenTeam?: (r: TeamRequest) => void;
   seed: { seed: HuddleSeed; n: number } | null;
 }) {
   const [confirm, setConfirm] = useState<"stop" | "close" | null>(null);
@@ -237,7 +244,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
         <span className="spacer" />
         {learnings.length > 0 && (
           <button className={`btn small hd-learn-btn${pending.length ? " pending" : ""}`} aria-expanded={showLearnings} onClick={() => setLearningsOpen(!showLearnings)}
-            title={pending.length ? `${pending.length} lesson${pending.length === 1 ? "" : "s"} proposed by agents to review` : "Every lesson is reviewed"}>
+            title={pending.length ? `${pending.length} proposal${pending.length === 1 ? "" : "s"} from agents to review (lessons, teammates)` : "Everything is reviewed"}>
             <span aria-hidden>🎓</span> Learnings
             {pending.length ? <span className="for-you-pill">{pending.length}</span> : <span className="hd-learn-done">✓ all reviewed</span>}
           </button>
@@ -318,7 +325,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
           <Roster slug={slug} huddle={h} onError={onError} viewing={viewing} onView={(handle) => setViewing((v) => (v === handle ? null : handle))} />
           <Findings slug={slug} huddle={h} handles={handles} onError={onError} />
         </aside>
-        {showLearnings && <Learnings slug={slug} huddle={h} onClose={() => setLearningsOpen(false)} onError={onError} />}
+        {showLearnings && <Learnings slug={slug} huddle={h} onClose={() => setLearningsOpen(false)} onError={onError} onOpenTeam={onOpenTeam} />}
       </div>
       {confirm === "stop" && (
         <ConfirmDialog title="Stop agents?" confirmLabel="Stop agents" busyLabel="Stopping…" onCancel={() => setConfirm(null)}
@@ -370,13 +377,18 @@ function targetOptions(l: HuddleLearning, presets: HuddlePreset[]): { value: str
  * Learnings to review, in a drawer over the feed: lessons agents proposed when they turned done. Nothing is saved until
  * the user picks a scope and where it goes and presses Save; saved ones go into every future agent of that role's instructions.
  */
-function Learnings({ slug, huddle: h, onClose, onError }: { slug: string; huddle: Huddle; onClose: () => void; onError: (m: string) => void }) {
-  const presets = usePresets(slug);
+function Learnings({ slug, huddle: h, onClose, onError, onOpenTeam }: {
+  slug: string; huddle: Huddle; onClose: () => void; onError: (m: string) => void; onOpenTeam?: (r: TeamRequest) => void;
+}) {
+  // Reloaded when a proposed teammate is saved, so the other cards see it.
+  const saved = (h.learnings ?? []).filter((l) => l.teammate && l.status === "saved").length;
+  const presets = usePresets(slug, saved);
   // Esc closes the drawer, but not while editing a lesson (its textarea's Esc cancels the edit).
   useLayer(onClose, { skipInInputs: true });
   const shown = (h.learnings ?? []).filter((l) => l.status !== "discarded");
   const pending = shown.filter((l) => l.status === "pending");
-  const adhoc = pending.some((l) => !l.preset);
+  const adhoc = pending.some((l) => !l.preset && !l.teammate);
+  const lessons = pending.some((l) => !l.teammate);
   return (
     <section className="hd-learnings" aria-label="Learnings to review">
       <div className="hd-learnings-head">
@@ -386,13 +398,56 @@ function Learnings({ slug, huddle: h, onClose, onError }: { slug: string; huddle
         <button className="icon-btn" onClick={onClose} aria-label="Close learnings" title="Close (Esc)"><CloseIcon size={12} /><KeyHint keys="Esc" /></button>
       </div>
       <div className="hd-learnings-sub muted small">
-        {pending.length ? "Proposed by agents when they turned done · nothing is saved until you choose." : "Every lesson proposed in this huddle is saved or discarded."}
+        {!pending.length ? "Every lesson and teammate proposed in this huddle is saved or discarded."
+          : lessons ? "Proposed by agents when they turned done · nothing is saved until you choose." : "Proposed by agents · nothing is saved until you choose."}
       </div>
       <div className="hd-learnings-list">
-        {shown.map((l) => <Learning key={l.id} slug={slug} huddle={h} l={l} presets={presets ?? []} onError={onError} />)}
+        {shown.map((l) => l.teammate
+          ? <TeammateLearning key={l.id} slug={slug} huddle={h} l={l} teammate={l.teammate} presets={presets} onError={onError} onOpenTeam={onOpenTeam} />
+          : <Learning key={l.id} slug={slug} huddle={h} l={l} presets={presets ?? []} onError={onError} />)}
       </div>
       {adhoc && <div className="hd-learnings-foot muted small">Ad-hoc roles disappear with the huddle unless you save a lesson as a new role. Close huddle asks about learnings still pending.</div>}
     </section>
+  );
+}
+
+/** A teammate an agent proposed (propose_teammate): saved for all boards (scope general) or this board (repo), as in a chat card. */
+function TeammateLearning({ slug, huddle: h, l, teammate, presets, onError, onOpenTeam }: {
+  slug: string; huddle: Huddle; l: HuddleLearning; teammate: TeammateProposal; presets: HuddlePreset[] | null; onError: (m: string) => void;
+  onOpenTeam?: (r: TeamRequest) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const act = async (p: Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await p;
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const scope = (s: Level) => (s === "global" ? "general" as const : "repo" as const);
+  return (
+    <div className={`hd-learning ${l.status}`}>
+      <div className="hd-learning-who"><b>@{l.from}</b> · {l.role}</div>
+      <div className="hd-learning-main">
+        {l.status === "saved" ? (
+          <div className="proposal teammate-card applied">
+            <span className="proposal-tag">Teammate saved</span>
+            <div className="proposal-actions">
+              <span className="badge ok">{savedText(l.target, l.scope === "general" ? "global" : "board")}</span>
+              {onOpenTeam && <button className="btn small ghost" onClick={() => onOpenTeam({ action: "open", name: l.target })}>Open in Team</button>}
+            </div>
+          </div>
+        ) : (
+          <TeammateProposalView proposal={teammate} presets={presets} busy={busy} initialScope={l.scope === "general" ? "global" : "board"} dismissLabel="Discard"
+            onScope={(s) => act(api.editLearning(slug, h.id, l.id, { scope: scope(s) }))}
+            onSave={(s) => act(api.saveLearning(slug, h.id, l.id, { scope: scope(s) }))}
+            onDismiss={() => act(api.discardLearning(slug, h.id, l.id))} />
+        )}
+      </div>
+    </div>
   );
 }
 

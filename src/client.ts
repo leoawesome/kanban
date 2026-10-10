@@ -6,7 +6,7 @@ import { HUDDLE_AGENT_ENV, HUDDLE_HEADER, SOURCE_HEADER, type RosterEntry } from
 import type { HuddleTemplateView } from "./server/huddle-templates";
 import { RUN_HEADER } from "./server/scheduler";
 import { defaultRoot, Store } from "./server/store";
-import { STATUSES, type HuddleFinding, type HuddleMessage, type HuddleMode, type Status, type TicketMode } from "./server/types";
+import { STATUSES, type HuddleFinding, type HuddleLearning, type HuddleMessage, type HuddleMode, type Status, type TicketMode } from "./server/types";
 
 export class ClientError extends Error {}
 
@@ -339,6 +339,9 @@ export class BoardClient {
     this.req<{ added: HuddleParticipantInfo[]; huddle: HuddleInfo }>("POST", `${this.h(slug, hid)}/participants`, entry, this.as(c));
   huddleFindings = (slug: string, hid: string, action: "add" | "resolve" | "list", arg: { text?: string; id?: string }, c: HuddleCaller) =>
     this.req<HuddleFinding[]>("POST", `${this.h(slug, hid)}/findings`, { action, ...arg }, this.as(c));
+  /** A huddle agent proposes a teammate: it waits under the huddle's Learnings until the user saves it. */
+  huddleProposeTeammate = (slug: string, hid: string, input: Record<string, unknown>, c: HuddleCaller) =>
+    this.req<HuddleLearning>("POST", `${this.h(slug, hid)}/teammates`, input, this.as(c));
   /** Set the pinned brief ("" clears it). */
   huddleBrief = (slug: string, hid: string, text: string, c: HuddleCaller) => this.req<HuddleInfo>("PUT", `${this.h(slug, hid)}/brief`, { text }, this.as(c));
 }

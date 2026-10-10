@@ -23,7 +23,7 @@ import { TicketDrawer } from "./TicketDrawer";
 import { toast, Toaster } from "./toast";
 
 import type { DockTab } from "./Dock";
-import type { HuddleSeed } from "./Team";
+import type { HuddleSeed, TeamRequest } from "./Team";
 import { useBoardHuddles } from "./huddle";
 
 // xterm.js and highlight.js only load once the panel is opened. After an upgrade the old chunk is gone:
@@ -151,13 +151,14 @@ export function App() {
   // Command to type into the dock's terminal (e.g. "claude mcp login x"); n makes repeats count.
   const [dockCommand, setDockCommand] = useState<{ text: string; n: number } | null>(null);
   // Tab the dock should switch to (C opens the quick Claude chat).
-  const [dockTab, setDockTab] = useState<{ tab: DockTab; n: number; newTeammate?: boolean } | null>(null);
+  const [dockTab, setDockTab] = useState<{ tab: DockTab; n: number; team?: TeamRequest } | null>(null);
   // Tab the open dock shows (reported by the dock), for the header buttons' on state.
   const [dockShown, setDockShown] = useState<DockTab | null>(null);
   const chatOpen = dockOpen && dockShown === "claude";
-  const openDockOn = (tab: DockTab, newTeammate?: boolean) => {
+  /** team: what the Team tab shows (the new-teammate editor, a proposal to edit, a teammate). */
+  const openDockOn = (tab: DockTab, team?: TeamRequest) => {
     setDockOpen(true);
-    setDockTab({ tab, n: Date.now(), ...(newTeammate ? { newTeammate } : {}) });
+    setDockTab({ tab, n: Date.now(), ...(team ? { team } : {}) });
   };
   const [mcp, setMcp] = useState<McpState | null>(null);
   const [connections, setConnections] = useState(false);
@@ -540,7 +541,7 @@ export function App() {
     ] : []),
     ...(profile ? [
       { id: "team", label: "Open Team", hint: "teammates, templates, notes", run: () => openDockOn("team") },
-      { id: "new-teammate", label: "New teammate…", run: () => openDockOn("team", true) },
+      { id: "new-teammate", label: "New teammate…", run: () => openDockOn("team", { action: "new" }) },
     ] : []),
     ...(inbox.length ? [{ id: "inbox", label: `Open inbox (${inbox.length} need you)`, run: () => setInboxRequest(Date.now()) }] : []),
     ...(profile ? [{ id: "schedules", label: "Schedules", icon: <ClockIcon size={14} />, run: () => setSchedulesOpen(true) }] : []),
@@ -762,7 +763,8 @@ export function App() {
       {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} tickets={tickets} onOpenTicket={openTicket} onClose={closeTicket}
         nav={{ prev: prevId, next: nextId, go: stepTicket }} slideIn={!stepped.current}
         tabRequest={huddleTab?.id === open.id ? { tab: "huddle", n: huddleTab.n } : null}
-        huddleSeed={huddleSeed?.id === open.id ? { seed: huddleSeed.seed, n: huddleSeed.n } : null} />}
+        huddleSeed={huddleSeed?.id === open.id ? { seed: huddleSeed.seed, n: huddleSeed.n } : null}
+        onOpenTeam={(r) => { closeTicket(); openDockOn("team", r); }} />}
       {profileDialog && (
         <ProfileDialog
           profile={profileDialog === "edit" ? profile : null}

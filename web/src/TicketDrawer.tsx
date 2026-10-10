@@ -25,7 +25,7 @@ import { Markdown } from "./Transcript";
 import { NeedsField } from "./Needs";
 import { useHuddle, members } from "./huddle";
 import { HuddlePanel } from "./HuddlePanel";
-import type { HuddleSeed } from "./Team";
+import type { HuddleSeed, TeamRequest } from "./Team";
 
 // v2: widths saved under the old 80% default are dropped once so the new default shows.
 const WIDTH_KEY = "ckanban.panelWidth.v2";
@@ -186,7 +186,7 @@ function usePanelWidth(fit: number) {
 }
 
 /** Ticket view: details on the left, the chat with Claude filling the right side. */
-export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, nav, slideIn = true, tabRequest, huddleSeed }: {
+export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, nav, slideIn = true, tabRequest, huddleSeed, onOpenTeam }: {
   profile: Profile;
   ticket: Ticket;
   /** The board's tickets, for the planner/child links. */
@@ -201,6 +201,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   tabRequest?: { tab: "huddle"; n: number } | null;
   /** The Team tab's Start huddle: fill this roster in on the Huddle tab; `n` changes for each new request. */
   huddleSeed?: { seed: HuddleSeed; n: number } | null;
+  /** Open the dock's Team tab on a teammate or a proposal to edit (teammate cards). */
+  onOpenTeam?: (r: TeamRequest) => void;
 }) {
   // Errors from actions in this ticket show here, next to what failed, not in the page's top strip.
   const [panelError, setPanelError] = useState<string | null>(null);
@@ -650,7 +652,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               </div>
             ) : tab === "huddle" ? (
               <HuddlePanel slug={slug} ticket={ticket} tickets={tickets} state={huddleState} onError={onError} seed={huddleSeed ?? null}
-                onOpenChat={() => setTab("chat")} onOpenTicket={onOpenTicket} />
+                onOpenChat={() => setTab("chat")} onOpenTicket={onOpenTicket} onOpenTeam={onOpenTeam} />
             ) : tab === "changes" ? (
               <Changes slug={slug} ticket={ticket} state={diffState} onSent={() => setTab("chat")} onError={onError} />
             ) : tab === "usage" ? (
@@ -659,7 +661,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticket={ticket} onCount={setOutputCount} focus={outputFocus} /></div>
             ) : (
               <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError} onPendingProposal={onPendingProposal}
-                huddle={huddle} onOpenHuddle={() => setTab("huddle")}
+                huddle={huddle} onOpenHuddle={() => setTab("huddle")} onOpenTeam={onOpenTeam}
                 onOpenOutput={(name) => { setOutputFocus(name); setTab("outputs"); }} />
             )}
           </div>

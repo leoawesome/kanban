@@ -43,6 +43,8 @@ If the user asks you here to manage, run, control or take over tickets (existing
 If the user only asked to create or adopt tickets, don't start the plan. You can also move, update, chat with, comment on, stop or release (update_ticket release: true) this ticket's own children; every other ticket is refused.`;
 
 /** How a ticket chat offers to branch the ticket; the user's click on the card does the branching. */
+export const TEAMMATE_FORMAT = `When the user wants a teammate (a huddle role) that no existing one covers (e.g. "a teammate that watches X"), or one should change, check \`list_huddle_presets\`, then call the \`propose_teammate\` tool ${TOOL_NOTE} with name, role, prompt, mode, workspace, canEdit, lead, model and a one-line why. An existing name proposes a change to that teammate. The board shows a card and the user saves it with one click (for all boards or this board); you can't save teammates yourself (save_huddle_preset saves nothing here). Don't propose one the user didn't ask for unless the gap is clear.`;
+
 export const BRANCH_FORMAT = `If the user asks to branch this ticket (fork the conversation, try another direction in parallel without losing this one), call the \`propose_branch\` tool ${TOOL_NOTE} with a one-line reason. The board shows a Branch button; the user's click creates "Branch: <title>" in Planning with a copy of this conversation and its own git branch off this ticket's branch (committed work only). Don't create tickets or start the other direction yourself; after the call, end your turn.`;
 
 function context(note: string, body: string, attrs: Record<string, string> = {}): string {
@@ -300,7 +302,9 @@ ${TICKET_FORMAT}
 
 ${TICKETS_FORMAT}
 
-${BRANCH_FORMAT}`)}`;
+${BRANCH_FORMAT}
+
+${TEAMMATE_FORMAT}`)}`;
   }
   return `${typed}
 
@@ -312,7 +316,8 @@ ${bugReportRule(t)}
 
 If the message asks for new or follow-up tickets from this ticket: do not modify any files or start that work. Write each description from what you know here (files, decisions, what shipped), so the new ticket's Claude needs no other context. ${TICKETS_FORMAT}
 ${BRANCH_FORMAT}
-If proposing tickets or a branch was all the message asked for, put <ckanban-stay/> on its own line before the result line: the card then stays in its column.
+${TEAMMATE_FORMAT}
+If proposing tickets, a branch or a teammate was all the message asked for, put <ckanban-stay/> on its own line before the result line: the card then stays in its column.
 
 ${MANAGE_RULE}
 If managing tickets (adopting, ordering, starting the plan) was all the message asked for, also end with <ckanban-stay/>.
@@ -468,6 +473,7 @@ ${p.prompt}${p.focus ? `\n\nFocus: ${p.focus}` : ""}
 - Stay in your focus. If someone already said what you would, +1 it by number (e.g. "+1 #12") instead of repeating it.
 - Don't tag @main for small things; leads collect findings and send @main one consolidated list.
 - Lessons: when you turn done (\`huddle_status\` or \`huddle_post\` with status done), you may add \`lessons\`: up to 3 \`{text, evidence, scope}\` worth reusing in future huddles of your role. Write each as a short rule (max 200 characters), give evidence (a message #n or a file), and set scope general (any repo) or repo (only this one). The user reviews them and alone decides what future agents are told; none is fine, and better than a weak one.
+- Teammates: if the work clearly needs a role no teammate covers (\`list_huddle_presets\`), propose it with \`propose_teammate\` (name, prompt, a one-line why). It goes to the huddle's Learnings and only the user saves it; carry on meanwhile.
 
 ## Tools
 ${HUDDLE_TOOLS}

@@ -167,6 +167,8 @@ export interface Ticket {
   attention?: { kind: AttentionKind; label: string } | null;
   /** Output files published as claude.ai pages from the Share menu, one link per file. */
   shareLinks?: ShareLink[];
+  /** Teammate cards in the chat the user answered, by entry uuid (src/server/types.ts). */
+  teammateCards?: Record<string, TeammateCardState>;
   /** Share menu publishes in progress (or the last one's error), per output file. */
   shareJobs?: ShareJob[];
   /** Absolute path of the ticket's outputs folder. */
@@ -222,6 +224,7 @@ export interface SessionSummary {
   openQuestions: number;
   pendingProposal: { title: string; description: string } | null;
   pendingNewTickets?: { title: string; description: string }[];
+  pendingTeammates?: string[];
 }
 
 export interface QuestionOption {
@@ -278,6 +281,8 @@ export interface SessionEntry {
   huddle?: { roster: RosterEntry[]; reason: string; template?: string };
   /** Claude asked to delete tickets (propose_delete): the card with Cancel / Delete. */
   deletion?: { ids: string[]; reason: string };
+  /** Claude proposed a teammate (propose_teammate): the card with Save teammate / Edit first / Dismiss. */
+  teammate?: TeammateProposal;
   /** Mockups Claude sent in this reply, saved as outputs/mockups/<name>. */
   mockups?: string[];
   moved?: "planning";
@@ -448,6 +453,17 @@ export interface HuddlePreset extends LayerInfo {
   workspace: "shared" | "own";
 }
 
+/** A teammate Claude proposed (src/server/teammate-proposal.ts): fields it left out keep an existing teammate's values. */
+export type TeammateProposal = Pick<HuddlePreset, "name" | "prompt"> & Partial<Pick<HuddlePreset, "role" | "model" | "mode" | "lead" | "canEdit" | "workspace">> & { why: string };
+
+/** What the user did with a teammate card. */
+export interface TeammateCardState {
+  state: "saved" | "dismissed";
+  name?: string;
+  scope?: Level;
+  at: string;
+}
+
 /** A whole-huddle template (src/server/huddle-templates.ts): a roster and its rules. */
 export interface HuddleTemplate extends LayerInfo {
   name: string;
@@ -614,6 +630,8 @@ export interface HuddleLearning {
   target: string;
   at: string;
   newRole?: boolean;
+  /** A teammate the agent proposed instead of a lesson (text: its why; scope general: all boards, repo: this board). */
+  teammate?: TeammateProposal;
 }
 
 /** A role note (src/server/huddle-notes.ts): by "you" or the agent's handle. */
@@ -793,7 +811,7 @@ export const api = {
   tickets: (slug: string) => req<Ticket[]>("GET", t(slug)),
   huddlePresets: (slug: string) => req<HuddlePreset[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets`),
   /** scope: global (every board) or this board. */
-  saveHuddlePreset: (slug: string, p: Omit<HuddlePreset, keyof LayerInfo>, scope: Level) =>
+  saveHuddlePreset: (slug: string, p: Partial<Omit<HuddlePreset, keyof LayerInfo>> & { name: string }, scope: Level) =>
     req<HuddlePreset>("POST", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets`, { ...p, scope }),
   /** Deletes a teammate at one level: it falls back to the level below (all boards, then built-in), or goes away. */
   deleteHuddlePreset: (slug: string, name: string, scope: Level) =>
@@ -884,6 +902,9 @@ export const api = {
   updateTicket: (slug: string, id: string, patch: Partial<Pick<Ticket, "title" | "body" | "status" | "order" | "mode" | "notice" | "needs">> & { expectedBody?: string }) =>
     req<Ticket>("PATCH", t(slug, id), patch),
   deleteTicket: (slug: string, id: string) => req<void>("DELETE", t(slug, id)),
+  /** The user answered a teammate card (saved it, or dismissed it). */
+  answerTeammateCard: (slug: string, id: string, uuid: string, card: Omit<TeammateCardState, "at">) =>
+    req<Ticket>("PUT", `${t(slug, id)}/teammate-cards/${encodeURIComponent(uuid)}`, card),
   comments: (slug: string, id: string) => req<Comment[]>("GET", `${t(slug, id)}/comments`),
   addComment: (slug: string, id: string, text: string) => req<Comment>("POST", `${t(slug, id)}/comments`, { text }),
   diff: (slug: string, id: string, ignoreWhitespace: boolean) =>

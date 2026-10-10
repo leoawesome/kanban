@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Huddle, type Profile, type QuickChat } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { FilesView } from "./FilesView";
-import { TeamTab, type HuddleSeed } from "./Team";
+import { TeamTab, type HuddleSeed, type TeamRequest } from "./Team";
 import { brakeLabel, guestTickets, huddleCost, members, quietLabel, sortHuddles } from "./huddle";
 import { CloseIcon, RefreshIcon } from "./icons";
 import { TerminalView } from "./TerminalView";
@@ -45,8 +45,8 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
   /** Typed into the shell and run (e.g. from Connections); `n` changes for each new request. */
   command?: { text: string; n: number } | null;
   onCommandSent?: () => void;
-  /** Switch to this tab (e.g. from a shortcut); `n` changes for each new request. newTeammate: open the Team tab's editor. */
-  tabRequest?: { tab: DockTab; n: number; newTeammate?: boolean } | null;
+  /** Switch to this tab (e.g. from a shortcut); `n` changes for each new request. team: what the Team tab shows. */
+  tabRequest?: { tab: DockTab; n: number; team?: TeamRequest } | null;
   /** The visible tab, so the header buttons can show which one is open. */
   onTabChange?: (tab: DockTab) => void;
   onOpenTicket?: (id: string) => void;
@@ -201,7 +201,7 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
         <div className="dock-pane" hidden={tab !== "team"}>
           {teamSeen && (
             <TeamTab key={profile.slug} slug={profile.slug} boardName={profile.name} active={tab === "team"} openTicket={openTicket} onOpenHuddle={onOpenHuddle}
-              request={tabRequest?.tab === "team" && tabRequest.newTeammate ? { action: "new", n: tabRequest.n } : null}
+              request={tabRequest?.tab === "team" && tabRequest.team ? { ...tabRequest.team, n: tabRequest.n } : null}
               onStartHuddle={(seed) => onStartHuddle?.(seed)} />
           )}
         </div>

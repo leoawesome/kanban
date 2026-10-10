@@ -15,7 +15,7 @@ beforeEach(() => {
   store = new Store(tempDir("ck-home-"));
   summary = null;
   const sessionSummary = () => summary && ({
-    title: null, lastMessage: null, artifacts: [], updatedAt: "", openQuestions: 0, pendingProposal: null, pendingNewTickets: [], ...summary,
+    title: null, lastMessage: null, artifacts: [], updatedAt: "", openQuestions: 0, pendingProposal: null, pendingNewTickets: [], pendingTeammates: [], ...summary,
   });
   board = new Board(store, new Bus(), { claudeBin: "/bin/false", sessionSummary });
   store.saveProfile({ name: "P", slug: "p", path: tempDir(), baseBranch: "main", maxParallel: 1, createdAt: "" });

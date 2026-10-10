@@ -635,24 +635,25 @@ export function createServer(deps: ServerDeps) {
     }
 
     // /profiles/:p/huddle-presets[/:name] — huddle role presets ("teammates"): built-ins merged with the global ones and
-    // the board's own (any caller, runs included). Body `scope`: "board" (default) or "global" (every board); DELETE
-    // ?scope= defaults to the level in effect. A run (a huddle agent's or a ticket's, the coordinator included) may only
-    // add new presets to its board: it can't change or delete what the user or a built-in defined.
+    // the board's own. Anyone reads; only the user saves or deletes (the Team tab, a proposal card, the CLI). A run (a
+    // huddle agent's or a ticket's, the coordinator included) proposes one with propose_teammate instead. Body `scope`:
+    // "board" (default) or "global" (every board); DELETE ?scope= defaults to the level in effect.
     if (parts[2] === "huddle-presets") {
-      const addOnly = !!(req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER));
       if (parts.length === 3 && m === "GET") return json(huddles.presets(slug));
+      if (req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER)) {
+        throw new HttpError(403, m === "DELETE"
+          ? "a board or huddle run can't delete or reset teammates; ask the user"
+          : "a board or huddle run can't save teammates; propose one with propose_teammate and the user saves it with one click");
+      }
       if (parts.length === 3 && m === "POST") {
         const b = await body(req);
-        return json(huddles.savePreset(slug, b, addOnly, b?.scope ?? "board"), 201);
+        return json(huddles.savePreset(slug, b, b?.scope ?? "board"), 201);
       }
       if (parts.length === 4 && m === "PUT") {
         const b = await body(req);
-        return json(huddles.savePreset(slug, { ...b, name: parts[3] }, addOnly, b?.scope ?? "board"));
+        return json(huddles.savePreset(slug, { ...b, name: parts[3] }, b?.scope ?? "board"));
       }
-      if (parts.length === 4 && m === "DELETE") {
-        if (addOnly) throw new HttpError(403, "a board or huddle run can't delete or reset presets; ask the user");
-        return json(huddles.deletePreset(slug, parts[3], url.searchParams.get("scope") ?? undefined));
-      }
+      if (parts.length === 4 && m === "DELETE") return json(huddles.deletePreset(slug, parts[3], url.searchParams.get("scope") ?? undefined));
       throw new HttpError(404, "not found");
     }
 
@@ -932,6 +933,23 @@ export function createServer(deps: ServerDeps) {
         throw new HttpError(404, (e as Error).message);
       }
     }
+    // A teammate card in the chat (propose_teammate) was answered: PUT .../teammate-cards/<entry uuid> { state: "saved",
+    // name, scope } after the user saved it (the save itself goes through huddle-presets), or { state: "dismissed" }.
+    if (action === "teammate-cards" && parts.length === 6 && m === "PUT") {
+      if (req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER)) throw new HttpError(403, "only the user answers teammate cards");
+      const b = await body(req);
+      if (b.state !== "saved" && b.state !== "dismissed") throw new HttpError(400, "state must be saved or dismissed");
+      if (b.scope !== undefined && b.scope !== "global" && b.scope !== "board") throw new HttpError(400, "scope must be global or board");
+      const t = store.getTicket(slug, id)!;
+      const card = {
+        state: b.state, at: nowIso(),
+        ...(b.state === "saved" && typeof b.name === "string" && b.name.trim() ? { name: b.name.trim() } : {}),
+        ...(b.state === "saved" && b.scope ? { scope: b.scope } : {}),
+      };
+      store.updateTicket(slug, id, { teammateCards: { ...t.teammateCards, [parts[5]]: card } });
+      emitTicket(slug, id);
+      return json(view(profile, store.getTicket(slug, id)!));
+    }
     if (m === "POST" && action === "link-session") {
       const b = await body(req);
       try {
@@ -1129,6 +1147,8 @@ export function createServer(deps: ServerDeps) {
       const b = await body(req);
       return json(huddles.view(slug, huddles.markSeen(slug, h.id, Number(b?.seq))));
     }
+    // A huddle agent proposes a teammate (propose_teammate): it waits under Learnings for the user.
+    if (m === "POST" && action === "teammates" && !handle) return json(huddles.proposeTeammate(slug, h.id, me, await body(req)), 201);
     // Lessons agents proposed: only the user edits, saves (as role notes) or discards them.
     if (action === "learnings" && handle) {
       userOnly("save, edit or discard learnings");

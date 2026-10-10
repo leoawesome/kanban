@@ -48,6 +48,7 @@ import { isLevel, type Level, lowerLevels } from "./layers";
 import { huddleAgentPrompt, huddleAgentSystemPrompt, huddleDigest, huddleMainPrompt } from "./prompts";
 import { buildArgs, MONITOR_IDLE_MS, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
+import { proposalPreset, teammateProposal, type TeammateProposal } from "./teammate-proposal";
 import type {
   Huddle, HuddleFinding, HuddleLearning, HuddleMessage, HuddleMessageKind, HuddleMode, HuddleParticipant, HuddleSource, HuddleStopReason, Profile, Ticket,
 } from "./types";
@@ -77,6 +78,8 @@ export const PING_PONG = 6;
 const BUDGET_WARN = 0.8;
 /** Lessons one participant can have waiting for the user's review. */
 const MAX_PENDING = 3;
+/** Teammates one agent may have waiting for the user's review at once. */
+const MAX_PENDING_TEAMMATES = 2;
 
 /** What the huddle spent so far: every participant's runs (agents) and huddle replies (@main and invited tickets). */
 export const huddleCost = (h: Huddle) => h.participants.reduce((s, p) => s + (p.costUsd ?? 0), 0);
@@ -396,16 +399,11 @@ export class Huddles {
   /**
    * Add or change a preset at one level: "board" (default) or "global" (every board). A lower level's name overrides it.
    * Saving for every board drops this board's own version of it, so the saved one is what this board uses.
-   * addOnly (any board or huddle run): only a new name, and only on the board.
+   * Only the user saves (the HTTP route refuses runs and huddle agents; they propose with propose_teammate).
    */
-  savePreset(slug: string, input: unknown, addOnly = false, level: unknown = "board"): HuddlePresetView {
+  savePreset(slug: string, input: unknown, level: unknown = "board"): HuddlePresetView {
     if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
     if (!isLevel(level)) throw new HuddleError(400, "scope must be board or global");
-    const name = presetName(String((input as any)?.name ?? ""));
-    if (addOnly && level !== "board") throw new HuddleError(403, "a board or huddle run may only add presets to its board; ask the user to save one for all boards");
-    if (addOnly && this.presets(slug).some((p) => p.name === name)) {
-      throw new HuddleError(403, `preset "${name}" already exists; a board or huddle run may only add new presets (pick another name, or ask the user to change it)`);
-    }
     const global = this.store.listHuddlePresets(null);
     const board = this.store.listHuddlePresets(slug);
     let r: ReturnType<typeof savePreset>;
@@ -557,6 +555,7 @@ export class Huddles {
       if (patch.scope !== "general" && patch.scope !== "repo") throw new HuddleError(400, "scope must be general or repo");
       out.scope = patch.scope;
     }
+    if (patch.target !== undefined && l.teammate) throw new HuddleError(400, "a proposed teammate is saved as itself; pick all boards or this board with scope");
     if (patch.target !== undefined) {
       const t = String(patch.target);
       if (t !== ALL_ROLES && t !== "new" && (t === MAIN_PRESET || !this.presetMap(slug).has(t))) {
@@ -583,6 +582,13 @@ export class Huddles {
   saveLearning(slug: string, hid: string, id: string, patch: { text?: unknown; scope?: unknown; target?: unknown } = {}): HuddleLearning {
     const h = this.get(slug, hid);
     const l = this.patched(slug, this.learning(h, id), patch);
+    if (l.teammate) {
+      // A proposed teammate: saved (or an existing one changed) for all boards (scope general) or this board (repo).
+      const p = this.savePreset(slug, proposalPreset(l.teammate), l.scope === "general" ? "global" : "board");
+      const saved: HuddleLearning = { ...l, status: "saved", target: p.name };
+      this.update(slug, hid, (x) => void Object.assign(this.learning(x, id), saved));
+      return saved;
+    }
     let role = l.target;
     if (role === "new") {
       const p = h.participants.find((x) => x.handle === l.from);
@@ -598,6 +604,38 @@ export class Huddles {
     const saved: HuddleLearning = { ...l, status: "saved", target: role, ...(l.target === "new" ? { newRole: true } : {}) };
     this.update(slug, hid, (x) => void Object.assign(this.learning(x, id), saved));
     return saved;
+  }
+
+  /**
+   * A huddle agent proposes a teammate (propose_teammate): it waits under Learnings (scope general: all boards) until
+   * the user saves or discards it. Nothing is saved here.
+   */
+  proposeTeammate(slug: string, hid: string, by: HuddleParticipant, input: unknown): HuddleLearning {
+    const h = this.get(slug, hid);
+    this.assertOpen(h);
+    if (by.kind !== "agent") throw new HuddleError(400, "only huddle agents propose teammates to the huddle; a ticket chat's propose_teammate shows a card in its chat");
+    let t: TeammateProposal;
+    try {
+      t = teammateProposal(input);
+    } catch (e) {
+      throw new HuddleError(400, `${(e as Error).message}. Nothing was changed.`);
+    }
+    const waiting = pendingLearnings(h).filter((l) => l.from === by.handle && l.teammate).length;
+    if (waiting >= MAX_PENDING_TEAMMATES) {
+      throw new HuddleError(400, `you already have ${waiting} proposed teammates waiting for the user; at most ${MAX_PENDING_TEAMMATES} can wait at once. Nothing was changed.`);
+    }
+    let out!: HuddleLearning;
+    this.update(slug, hid, (x) => {
+      x.learnings ??= [];
+      out = {
+        id: `l${x.learnings.length + 1}`, from: by.handle, role: by.role, preset: by.preset ?? null, text: t.why, evidence: "", scope: "general",
+        status: "pending", target: "new", at: nowIso(), teammate: t,
+      };
+      x.learnings.push(out);
+    });
+    const known = this.presets(slug).some((p) => p.name === t.name);
+    this.system(slug, hid, `@${by.handle} proposed ${known ? `a change to teammate @${t.name}` : `a new teammate @${t.name}`}; the user reviews it under Learnings.`);
+    return out;
   }
 
   /** The user discards a learning: it is never saved. */
@@ -897,7 +935,7 @@ export class Huddles {
     if (!out.length) return out;
     if (status !== "done") throw new HuddleError(400, "lessons go with status done, when your job is finished");
     if (by.kind !== "agent") throw new HuddleError(400, "only huddle agents propose lessons");
-    const waiting = pendingLearnings(h).filter((l) => l.from === by.handle).length;
+    const waiting = pendingLearnings(h).filter((l) => l.from === by.handle && !l.teammate).length;
     if (waiting + out.length > MAX_PENDING) {
       throw new HuddleError(400, `you already have ${waiting} lesson${waiting === 1 ? "" : "s"} waiting for the user; at most ${MAX_PENDING} can wait at once. Nothing was changed.`);
     }
