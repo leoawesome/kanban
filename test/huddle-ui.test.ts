@@ -3,7 +3,7 @@ import {
   cardHuddleBadge, draftError, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, upsertHuddle,
 } from "../web/src/huddleText";
 
-type P = { handle: string; role: string; kind: string; mode: string; status: string; lastActivity?: string | null; error?: string | null };
+type P = { handle: string; role: string; kind: string; mode: string; status: string; statusReason?: string | null; lastActivity?: string | null; error?: string | null };
 type H = { id: string; hostTicket: string; status: string; createdAt: string; participants: P[] };
 
 const p = (handle: string, x: Partial<P> = {}): P => ({ handle, role: handle, mode: "tagged", status: "idle", kind: "agent", ...x });
@@ -40,6 +40,8 @@ test("participant activity and initials", () => {
   expect(participantActivity(p("r"))).toBe("idle");
   expect(participantActivity(p("r", { mode: "monitor" }), true)).toBe("idle");
   expect(participantActivity(p("r", { status: "failed", error: "boom\nmore" }))).toBe("failed: boom");
+  expect(participantActivity(p("r", { status: "blocked", statusReason: "need the spec" }))).toBe("blocked: need the spec");
+  expect(participantActivity(p("r", { status: "done" }))).toBe("done");
   expect(handleInitials("qa-2")).toBe("Q2");
   expect(handleInitials("reviewer")).toBe("R");
 });

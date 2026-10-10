@@ -141,6 +141,8 @@ export interface HuddleParticipantInfo {
   canEdit: boolean;
   workspace: string;
   status: string;
+  /** done / blocked: why. */
+  statusReason?: string | null;
   kind: string;
   focus?: string;
   ticketId?: string | null;
@@ -156,7 +158,14 @@ export interface HuddleInfo {
   participants: HuddleParticipantInfo[];
   findings: HuddleFinding[];
   seq: number;
+  /** Live, nobody working, no unanswered tags, no open findings; idleSince: the last message or turn. */
+  quiet?: boolean;
+  idleSince?: string | null;
+  closeRequest?: { by: string; at: string; reason: string } | null;
 }
+
+/** A participant's own huddle status: done, blocked (with a reason) or active again. */
+export type HuddleStatusChange = "done" | "blocked" | "active";
 
 /** A huddle with a page of its messages; `you` is the caller's own handle. */
 export interface HuddlePage {
@@ -302,8 +311,13 @@ export class BoardClient {
     if (q.limit !== undefined) qs.set("limit", String(q.limit));
     return this.req<HuddlePage>("GET", `${this.h(slug, hid)}${qs.size ? `?${qs}` : ""}`, undefined, this.as(c));
   };
-  huddlePost = (slug: string, hid: string, text: string, kind: "message" | "finding", c: HuddleCaller) =>
-    this.req<HuddleMessage>("POST", `${this.h(slug, hid)}/messages`, { text, kind }, this.as(c));
+  /** status: the sender is done or blocked (reason) with this message. */
+  huddlePost = (slug: string, hid: string, text: string, kind: "message" | "finding", c: HuddleCaller, status?: { status: HuddleStatusChange; reason?: string }) =>
+    this.req<HuddleMessage>("POST", `${this.h(slug, hid)}/messages`, { text, kind, ...status }, this.as(c));
+  huddleStatus = (slug: string, hid: string, status: HuddleStatusChange, reason: string | undefined, c: HuddleCaller) =>
+    this.req<HuddleParticipantInfo>("POST", `${this.h(slug, hid)}/status`, { status, reason }, this.as(c));
+  huddleCloseRequest = (slug: string, hid: string, reason: string, c: HuddleCaller) =>
+    this.req<HuddleInfo>("POST", `${this.h(slug, hid)}/close-request`, { reason }, this.as(c));
   huddleMode = (slug: string, hid: string, handle: string, mode: HuddleMode, c: HuddleCaller) =>
     this.req<HuddleInfo>("PATCH", `${this.h(slug, hid)}/participants/${encodeURIComponent(handle)}`, { mode }, this.as(c));
   huddleAdd = (slug: string, hid: string, entry: RosterEntry, c: HuddleCaller) =>

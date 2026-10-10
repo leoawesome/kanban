@@ -107,6 +107,7 @@ export interface ToolContext {
     | "listProfiles" | "listTickets" | "getTicket" | "createTicket" | "updateTicket" | "deleteTicket" | "chat" | "stop" | "listComments"
     | "comment" | "ask" | "pollQuestion" | "replyQuestion" | "reportBug" | "listSchedules" | "createSchedule" | "updateSchedule" | "deleteSchedule" | "runSchedule"
     | "scheduleHistory" | "cronPreview" | "adopt" | "planAction" | "huddleRead" | "huddlePost" | "huddleMode" | "huddleAdd" | "huddleFindings"
+    | "huddleStatus" | "huddleCloseRequest"
     | "listHuddlePresets" | "saveHuddlePreset" | "deleteHuddlePreset">;
   cwd: string;
   env: Record<string, string | undefined>;
@@ -602,8 +603,11 @@ export function huddlePageText(p: HuddlePage): string {
     `Huddle ${h.id} on ticket ${h.hostTicket}${h.hostTitle ? ` "${h.hostTitle}"` : ""}: ${h.status}. You are @${p.you}.`,
     "",
     `Participants (${h.participants.filter((x) => x.kind !== "human").length}/${h.maxParticipants}):`,
-    ...h.participants.map((x) => `- @${x.handle}: ${x.role}${x.lead ? ", lead" : ""}, ${x.mode}, ${x.status}${x.focus ? ` (focus: ${x.focus})` : ""}`),
+    ...h.participants.map((x) =>
+      `- @${x.handle}: ${x.role}${x.lead ? ", lead" : ""}, ${x.mode}, ${x.status}${x.statusReason ? ` (${x.statusReason})` : ""}${x.focus ? ` (focus: ${x.focus})` : ""}`),
   ];
+  if (h.quiet) lines.push("", `The huddle is quiet${h.idleSince ? ` since ${h.idleSince}` : ""}: nobody is working, no tag is unanswered and no finding is open.`);
+  if (h.closeRequest) lines.push("", `@${h.closeRequest.by} asked the user to close the huddle: ${h.closeRequest.reason}`);
   const open = h.findings.filter((f) => f.status === "open");
   if (h.findings.length) {
     lines.push("", `Findings (${open.length} open of ${h.findings.length}):`, ...h.findings.map((f) => `- ${f.id} [${f.status}${f.resolvedBy ? ` by @${f.resolvedBy}` : ""}] ${f.text} (by @${f.by})`));
@@ -627,6 +631,8 @@ const HUDDLE_TOOLS: Tool[] = [
       properties: {
         text: { type: "string", description: "The message, with @mentions." },
         kind: { type: "string", enum: ["message", "finding"], description: "Default message." },
+        status: { type: "string", enum: ["done", "blocked"], description: "Optional: with this message you are done (your job is finished) or blocked (give reason). Same as huddle_status." },
+        reason: { type: "string", description: "status: why (required for blocked)." },
         huddle: HUDDLE, profile: PROFILE,
       },
       required: ["text"],
@@ -635,8 +641,51 @@ const HUDDLE_TOOLS: Tool[] = [
     allowInRun: true,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
-      const m = await ctx.client.huddlePost(slug, huddleId(args, ctx), str(args, "text")!, args?.kind === "finding" ? "finding" : "message", huddleCaller(ctx.env));
-      return `Posted #${m.seq} as @${m.from}${m.mentions.length ? `; woke ${m.mentions.map((x) => `@${x}`).join(", ")}` : ""}.`;
+      const status = args?.status === "done" || args?.status === "blocked" ? { status: args.status, reason: str(args, "reason", false) } : undefined;
+      const m = await ctx.client.huddlePost(slug, huddleId(args, ctx), str(args, "text")!, args?.kind === "finding" ? "finding" : "message", huddleCaller(ctx.env), status);
+      return `Posted #${m.seq} as @${m.from}${m.mentions.length ? `; woke ${m.mentions.map((x) => `@${x}`).join(", ")}` : ""}.${status ? ` You are now ${status.status}.` : ""}`;
+    },
+  },
+  {
+    name: "huddle_status",
+    description:
+      "Set your own huddle status. done: your job is finished; you sleep until a lead, @main or the user tags you. " +
+      "blocked: you can't go on (give reason); @main is told (the user, when you are @main). active: back at work.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["done", "blocked", "active"] },
+        reason: { type: "string", description: "What you finished, or what blocks you (required for blocked)." },
+        huddle: HUDDLE, profile: PROFILE,
+      },
+      required: ["status"],
+    },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const status = args?.status === "done" || args?.status === "blocked" || args?.status === "active" ? args.status : null;
+      if (!status) throw new ClientError("status must be done, blocked or active");
+      const slug = await slugFor(args, ctx);
+      const p = await ctx.client.huddleStatus(slug, huddleId(args, ctx), status, str(args, "reason", false), huddleCaller(ctx.env));
+      return `@${p.handle} is now ${p.status}${p.statusReason ? ` (${p.statusReason})` : ""}.`;
+    },
+  },
+  {
+    name: "huddle_close",
+    description:
+      "@main and leads: ask the user to close the huddle once its work is done. First write the summary to outputs/huddle-summary.md " +
+      "in the host ticket's outputs folder (what was decided, the findings and their state, what is left). This tags the user; only the user closes the huddle.",
+    inputSchema: {
+      type: "object",
+      properties: { reason: { type: "string", description: "One line: why the huddle can close." }, huddle: HUDDLE, profile: PROFILE },
+      required: ["reason"],
+    },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      await ctx.client.huddleCloseRequest(slug, huddleId(args, ctx), str(args, "reason")!, huddleCaller(ctx.env));
+      return "Asked the user to close the huddle. Only they close it; until then the huddle stays open.";
     },
   },
   {

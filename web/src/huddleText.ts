@@ -7,6 +7,7 @@ interface ParticipantLike {
   kind: string;
   mode: string;
   status: string;
+  statusReason?: string | null;
   lastActivity?: string | null;
   error?: string | null;
 }
@@ -36,6 +37,7 @@ export function participantActivity(p: ParticipantLike, closed = false): string 
   if (p.kind === "human") return "you";
   if (p.status === "stopped") return "stopped";
   if (p.status === "failed") return p.error ? `failed: ${p.error.split("\n")[0]}` : "failed";
+  if (p.status === "done" || p.status === "blocked") return p.statusReason ? `${p.status}: ${p.statusReason}` : p.status;
   if (p.status === "working") return p.lastActivity || "working…";
   return p.mode === "monitor" && !closed ? "watching" : "idle";
 }

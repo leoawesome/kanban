@@ -988,7 +988,19 @@ export function createServer(deps: ServerDeps) {
     if (m === "POST" && action === "messages" && !handle) {
       const b = await body(req);
       const kind = b.kind === "finding" ? "finding" : "message";
-      return json(huddles.post(slug, h.id, me, String(b.text ?? ""), kind), 201);
+      const status = b.status ? { status: b.status, reason: typeof b.reason === "string" ? b.reason : undefined } : undefined;
+      return json(huddles.post(slug, h.id, me, String(b.text ?? ""), kind, status), 201);
+    }
+    // A participant's own status: done, blocked (reason) or active again.
+    if (m === "POST" && action === "status" && !handle) {
+      const b = await body(req);
+      const { token: _t, ...p } = huddles.setStatus(slug, h.id, me, b.status, typeof b.reason === "string" ? b.reason : undefined);
+      return json(p);
+    }
+    // @main or a lead asks the user to close the huddle (only the user closes it).
+    if (m === "POST" && action === "close-request" && !handle) {
+      const b = await body(req);
+      return json(huddles.view(slug, huddles.requestClose(slug, h.id, me, typeof b.reason === "string" ? b.reason : "")));
     }
     if (action === "participants") {
       if (m === "POST" && !handle) {

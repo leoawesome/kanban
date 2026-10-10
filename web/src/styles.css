@@ -1532,6 +1532,8 @@ button.pill:hover { color: var(--text); }
 .huddle-state.live { color: var(--ok); }
 .huddle-state.stopped { color: var(--warn); }
 .huddle-state.closed { color: var(--muted); background: var(--surface-2); border-radius: 99px; padding: 0 8px; }
+.huddle-quiet { color: var(--muted); background: var(--surface-2); border-radius: 99px; padding: 0 8px; }
+.huddle-close-ask { padding: 7px 24px; border-bottom: 1px solid var(--border); background: var(--info-soft); font-size: 12.5px; }
 .huddle-bar .btn.small { color: var(--text); }
 .btn.hd-danger { color: var(--err); border-color: var(--err-soft); }
 .btn.hd-danger:hover:not(:disabled) { background: var(--err-soft); }
@@ -1579,6 +1581,9 @@ button.hd-mode:disabled { cursor: default; }
 .hd-dot.working { background: var(--ok); animation: hd-pulse 1.6s ease-in-out infinite; }
 .hd-dot.failed { background: var(--err); }
 .hd-dot.stopped { background: transparent; border: 1.5px solid var(--muted); }
+.hd-dot.done { background: var(--info); }
+.hd-dot.blocked { background: var(--warn); }
+.hd-p-st.blocked { color: var(--warn); }
 @keyframes hd-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .hd-dot.working { animation: none; } }
 .hd-p-actions { display: flex; align-items: center; gap: 2px; flex: none; }

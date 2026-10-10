@@ -406,6 +406,8 @@ const HUDDLE_TOOLS = `- \`huddle_post\`: post a message. Tag who should act with
 - \`huddle_read\`: the roster and recent messages. \`huddle_mode\`: switch yourself between tagged and monitor mode.
 - \`huddle_findings\`: the pinned findings list (leads and @main add and resolve; everyone can list).
 - \`huddle_add_participant\`: leads and @main only, capped; if the huddle is full, ask the user instead of working around it.
+- \`huddle_status\`: say you are done (you then sleep until a lead, @main or the user tags you) or blocked (with the reason); \`huddle_post\` takes the same status with your last message.
+- \`huddle_close\`: leads and @main, once the work is done: write outputs/huddle-summary.md in the host ticket's outputs first; it asks the user, who alone closes the huddle.
 (ckanban MCP tools; if they are deferred, load them with ToolSearch first.)`;
 
 /** System prompt of a huddle agent's run: who it is, the room's rules, and what it may change. */
@@ -425,7 +427,7 @@ ${p.prompt}${p.focus ? `\n\nFocus: ${p.focus}` : ""}
 - The board stamps each message with the sender of the huddle_post call. Post only through huddle_post, as yourself; your shell runs as the user, so never post through the board's HTTP API or CLI.
 - ${DIGEST_RULE}
 - Don't post only to acknowledge or agree. Tag only who must act on your message.
-- One result post per wake: when your part is done, post your result once, tag who needs it (usually your lead or @main), and end your turn. You are woken again when someone tags you${p.mode === "monitor" ? ", and in monitor mode new messages also arrive between your turns" : ""}.
+- One result post per wake: when your part is done, post your result once, tag who needs it (usually your lead or @main), and end your turn. When your whole job is finished, post it with status done; when you can't go on, set status blocked with the reason. You are woken again when someone tags you${p.mode === "monitor" ? ", and in monitor mode new messages also arrive between your turns" : ""}.
 - When a lead asks several of you to agree on something, the owner the lead named posts it; the others reply only to object.
 - Stay in your focus. If someone already said what you would, +1 it by number (e.g. "+1 #12") instead of repeating it.
 - Don't tag @main for small things; leads collect findings and send @main one consolidated list.
@@ -459,7 +461,7 @@ export function huddleMainPrompt(h: Huddle, p: HuddleParticipant, digest: string
 
 ${context("Huddle messages", `(Messages from huddle ${h.id}, where you are @${p.handle}${coordinator ? ", the coordinator" : ""}. Participants:
 ${rosterLines(h)}
-${coordinator && p.prompt ? `Your role as coordinator: ${p.prompt}\n` : ""}Answer in the huddle with the ckanban \`huddle_post\` tool, tagging who should act; your chat reply is not posted there.${coordinator ? " You may edit the code; the other agents can't (except in their own worktrees). Keep the pinned findings current with `huddle_findings`, and add participants with `huddle_add_participant` if needed (capped; ask the user when it's full)." : ""}
+${coordinator && p.prompt ? `Your role as coordinator: ${p.prompt}\n` : ""}Answer in the huddle with the ckanban \`huddle_post\` tool, tagging who should act; your chat reply is not posted there.${coordinator ? " You may edit the code; the other agents can't (except in their own worktrees). Keep the pinned findings current with `huddle_findings`, and add participants with `huddle_add_participant` if needed (capped; ask the user when it's full). When the huddle's work is done, write the summary to outputs/huddle-summary.md in your outputs folder and ask the user to close it with `huddle_close`." : ""}
 ${DIGEST_RULE} Don't post only to acknowledge, and tag only who must act.
 If you were in the middle of work, carry on with it afterwards and keep following the instructions you were given for that run, including how to end it. Otherwise just act on these messages and end your turn.)
 ${HUDDLE_TOOLS}`, { huddle: h.id })}`;

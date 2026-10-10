@@ -273,7 +273,8 @@ export type HuddleStopReason = "budget" | "messages" | "loop";
 export type HuddleMode = "tagged" | "monitor";
 /** shared: the host ticket's worktree. own: a new git worktree branched off the host ticket's branch. */
 export type HuddleWorkspace = "shared" | "own";
-export type HuddleParticipantStatus = "working" | "idle" | "stopped" | "failed";
+/** done: finished its job, only a lead, @main or the user wakes it again. blocked: waiting on something (statusReason). */
+export type HuddleParticipantStatus = "working" | "idle" | "stopped" | "failed" | "done" | "blocked";
 /** agent: a headless session the huddle runs. ticket-main: a ticket's own session (the host's is @main). human: the user (@you). */
 export type HuddleParticipantKind = "agent" | "ticket-main" | "human";
 
@@ -300,6 +301,8 @@ export interface HuddleParticipant {
   sessionId: string | null;
   sessionStarted?: boolean;
   status: HuddleParticipantStatus;
+  /** done / blocked: why, as the participant said it (huddle_status or huddle_post). */
+  statusReason?: string | null;
   kind: HuddleParticipantKind;
   /** ticket-main: the ticket whose session this is. */
   ticketId?: string | null;
@@ -314,7 +317,9 @@ export interface HuddleParticipant {
   costUsd?: number;
   sessionCostUsd?: number;
   error?: string | null;
-  /** A daemon restart cut its turn off: recover() resumes it. */
+  /** When its last run or turn ended (the huddle's idleSince). */
+  idleAt?: string | null;
+  /** A daemon restart cut its turn off (or held it back while a restart was pending): recover() resumes it. */
   interrupted?: boolean;
   /** Secret the agent's run proves its identity with (CKANBAN_HUDDLE_AGENT); never sent to clients. */
   token?: string;
@@ -353,6 +358,8 @@ export interface Huddle {
   /** Two participants who kept answering each other: they no longer wake each other until a lead, @main or the user tags them, or Resume. */
   held?: string[] | null;
   stopReason?: HuddleStopReason | null;
+  /** @main or a lead asked the user to close the huddle (huddle_close); only the user closes it. */
+  closeRequest?: { by: string; at: string; reason: string } | null;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;

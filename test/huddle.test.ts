@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BoardClient } from "../src/client";
 import { callTool, type ToolContext } from "../src/mcp-server";
 import { Board } from "../src/server/board";
 import { Bus, type BusEvent } from "../src/server/events";
 import { createServer } from "../src/server/http";
-import { Huddles } from "../src/server/huddle";
+import { Huddles, SUMMARY_FILE } from "../src/server/huddle";
 import { BUILTIN_PRESETS, deletePreset, mergePresets, savePreset } from "../src/server/huddle-presets";
 import { parseMentions, rosterError } from "../src/server/huddle-roster";
 import { huddleAgentPrompt, huddleDigest } from "../src/server/prompts";
@@ -16,6 +16,13 @@ import type { Huddle, Profile, Ticket } from "../src/server/types";
 import { makeRepo, tempDir } from "./helpers";
 
 const FAKE = join(import.meta.dir, "fixtures", "fake-claude.ts");
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const p = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const out = await new Response(p.stdout).text();
+  if ((await p.exited) !== 0) throw new Error(`git ${args.join(" ")} failed: ${await new Response(p.stderr).text()}`);
+  return out;
+}
 
 let store: Store;
 let bus: Bus;
@@ -289,7 +296,7 @@ test("huddle_mode switches your own mode only", async () => {
   expect(messages(h).at(-1)!.text).toContain("@reviewer switched to monitor mode");
 }, 20000);
 
-test("stop all stops every run and routing until resumed; close keeps the history read-only", async () => {
+test("stop agents stops every huddle run and routing until resumed; close keeps the history read-only", async () => {
   await Promise.all([board.shutdown(), huddles.shutdown()]);
   server.stop(true);
   await setup(60_000);
@@ -306,7 +313,10 @@ test("stop all stops every run and routing until resumed; close keeps the histor
   expect(((await res.json()) as any).status).toBe("stopped");
   await idle();
   const stopped = store.getHuddle("p", h.id)!;
-  expect(stopped.participants.filter((p) => p.kind !== "human").every((p) => p.status === "stopped")).toBe(true);
+  expect(stopped.participants.filter((p) => p.kind === "agent").every((p) => p.status === "stopped")).toBe(true);
+  // Stop agents leaves the tickets' own sessions alone.
+  expect(participant(h, "main").status).toBe("idle");
+  expect(messages(h).at(-1)!.text).toContain("The tickets' own runs keep going");
   for (const p of stopped.participants) expect(huddles.isRunning("p", stopped, p)).toBe(false);
   // Stopped: messages are kept, nobody wakes; stopped agents can't post.
   const n = heard().length;
@@ -648,4 +658,222 @@ test("ping-pong: two agents answering each other stop waking each other and thei
   await idle();
   expect(store.getHuddle("p", h.id)!.held).toBeNull();
   expect(heardBy("reviewer-2").length).toBe(r2 + 1);
+}, 30000);
+
+test("a mention while the huddle is stopped wakes the agent on resume", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  huddles.stopAll("p", h.id);
+  await idle();
+  const n = heardBy("reviewer").length;
+  huddles.post("p", h.id, you(h), "@reviewer check auth.ts while you're at it");
+  await idle();
+  expect(heardBy("reviewer").length).toBe(n);
+  huddles.resume("p", h.id);
+  await idle();
+  expect(heardBy("reviewer").length).toBe(n + 1);
+  expect(heardBy("reviewer").at(-1)).toContain("check auth.ts");
+  // Delivered once: another resume owes nothing.
+  huddles.resume("p", h.id);
+  await idle();
+  expect(heardBy("reviewer").length).toBe(n + 1);
+}, 20000);
+
+test("a mention posted while the daemon shuts down wakes the agent after the restart", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  const n = heardBy("reviewer").length;
+  await huddles.shutdown();
+  huddles.post("p", h.id, you(h), "@reviewer one more thing");
+  await idle();
+  expect(heardBy("reviewer").length).toBe(n);
+  const again = new Huddles(store, board, bus, { claudeBin: FAKE, idleMs: 300 });
+  again.recover();
+  await again.whenIdle();
+  expect(heardBy("reviewer").length).toBe(n + 1);
+  expect(heardBy("reviewer").at(-1)).toContain("one more thing");
+  await again.shutdown();
+}, 20000);
+
+test("a monitor ticket session's pending messages survive a restart", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  huddles.setMode("p", h.id, you(h), "main", "monitor");
+  // The host's own chat run is busy: an untagged message waits for it to end.
+  process.env.FAKE_STEP_MS = "400";
+  await board.chat("p", t.id, "keep working");
+  expect(board.isRunning("p", t.id)).toBe(true);
+  huddles.post("p", h.id, you(h), "fyi the API moved to v2");
+  // The daemon's huddle side restarts before the run ends: the new one still owes @main the message.
+  await huddles.shutdown();
+  delete process.env.FAKE_STEP_MS;
+  const again = new Huddles(store, board, bus, { claudeBin: FAKE, idleMs: 300 });
+  again.recover();
+  const session = () => store.getTicket("p", t.id)!.sessionId!;
+  await until(() => heardBy(session()).some((x) => x.includes("the API moved to v2")));
+  await again.whenIdle();
+  await board.whenIdle();
+  await again.shutdown();
+}, 20000);
+
+test("stop agents and close leave the host's own run and card status alone", async () => {
+  const t = await board.createTicket("p", { title: "Implement", body: "do it", status: "backlog" });
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  process.env.FAKE_STEP_MS = "500";
+  await board.updateTicket("p", t.id, { status: "ready" });
+  await until(() => board.isRunning("p", t.id));
+  delete process.env.FAKE_STEP_MS;
+  expect(store.getTicket("p", t.id)!.status).toBe("in_progress");
+  huddles.stopAll("p", h.id);
+  expect(board.isRunning("p", t.id)).toBe(true);
+  expect(store.getTicket("p", t.id)!.status).toBe("in_progress");
+  huddles.resume("p", h.id);
+  huddles.close("p", h.id);
+  expect(board.isRunning("p", t.id)).toBe(true);
+  expect(store.getTicket("p", t.id)!.status).toBe("in_progress");
+  expect(store.getTicket("p", t.id)!.outcome ?? null).not.toBe("stopped");
+  await idle();
+  expect(store.getTicket("p", t.id)!.status).toBe("review");
+}, 30000);
+
+test("the huddle closes when its host ticket moves to Done", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  await board.updateTicket("p", t.id, { status: "done" });
+  await until(() => store.getHuddle("p", h.id)!.status === "closed");
+  expect(messages(h).some((m) => m.text.includes("host ticket moved to Done"))).toBe(true);
+  // A huddle still open on a Done host (the daemon missed the move) closes on recover.
+  const t2 = await host();
+  const h2 = huddles.create("p", t2.id, [{ preset: "reviewer" }]);
+  await idle();
+  store.updateTicket("p", t2.id, { status: "done" });
+  huddles.recover();
+  expect(store.getHuddle("p", h2.id)!.status).toBe("closed");
+  await idle();
+}, 20000);
+
+test("closing removes clean own worktrees and their branches, and lists the ones kept", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "engineer", count: 3 }]);
+  await idle();
+  const repo = store.getProfile("p")!.path;
+  const [a, b, c] = ["engineer-1", "engineer-2", "engineer-3"].map((x) => participant(h, x));
+  for (const p of [a, b, c]) expect(existsSync(p.worktree!)).toBe(true);
+  // engineer-2 left uncommitted work, engineer-3 committed work the host's branch doesn't have.
+  writeFileSync(join(b.worktree!, "wip.txt"), "wip");
+  writeFileSync(join(c.worktree!, "done.txt"), "done");
+  await git(c.worktree!, "add", ".");
+  await git(c.worktree!, "commit", "-qm", "work");
+  huddles.close("p", h.id);
+  await idle();
+  expect(existsSync(a.worktree!)).toBe(false);
+  expect((await git(repo, "branch", "--list", a.branch!)).trim()).toBe("");
+  expect(participant(h, "engineer-1").worktree).toBeNull();
+  expect(existsSync(b.worktree!)).toBe(true);
+  expect(existsSync(c.worktree!)).toBe(true);
+  expect((await git(repo, "branch", "--list", c.branch!)).trim()).not.toBe("");
+  const note = messages(h).at(-1)!.text;
+  expect(note).toContain("Removed the own worktrees of @engineer-1");
+  expect(note).toContain("@engineer-2");
+  expect(note).toContain("uncommitted changes");
+  expect(note).toContain("1 commit not on");
+}, 30000);
+
+test("done, blocked and quiet: a done agent only wakes for a lead, @main or the user", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer", count: 2 }]);
+  await idle();
+  // Everyone answered, nobody works, no open findings: quiet.
+  const view = () => huddles.view("p", store.getHuddle("p", h.id)!);
+  expect(view().quiet).toBe(true);
+  expect(view().idleSince).toBeTruthy();
+  // reviewer-1 is done with its last message; reviewer-2 is blocked.
+  expect(text(await callTool("huddle_post", { text: "LGTM", status: "done", reason: "reviewed auth" }, agentCtx(h, "reviewer-1")))).toContain("now done");
+  expect(participant(h, "reviewer-1")).toMatchObject({ status: "done", statusReason: "reviewed auth" });
+  expect((await callTool("huddle_status", { status: "blocked" }, agentCtx(h, "reviewer-2"))).isError).toBe(true);
+  expect(text(await callTool("huddle_status", { status: "blocked", reason: "need the API spec" }, agentCtx(h, "reviewer-2")))).toContain("blocked");
+  const blocked = messages(h).at(-1)!;
+  expect(blocked.text).toContain("@reviewer-2 is blocked: need the API spec");
+  expect(blocked.mentions).toEqual(["main"]);
+  await idle();
+  // A non-lead's tag doesn't wake a done agent...
+  const n = heardBy("reviewer-1").length;
+  huddles.post("p", h.id, participant(h, "reviewer-2"), "@reviewer-1 did you check logout?");
+  await idle();
+  expect(heardBy("reviewer-1").length).toBe(n);
+  expect(participant(h, "reviewer-1").status).toBe("done");
+  // ...and isn't an unanswered tag that keeps the huddle from being quiet.
+  expect(view().quiet).toBe(true);
+  // An open finding does.
+  huddles.findings("p", h.id, you(h), "add", { text: "logout leaks the session" });
+  expect(view().quiet).toBe(false);
+  huddles.findings("p", h.id, you(h), "resolve", { id: "f1" });
+  expect(view().quiet).toBe(true);
+  // The user's tag wakes it and ends done.
+  huddles.post("p", h.id, you(h), "@reviewer-1 check logout too");
+  await idle();
+  expect(heardBy("reviewer-1").length).toBe(n + 1);
+  expect(participant(h, "reviewer-1")).toMatchObject({ status: "idle", statusReason: null });
+  const read = text(await callTool("huddle_read", {}, agentCtx(h, "reviewer-1")));
+  expect(read).toContain("@reviewer-2: Code reviewer, tagged, blocked (need the API spec)");
+  expect(read).toContain("The huddle is quiet");
+}, 30000);
+
+test("huddle_close: only @main and leads ask, after writing the summary; only the user closes", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  const r = await callTool("huddle_close", { reason: "all reviewed" }, agentCtx(h, "reviewer"));
+  expect(r.isError).toBe(true);
+  expect(text(r)).toContain("only @main or a lead");
+  const missing = await callTool("huddle_close", { reason: "all reviewed" }, mainCtx(h));
+  expect(missing.isError).toBe(true);
+  expect(text(missing)).toContain(SUMMARY_FILE);
+  writeFileSync(join(store.outputsDir("p", t.id), SUMMARY_FILE), "# Summary\n");
+  expect(text(await callTool("huddle_close", { reason: "all reviewed" }, mainCtx(h)))).toContain("Only they close it");
+  const s = store.getHuddle("p", h.id)!;
+  expect(s.status).toBe("live");
+  expect(s.closeRequest).toMatchObject({ by: "main", reason: "all reviewed" });
+  expect(messages(h).at(-1)!.mentions).toEqual(["you"]);
+  // Closing itself stays with the user.
+  const res = await fetch(`${client.url}/api/profiles/p/huddles/${h.id}/close`, {
+    method: "POST", headers: { "content-type": "application/json", "x-ckanban-run": `p/${t.id}` }, body: "{}",
+  });
+  expect(res.status).toBe(403);
+}, 20000);
+
+test("a pending restart waits for huddle agents mid-turn and holds new agent runs until recover", async () => {
+  const t = await host();
+  process.env.FAKE_STEP_MS = "300";
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }, { preset: "security" }]);
+  await until(() => heardBy("reviewer").length === 1);
+  let restarted = false;
+  board.requestRestart(() => void (restarted = true), 20_000);
+  expect(board.restartState()).toMatchObject({ pending: true });
+  expect(board.restartState().waiting).toBeGreaterThan(0);
+  await Bun.sleep(250);
+  expect(restarted).toBe(false);
+  await until(() => restarted, 10_000);
+  delete process.env.FAKE_STEP_MS;
+  // While the restart is pending a tag starts no run: the agent is marked so recover() wakes it.
+  const n = heardBy("reviewer").length;
+  huddles.post("p", h.id, you(h), "@reviewer and the logout flow?");
+  await idle();
+  expect(heardBy("reviewer").length).toBe(n);
+  expect(participant(h, "reviewer").interrupted).toBe(true);
+  await huddles.shutdown();
+  const fresh = new Board(store, bus, { claudeBin: FAKE, isSessionLive: async () => false });
+  const again = new Huddles(store, fresh, bus, { claudeBin: FAKE, idleMs: 300 });
+  again.recover();
+  await again.whenIdle();
+  expect(heardBy("reviewer").length).toBe(n + 1);
+  expect(heardBy("reviewer").at(-1)).toContain("the logout flow?");
+  expect(heardBy("reviewer").at(-1)).not.toContain("restarted while you were working");
+  expect(participant(h, "reviewer").interrupted).toBe(false);
+  await Promise.all([fresh.shutdown(), again.shutdown()]);
 }, 30000);

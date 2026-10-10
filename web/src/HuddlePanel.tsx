@@ -25,6 +25,7 @@ const STOP_REASON = {
   messages: "message limit reached",
   loop: "paused: many messages without you",
 } as const;
+const STOP_AGENTS_TIP = "Stops huddle agents only. The ticket's own run keeps going.";
 /** What Resume adds when the budget is spent. */
 const BUDGET_STEP = 10;
 
@@ -135,6 +136,11 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
     <div className="huddle">
       <div className="huddle-bar">
         <span className={`huddle-state ${h.status}`}>{STATE_LABEL[h.status]}{h.status === "stopped" && h.stopReason ? ` · ${STOP_REASON[h.stopReason]}` : ""}</span>
+        {h.quiet && (
+          <span className="huddle-quiet" title="Nobody is working, no tag is unanswered and no finding is open: the huddle may be done.">
+            quiet{h.idleSince ? ` since ${clock(h.idleSince)}` : ""}
+          </span>
+        )}
         <span title={fullTime(h.createdAt)}>started {clock(h.createdAt)}</span>
         <span>· {h.seq} message{h.seq === 1 ? "" : "s"}</span>
         <span title="What the huddle spent so far: its agents' runs and @main's huddle replies. It stops at the budget.">
@@ -164,12 +170,18 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
                 )}
               </>
             ) : (
-              <button className="btn small hd-danger" onClick={() => setConfirm("stop")}>■ Stop all</button>
+              <button className="btn small hd-danger" onClick={() => setConfirm("stop")} title={STOP_AGENTS_TIP}>■ Stop agents</button>
             )}
-            <button className="btn small" onClick={() => setConfirm("close")}>Close huddle</button>
+            <button className={`btn small${h.closeRequest ? " primary" : ""}`} onClick={() => setConfirm("close")}
+              title={h.closeRequest ? `@${h.closeRequest.by} asks to close: ${h.closeRequest.reason}` : undefined}>Close huddle</button>
           </>
         )}
       </div>
+      {h.closeRequest && !closed && (
+        <div className="huddle-close-ask">
+          <b>@{h.closeRequest.by}</b> asks to close the huddle: {h.closeRequest.reason}. The summary is in the ticket's outputs (huddle-summary.md).
+        </div>
+      )}
       {adding && !closed && <AddAgent slug={slug} huddle={h} onDone={() => setAdding(false)} onError={onError} />}
       <div className="huddle-body">
         <div className="huddle-feed">
@@ -182,15 +194,15 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
         </aside>
       </div>
       {confirm === "stop" && (
-        <ConfirmDialog title="Stop all?" confirmLabel="Stop all" busyLabel="Stopping…" onCancel={() => setConfirm(null)}
+        <ConfirmDialog title="Stop agents?" confirmLabel="Stop agents" busyLabel="Stopping…" onCancel={() => setConfirm(null)}
           onConfirm={async () => { await api.huddleAction(slug, h.id, "stop"); setConfirm(null); }}>
-          <p>Every participant's run stops now, @main's included. Nobody wakes until you resume the huddle.</p>
+          <p>{STOP_AGENTS_TIP} The huddle agents' runs and @main's huddle replies stop now; nobody is woken until you resume the huddle.</p>
         </ConfirmDialog>
       )}
       {confirm === "close" && (
         <ConfirmDialog title="Close the huddle?" confirmLabel="Close huddle" busyLabel="Closing…" onCancel={() => setConfirm(null)}
           onConfirm={async () => { await api.huddleAction(slug, h.id, "close"); setConfirm(null); }}>
-          <p>Every run stops and the huddle becomes read-only. Its history stays here.</p>
+          <p>The huddle's runs stop and it becomes read-only; its history stays here. The ticket's own run keeps going. Clean agent worktrees are removed.</p>
         </ConfirmDialog>
       )}
     </div>
@@ -373,7 +385,7 @@ function Roster({ slug, huddle: h, onError }: { slug: string; huddle: Huddle; on
       <h3>Participants <span className="hd-cap">{members(h).length}/{h.maxParticipants}</span></h3>
       {ps.map((p) => {
         const human = p.kind === "human";
-        const st = p.status === "working" ? "working" : p.status === "failed" ? "failed" : p.status === "stopped" ? "stopped" : "idle";
+        const st = ["working", "failed", "stopped", "done", "blocked"].includes(p.status) ? p.status : "idle";
         return (
           <div key={p.handle} className="hd-p">
             <Avatar handle={p.handle} small />

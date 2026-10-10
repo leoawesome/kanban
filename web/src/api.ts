@@ -455,7 +455,9 @@ export interface HuddleParticipant {
   lead: boolean;
   canEdit: boolean;
   workspace: "shared" | "own";
-  status: "working" | "idle" | "stopped" | "failed";
+  /** done: finished its job (only a lead, @main or the user wakes it). blocked: waiting on something (statusReason). */
+  status: "working" | "idle" | "stopped" | "failed" | "done" | "blocked";
+  statusReason?: string | null;
   kind: "agent" | "ticket-main" | "human";
   ticketId?: string | null;
   joinedAt: string;
@@ -489,6 +491,11 @@ export interface Huddle {
   maxCostUsd?: number;
   /** Why it stopped by itself: budget spent, message limit, or too long without the user (routing paused). */
   stopReason?: "budget" | "messages" | "loop" | null;
+  /** @main or a lead asked the user to close the huddle (its summary is in the host's outputs). */
+  closeRequest?: { by: string; at: string; reason: string } | null;
+  /** Live, nobody working, no unanswered tags, no open findings; idleSince: the last message or turn. */
+  quiet?: boolean;
+  idleSince?: string | null;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;

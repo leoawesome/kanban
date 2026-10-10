@@ -1,12 +1,18 @@
 // Huddles: a shared message room where several headless Claude sessions work on one ticket together.
 // The host ticket's own session is @main (the coordinator); agents (reviewer, QA, ...) are sessions the huddle runs
 // itself, outside the board's run slots (only maxParticipants limits them). Other tickets' sessions can be invited.
-// The daemon stamps every message's sender, keeps the log append-only, caps the roster, and one Stop stops everyone.
+// The daemon stamps every message's sender, keeps the log append-only, caps the roster, and one Stop stops every
+// huddle agent. Stop and Close never touch the tickets' own work: only the reply runs the huddle woke them for.
 //
 // Routing: an @mentioned participant is woken (steered if it is running, else its session resumes with what it
 // hasn't read). Monitor-mode participants get every new message at their next turn boundary; tagged ones sleep until
 // mentioned. Nobody gets their own messages. System messages are context only and wake nobody, except the brakes'
-// warnings to the leads. Only leads, @main and the user can wake everyone with @all.
+// warnings to the leads. Only leads, @main and the user can wake everyone with @all. A participant that is done
+// sleeps until a lead, @main or the user tags it; a blocked one until someone tags it. Wakes owed while the huddle
+// was stopped or the daemon was down are delivered on Resume and after a restart (see wakeIfOwed).
+//
+// Lifecycle: @main or a lead writes outputs/huddle-summary.md and asks the user to close (huddle_close); only the
+// user closes, or the host ticket moving to Done does. Closing removes the agents' clean own worktrees.
 //
 // Brakes, so a huddle can't loop or overspend: it stops at maxCostUsd (agents' runs and @main's huddle replies; the
 // leads are warned at 80%) and at maxMessages; routing pauses after AGENT_ONLY_MAX messages without the user; two
@@ -17,7 +23,7 @@ import { summarizeEvent } from "./activity";
 import { mcpConfig } from "./agents";
 import { claudeSessionExists, type Board } from "./board";
 import type { Bus } from "./events";
-import { addWorktree, isGitRepo, worktreeDir } from "./git";
+import { addWorktree, branchExists, isGitRepo, removeWorktree, run as git, worktreeDir } from "./git";
 import {
   DEFAULT_MAX_PARTICIPANTS, handleBase, HUDDLE_AGENT_ENV, MAIN_HANDLE, NO_EDIT_TOOLS, parseMentions, RESERVED_HANDLES, rosterEntryError,
   rosterError, USER_HANDLE, type RosterEntry,
@@ -60,7 +66,14 @@ function costAfter(p: HuddleParticipant | undefined, total: number): Pick<Huddle
 const money = (n: number) => `$${n.toFixed(2)}`;
 
 export type ParticipantView = Omit<HuddleParticipant, "token"> & { running: boolean };
-export type HuddleView = Omit<Huddle, "participants"> & { participants: ParticipantView[]; hostTitle: string | null };
+/**
+ * quiet: live, nobody working, no unanswered tags and no open findings (a sign it can be wrapped up);
+ * idleSince: when the last message or turn was.
+ */
+export type HuddleView = Omit<Huddle, "participants"> & { participants: ParticipantView[]; hostTitle: string | null; quiet: boolean; idleSince: string | null };
+
+/** The file @main or a lead writes in the host ticket's outputs before asking to close the huddle. */
+export const SUMMARY_FILE = "huddle-summary.md";
 
 /** Who is calling, from the request: a board run's ticket (RUN_HEADER) and a huddle agent (HUDDLE_HEADER). Neither: the user. */
 export interface Caller {
@@ -89,6 +102,8 @@ interface AgentRun {
 
 const isCoordinator = (h: Huddle, p: HuddleParticipant) => p.kind === "ticket-main" && p.ticketId === h.hostTicket;
 const canManage = (h: Huddle, p: HuddleParticipant) => p.kind === "human" || isCoordinator(h, p) || p.lead;
+/** done / blocked: set by the participant itself; its runs' turns ending don't change it. */
+const settled = (p: HuddleParticipant | undefined) => p?.status === "done" || p?.status === "blocked";
 
 export class Huddles {
   private runs = new Map<string, AgentRun>();
@@ -98,13 +113,25 @@ export class Huddles {
   private mainWoken = new Map<string, { hid: string; handle: string }>();
   private shuttingDown = false;
   private sessionExists: (id: string) => boolean;
+  /** Background work whenIdle() waits for (worktree cleanup after a close). */
+  private chores = new Set<Promise<void>>();
 
   constructor(private store: Store, private board: Board, private bus: Bus, private opts: HuddleOptions) {
     this.sessionExists = opts.sessionExists ?? claudeSessionExists;
+    // A pending restart waits for huddle agents mid-turn too.
+    board.onRestartBusy(() => this.busy());
     // A monitor-mode ticket session gets what came in while it worked once its run is over.
     bus.on((e) => {
       if (e.type === "activity") return this.mainResult(e.profile, e.id, e.event);
-      if (e.type !== "ticket.updated" || !this.mainPending.size) return;
+      if (e.type !== "ticket.updated" || this.shuttingDown) return;
+      // The host ticket is done: so is its huddle.
+      if (e.ticket.status === "done") {
+        const { profile, ticket } = e;
+        if (this.store.listHuddles(profile).some((h) => h.hostTicket === ticket.id && h.status !== "closed")) {
+          queueMicrotask(() => this.closeForTicket(profile, ticket.id, "the host ticket moved to Done"));
+        }
+      }
+      if (!this.mainPending.size) return;
       for (const key of [...this.mainPending]) {
         const [slug, hid, handle] = key.split("/");
         if (slug !== e.profile) continue;
@@ -129,7 +156,7 @@ export class Huddles {
     const h = this.store.getHuddle(slug, woken.hid);
     const p = h?.participants.find((x) => x.handle === woken.handle && x.ticketId === ticketId);
     if (!h || !p || h.status === "closed") return;
-    this.updateP(slug, h.id, p.handle, costAfter(p, Number(ev.total_cost_usd) || 0));
+    this.updateP(slug, h.id, p.handle, { ...costAfter(p, Number(ev.total_cost_usd) || 0), idleAt: nowIso() });
     this.checkBudget(slug, h.id);
   }
 
@@ -147,17 +174,43 @@ export class Huddles {
     return false;
   }
 
+  /** Huddle agents mid-turn (or starting): a pending restart waits for them. */
+  busy(): number {
+    return [...this.runs.values()].filter((r) => !r.idle && !r.stopRequested).length;
+  }
+
+  /** Doing something now: an agent mid-turn, or a ticket session with a run (its own work or a huddle reply). */
+  private working(slug: string, h: Huddle, p: HuddleParticipant): boolean {
+    if (p.kind === "agent") {
+      const run = this.runs.get(this.key(slug, h.id, p.handle));
+      return !!run && !run.idle;
+    }
+    return this.isRunning(slug, h, p);
+  }
+
   view(slug: string, h: Huddle): HuddleView {
     return {
       ...h,
       hostTitle: this.store.getTicket(slug, h.hostTicket)?.title ?? null,
       participants: h.participants.map(({ token: _t, ...p }) => {
         const running = this.isRunning(slug, h, p);
-        // A ticket session's status is its ticket's run.
-        const status = p.kind === "ticket-main" && p.status !== "stopped" ? (running ? "working" : "idle") : p.status;
+        // A ticket session's status is its ticket's run (unless it said it is done or blocked, or was stopped).
+        const status = p.kind === "ticket-main" && (p.status === "idle" || p.status === "working") ? (running ? "working" : "idle") : p.status;
         return { ...p, status, running };
       }),
+      ...this.quiet(slug, h),
     };
+  }
+
+  /** Live, nobody working, nobody with an unanswered tag and no open findings; idleSince: the last message or turn. */
+  private quiet(slug: string, h: Huddle): { quiet: boolean; idleSince: string | null } {
+    const no = { quiet: false, idleSince: null };
+    const ps = h.participants.filter((p) => p.kind !== "human");
+    if (h.status !== "live" || h.findings.some((f) => f.status === "open") || ps.some((p) => this.working(slug, h, p))) return no;
+    const msgs = this.store.readHuddleMessages(slug, h.id);
+    if (ps.some((p) => msgs.some((m) => m.seq > p.cursor && this.wakes(h, p, m) === "mention"))) return no;
+    const times = [msgs.at(-1)?.ts, ...ps.map((p) => p.idleAt)].filter((t): t is string => !!t);
+    return { quiet: true, idleSince: times.length ? times.reduce((a, b) => (a > b ? a : b)) : h.createdAt };
   }
 
   list(slug: string, ticketId?: string): HuddleView[] {
@@ -293,9 +346,7 @@ export class Huddles {
   private system(slug: string, hid: string, text: string, wake: string[] = []): HuddleMessage {
     const m = this.append(slug, hid, "system", text, "system", wake);
     const h = this.get(slug, hid);
-    if (h.status === "live") {
-      for (const p of h.participants) if (wake.includes(p.handle) && p.kind !== "human" && p.status !== "stopped") this.deliver(slug, h, p, true);
-    }
+    if (h.status === "live") for (const p of h.participants) if (this.wakes(h, p, m)) this.wake(slug, h, p, true);
     return m;
   }
 
@@ -464,17 +515,69 @@ export class Huddles {
     return this.get(slug, hid).findings;
   }
 
-  /** Post a message as `by` (the daemon decided who that is) and route it. */
-  post(slug: string, hid: string, by: HuddleParticipant, text: string, kind: HuddleMessageKind = "message"): HuddleMessage {
+  /**
+   * Post a message as `by` (the daemon decided who that is) and route it. status: the sender is done or blocked
+   * (reason) with this message, as with setStatus.
+   */
+  post(slug: string, hid: string, by: HuddleParticipant, text: string, kind: HuddleMessageKind = "message", status?: { status: StatusChange; reason?: string }): HuddleMessage {
     const h = this.get(slug, hid);
     this.assertOpen(h);
     if (!text.trim()) throw new HuddleError(400, "text is required");
     if (kind !== "message" && kind !== "finding") throw new HuddleError(400, "kind must be message or finding");
     if (by.status === "stopped" && by.kind !== "human") throw new HuddleError(409, `@${by.handle} was stopped by the user`);
+    if (status) this.checkStatus(by, status.status, status.reason);
     const m = this.append(slug, hid, by.handle, text.trim(), kind, h.participants.map((p) => p.handle), canManage(h, by));
-    // Stopped: the log keeps it; nothing is woken until the user resumes.
+    // Stopped: the log keeps it; Resume wakes whoever it tags (wakeIfOwed).
     if (h.status === "live" && this.brakes(slug, hid, by, m)) this.route(slug, hid, m);
+    if (status) this.setStatus(slug, hid, by, status.status, status.reason);
     return m;
+  }
+
+  private checkStatus(by: HuddleParticipant, status: StatusChange, reason?: string) {
+    if (by.kind === "human") throw new HuddleError(400, "the user has no huddle status");
+    if (status !== "done" && status !== "blocked" && status !== "active") throw new HuddleError(400, "status must be done, blocked or active");
+    if (status === "blocked" && !reason?.trim()) throw new HuddleError(400, "say what blocks you (reason)");
+  }
+
+  /**
+   * A participant says it is done (only a lead, @main or the user wakes it again), blocked on something (@main is
+   * tagged; @you when @main itself is blocked), or active again.
+   */
+  setStatus(slug: string, hid: string, by: HuddleParticipant, status: StatusChange, reason?: string): HuddleParticipant {
+    const h = this.get(slug, hid);
+    this.assertOpen(h);
+    this.checkStatus(by, status, reason);
+    const p = h.participants.find((x) => x.handle === by.handle)!;
+    if (p.status === "stopped") throw new HuddleError(409, `@${p.handle} was stopped by the user`);
+    const why = reason?.trim() || null;
+    if (status === "active") {
+      if (!settled(p)) return p;
+      this.updateP(slug, hid, p.handle, { status: this.working(slug, h, p) ? "working" : "idle", statusReason: null });
+      this.system(slug, hid, `@${p.handle} is active again.`);
+    } else {
+      this.updateP(slug, hid, p.handle, { status, statusReason: why });
+      if (status === "done") this.system(slug, hid, `@${p.handle} is done${why ? `: ${why}` : "."}`);
+      else this.system(slug, hid, `@${p.handle} is blocked: ${why}`, [isCoordinator(h, p) ? USER_HANDLE : MAIN_HANDLE]);
+    }
+    return this.get(slug, hid).participants.find((x) => x.handle === p.handle)!;
+  }
+
+  /**
+   * @main or a lead asks the user to close the huddle, once it has written the summary into the host ticket's
+   * outputs. Only the user closes it.
+   */
+  requestClose(slug: string, hid: string, by: HuddleParticipant, reason: string): Huddle {
+    const h = this.get(slug, hid);
+    this.assertOpen(h);
+    if (!canManage(h, by)) throw new HuddleError(403, "only @main or a lead can ask to close the huddle; tell your lead you are done (huddle_status done)");
+    const summary = join(this.store.outputsDir(slug, h.hostTicket), SUMMARY_FILE);
+    if (!existsSync(summary)) {
+      throw new HuddleError(409, `write the huddle summary first: ${summary} (what was decided, the findings and their state, what is left to do), then call huddle_close again`);
+    }
+    const why = reason.trim() || "the work is done";
+    this.update(slug, hid, (x) => void (x.closeRequest = { by: by.handle, at: nowIso(), reason: why }));
+    this.system(slug, hid, `@${by.handle} asks to close the huddle: ${why}. The summary is in the host ticket's outputs (${SUMMARY_FILE}). @you: press Close huddle to end it; only you can close it.`, [USER_HANDLE]);
+    return this.get(slug, hid);
   }
 
   /** Counts a new message against the huddle's limits; false when routing just stopped or paused. */
@@ -520,16 +623,7 @@ export class Huddles {
     // The budget also stops a huddle whose routing was only paused.
     if (h.status === "closed" || (h.status !== "live" && reason !== "budget") || h.stopReason === reason) return;
     const hard = reason !== "loop";
-    if (hard) {
-      for (const p of h.participants) {
-        if (p.kind === "agent") this.stopParticipantRun(slug, h, p);
-        // A ticket's session: only the reply run the huddle woke it for (its own work goes on).
-        else if (p.kind === "ticket-main" && p.ticketId) {
-          this.mainPending.delete(this.key(slug, hid, p.handle));
-          if (this.board.isPeerRun(slug, p.ticketId) && this.mainWoken.get(`${slug}/${p.ticketId}`)?.hid === hid) this.board.stop(slug, p.ticketId);
-        }
-      }
-    }
+    if (hard) for (const p of h.participants) if (p.kind !== "human") this.stopParticipantRun(slug, h, p);
     this.update(slug, hid, (x) => {
       x.status = "stopped";
       x.stopReason = reason;
@@ -559,14 +653,57 @@ export class Huddles {
 
   private route(slug: string, hid: string, m: HuddleMessage) {
     const h = this.get(slug, hid);
-    const held = h.held ?? [];
     for (const p of h.participants) {
-      if (p.kind === "human" || p.handle === m.from || p.status === "stopped") continue;
-      // A held pair doesn't wake each other.
-      if (held.includes(p.handle) && held.includes(m.from)) continue;
-      const mentioned = m.mentions.includes(p.handle) || m.mentions.includes("all");
-      if (mentioned || p.mode === "monitor") this.deliver(slug, h, p, mentioned);
+      const w = this.wakes(h, p, m);
+      if (w) this.wake(slug, h, p, w === "mention");
     }
+  }
+
+  /**
+   * Whether a message wakes a participant: "mention" (tagged, or a system message naming it), "monitor" (it sees
+   * every message) or null. Done: only a tag from a lead, @main or the user (or the brakes). Blocked: only a tag.
+   */
+  private wakes(h: Huddle, p: HuddleParticipant, m: HuddleMessage): "mention" | "monitor" | null {
+    if (p.kind === "human" || m.from === p.handle || p.status === "stopped") return null;
+    // A held pair doesn't wake each other.
+    const held = h.held ?? [];
+    if (held.includes(p.handle) && held.includes(m.from)) return null;
+    const mentioned = m.mentions.includes(p.handle) || m.mentions.includes("all");
+    if (m.kind === "system") return mentioned ? "mention" : null;
+    if (p.status === "done") {
+      const from = h.participants.find((x) => x.handle === m.from);
+      return mentioned && from && canManage(h, from) ? "mention" : null;
+    }
+    if (mentioned) return "mention";
+    return p.mode === "monitor" && p.status !== "blocked" ? "monitor" : null;
+  }
+
+  /** Wake a participant; being woken ends done or blocked. */
+  private wake(slug: string, h: Huddle, p: HuddleParticipant, mentioned: boolean) {
+    if (settled(p)) this.updateP(slug, h.id, p.handle, { status: "idle", statusReason: null });
+    this.deliver(slug, h, p, mentioned);
+  }
+
+  /**
+   * Deliver a wake that was owed but never happened: messages that tag the participant (or, in monitor mode, any
+   * new ones) after its cursor. Run on Resume and after a restart, so nothing posted while the huddle was stopped
+   * or the daemon was going down is lost. A monitor ticket session's pending messages come back this way too.
+   */
+  private wakeIfOwed(slug: string, hid: string, handle: string) {
+    const h = this.store.getHuddle(slug, hid);
+    const p = h?.participants.find((x) => x.handle === handle);
+    if (!h || !p || h.status !== "live") return;
+    let owed: "mention" | "monitor" | null = null;
+    for (const m of this.store.readHuddleMessages(slug, hid)) {
+      if (m.seq <= p.cursor) continue;
+      const w = this.wakes(h, p, m);
+      if (w === "mention") {
+        owed = w;
+        break;
+      }
+      owed ??= w;
+    }
+    if (owed) this.wake(slug, h, p, owed === "mention");
   }
 
   /**
@@ -612,7 +749,7 @@ export class Huddles {
   private deliverNow(slug: string, hid: string, handle: string) {
     const h = this.store.getHuddle(slug, hid);
     const p = h?.participants.find((x) => x.handle === handle);
-    if (!h || !p || h.status !== "live" || p.status === "stopped" || this.shuttingDown) return;
+    if (!h || !p || h.status !== "live" || p.status === "stopped" || p.status === "done" || this.shuttingDown) return;
     if (p.kind === "ticket-main") {
       const u = p.ticketId ? this.takeUnread(slug, hid, handle) : null;
       if (!u) return;
@@ -635,7 +772,7 @@ export class Huddles {
       const u = this.takeUnread(slug, hid, handle);
       if (!u) return;
       if (run.handle?.send(huddleAgentPrompt("wake", p, u.digest, u.tagged))) {
-        if (run.idle) this.updateP(slug, hid, handle, { status: "working" });
+        if (run.idle && !settled(p)) this.updateP(slug, hid, handle, { status: "working" });
         run.idle = false;
       } else {
         // Input is closing (the run is finishing): a new run picks them up.
@@ -644,22 +781,33 @@ export class Huddles {
       }
       return;
     }
+    // Before taking the unread messages: recover() hands them over after the restart.
+    if (this.holdForRestart(slug, hid, handle)) return;
     const u = this.takeUnread(slug, hid, handle);
     if (u) this.runAgent(slug, hid, handle, huddleAgentPrompt("wake", p, u.digest, u.tagged));
   }
 
+  /** A restart is pending: no new agent run starts; the agent is marked so recover() starts it after the restart. */
+  private holdForRestart(slug: string, hid: string, handle: string): boolean {
+    if (!this.board.isRestartPending()) return false;
+    this.updateP(slug, hid, handle, { interrupted: true, lastActivity: "Waiting for the board to restart" });
+    return true;
+  }
+
   /** An agent's first run: start on its job with what was said so far. */
   private kickoff(slug: string, hid: string, handle: string) {
+    if (this.holdForRestart(slug, hid, handle)) return;
     const p = this.get(slug, hid).participants.find((x) => x.handle === handle)!;
     this.runAgent(slug, hid, handle, huddleAgentPrompt("start", p, this.takeUnread(slug, hid, handle, true)?.digest ?? ""));
   }
 
   private runAgent(slug: string, hid: string, handle: string, input: string) {
     const key = this.key(slug, hid, handle);
-    if (this.runs.has(key) || this.shuttingDown) return;
+    if (this.runs.has(key) || this.shuttingDown || this.holdForRestart(slug, hid, handle)) return;
     const run: AgentRun = { handle: null, promise: Promise.resolve(), idle: false, pending: false, again: false, stopRequested: false };
     this.runs.set(key, run);
-    this.updateP(slug, hid, handle, { status: "working", error: null, interrupted: false });
+    const cur = this.get(slug, hid).participants.find((x) => x.handle === handle);
+    this.updateP(slug, hid, handle, { status: settled(cur) ? cur!.status : "working", error: null, interrupted: false });
     run.promise = this.executeAgent(slug, hid, handle, run, input)
       .catch((e) => {
         console.error(`huddle ${slug}/${hid} @${handle} crashed`, e);
@@ -668,6 +816,7 @@ export class Huddles {
       .finally(() => {
         this.runs.delete(key);
         if (this.shuttingDown) return;
+        this.board.restartWorkChanged();
         // Emit with running: false now that the run is gone.
         if (this.store.getHuddle(slug, hid)) this.update(slug, hid, () => {});
         if ((run.again || run.pending) && !run.stopRequested) this.deliverNow(slug, hid, handle);
@@ -721,7 +870,8 @@ export class Huddles {
         if (ev?.type === "result") {
           run.idle = true;
           const cur = this.get(slug, hid).participants.find((x) => x.handle === handle);
-          this.updateP(slug, hid, handle, { status: "idle", ...costAfter(cur, Number(ev.total_cost_usd) || 0) });
+          this.updateP(slug, hid, handle, { status: settled(cur) ? cur!.status : "idle", idleAt: nowIso(), ...costAfter(cur, Number(ev.total_cost_usd) || 0) });
+          this.board.restartWorkChanged();
           this.checkBudget(slug, hid);
           // Turn boundary: a monitor gets what came in while it worked.
           if (run.pending) queueMicrotask(() => this.deliverNow(slug, hid, handle));
@@ -734,7 +884,7 @@ export class Huddles {
         }
         if (run.idle && (ev?.type === "assistant" || (ev?.type === "system" && ev.subtype === "init"))) {
           run.idle = false;
-          this.updateP(slug, hid, handle, { status: "working" });
+          if (!settled(this.get(slug, hid).participants.find((x) => x.handle === handle))) this.updateP(slug, hid, handle, { status: "working" });
         }
         const s = summarizeEvent(ev);
         const now = Date.now();
@@ -755,9 +905,14 @@ export class Huddles {
       this.system(slug, hid, `@${handle}'s run failed: ${error}`);
       return;
     }
-    this.updateP(slug, hid, handle, { sessionStarted: started, status: "idle" });
+    const cur = this.get(slug, hid).participants.find((x) => x.handle === handle);
+    this.updateP(slug, hid, handle, { sessionStarted: started, status: settled(cur) ? cur!.status : "idle", idleAt: nowIso() });
   }
 
+  /**
+   * Stop what the huddle runs for a participant: an agent's run, or the reply run the huddle woke a ticket's session
+   * for. A ticket's own work (its runs, slot waits, card status) is never touched.
+   */
   private stopParticipantRun(slug: string, h: Huddle, p: HuddleParticipant) {
     const run = this.runs.get(this.key(slug, h.id, p.handle));
     if (run) {
@@ -765,11 +920,12 @@ export class Huddles {
       run.handle?.stop();
     }
     this.mainPending.delete(this.key(slug, h.id, p.handle));
-    // A ticket's session: stop its run too (the user's one Stop stops everyone).
-    if (p.kind === "ticket-main" && p.ticketId) this.board.stop(slug, p.ticketId);
+    if (p.kind === "ticket-main" && p.ticketId && this.board.isPeerRun(slug, p.ticketId) && this.mainWoken.get(`${slug}/${p.ticketId}`)?.hid === h.id) {
+      this.board.stop(slug, p.ticketId);
+    }
   }
 
-  /** The user stops one participant: its run ends and nothing wakes it until the huddle is resumed. */
+  /** The user stops one participant: its huddle run ends and nothing wakes it until the huddle is resumed. */
   stopParticipant(slug: string, hid: string, handle: string): void {
     const h = this.get(slug, hid);
     const p = h.participants.find((x) => x.handle === handle && x.kind !== "human");
@@ -779,7 +935,10 @@ export class Huddles {
     if (h.status !== "closed") this.system(slug, hid, `@${handle} was stopped by @you.`);
   }
 
-  /** Stop all: every participant's run ends and the huddle stops routing until resumed. */
+  /**
+   * Stop agents: every huddle agent's run and the huddle's reply runs end, and the huddle stops routing until resumed.
+   * The tickets' own sessions keep working (only their huddle replies stop).
+   */
   stopAll(slug: string, hid: string): Huddle {
     const h = this.get(slug, hid);
     this.assertOpen(h);
@@ -787,15 +946,16 @@ export class Huddles {
     this.update(slug, hid, (x) => {
       x.status = "stopped";
       x.stopReason = null;
-      for (const p of x.participants) if (p.kind !== "human") p.status = "stopped";
+      for (const p of x.participants) if (p.kind === "agent") p.status = "stopped";
     });
-    this.system(slug, hid, "Huddle stopped by @you: every run was stopped.");
+    this.system(slug, hid, "Huddle agents stopped by @you. The tickets' own runs keep going.");
     return this.get(slug, hid);
   }
 
   /**
-   * Resume routing; stopped participants wake again when tagged (or, in monitor mode, on new messages).
-   * addBudgetUsd raises the budget (needed when it was spent); the message limit and the agent-only count start over.
+   * Resume routing; stopped participants wake again when tagged (or, in monitor mode, on new messages), and whoever
+   * was tagged while the huddle was stopped wakes now. addBudgetUsd raises the budget (needed when it was spent);
+   * the message limit and the agent-only count start over.
    */
   resume(slug: string, hid: string, addBudgetUsd = 0): Huddle {
     const h = this.get(slug, hid);
@@ -816,25 +976,65 @@ export class Huddles {
       for (const p of x.participants) if (p.status === "stopped") p.status = "idle";
     });
     if (h.status !== "live" || addBudgetUsd) this.system(slug, hid, `Huddle resumed by @you${addBudgetUsd ? ` with ${money(addBudgetUsd)} more budget (now ${money(max)})` : ""}.`);
+    for (const p of this.get(slug, hid).participants) if (p.kind !== "human") this.wakeIfOwed(slug, hid, p.handle);
     return this.get(slug, hid);
   }
 
-  /** Only the user closes a huddle: every run stops and the history stays, read-only. */
-  close(slug: string, hid: string): Huddle {
+  /**
+   * The user closes a huddle (or the host ticket is done or deleted: `why`): the huddle's runs stop, the history
+   * stays read-only, and the agents' own worktrees are removed when clean. The tickets' own work is untouched.
+   */
+  close(slug: string, hid: string, why?: string): Huddle {
     const h = this.get(slug, hid);
     if (h.status === "closed") return h;
     for (const p of h.participants) if (p.kind !== "human") this.stopParticipantRun(slug, h, p);
-    this.system(slug, hid, "Huddle closed by @you. The history stays, read-only.");
-    return this.update(slug, hid, (x) => {
+    this.system(slug, hid, why ? `Huddle closed: ${why}. The history stays, read-only.` : "Huddle closed by @you. The history stays, read-only.");
+    const out = this.update(slug, hid, (x) => {
       x.status = "closed";
       x.closedAt = nowIso();
-      for (const p of x.participants) if (p.kind !== "human" && p.status === "working") p.status = "stopped";
+      for (const p of x.participants) if (p.kind === "agent" && p.status === "working") p.status = "stopped";
     });
+    if (h.participants.some((p) => p.kind === "agent" && p.worktree)) this.chore(this.removeWorktrees(slug, hid));
+    return out;
   }
 
-  /** The host ticket was deleted: its huddles close. */
-  closeForTicket(slug: string, ticketId: string): void {
-    for (const h of this.store.listHuddles(slug)) if (h.hostTicket === ticketId && h.status !== "closed") this.close(slug, h.id);
+  /** The host ticket was deleted or moved to Done: its huddles close. */
+  closeForTicket(slug: string, ticketId: string, why = "the host ticket was deleted"): void {
+    for (const h of this.store.listHuddles(slug)) if (h.hostTicket === ticketId && h.status !== "closed") this.close(slug, h.id, why);
+  }
+
+  private chore(p: Promise<void>) {
+    const tracked = p.catch((e) => console.error("huddle cleanup failed", e)).finally(() => this.chores.delete(tracked));
+    this.chores.add(tracked);
+  }
+
+  /**
+   * After a close: remove each agent's own worktree and branch when nothing would be lost (no uncommitted changes,
+   * no commits the host's branch lacks); a system note lists the ones kept.
+   */
+  private async removeWorktrees(slug: string, hid: string): Promise<void> {
+    // The agents' runs were just stopped: let them end first.
+    await Promise.all([...this.runs.entries()].filter(([k]) => k.startsWith(`${slug}/${hid}/`)).map(([, r]) => r.promise));
+    const h = this.store.getHuddle(slug, hid);
+    const profile = this.store.getProfile(slug);
+    if (!h || !profile) return;
+    const base = this.store.getTicket(slug, h.hostTicket)?.branch ?? profile.baseBranch;
+    const removed: string[] = [];
+    const kept: string[] = [];
+    for (const p of h.participants) {
+      if (p.kind !== "agent" || !p.worktree) continue;
+      const why = await removeOwnWorktree(profile.path, p.worktree, p.branch ?? null, base);
+      if (why) kept.push(`@${p.handle}: ${p.worktree}${p.branch ? ` (branch ${p.branch})` : ""}: ${why}`);
+      else {
+        removed.push(`@${p.handle}`);
+        this.updateP(slug, hid, p.handle, { worktree: null, branch: null });
+      }
+    }
+    const lines = [
+      ...(removed.length ? [`Removed the own worktrees of ${removed.join(", ")} (nothing uncommitted or unmerged).`] : []),
+      ...(kept.length ? ["Kept these own worktrees, so nothing is lost; merge or remove them yourself:", ...kept.map((k) => `- ${k}`)] : []),
+    ];
+    if (lines.length) this.system(slug, hid, lines.join("\n"));
   }
 
   /** Daemon exiting: agents mid-turn are marked so recover() resumes them; every agent run is killed. */
@@ -850,24 +1050,55 @@ export class Huddles {
     await Promise.race([Promise.all(runs.map(([, r]) => r.promise)), Bun.sleep(6000)]);
   }
 
-  /** After a daemon restart: agents cut off mid-turn carry on; the rest wait to be woken as usual. */
+  /**
+   * After a daemon restart: huddles whose host is done close; agents cut off mid-turn carry on, ones held back by a
+   * pending restart start; then everyone (ticket sessions included) gets the wakes it was owed.
+   */
   recover(): void {
     for (const profile of this.store.listProfiles()) {
-      for (const h of this.store.listHuddles(profile.slug)) {
+      const slug = profile.slug;
+      for (const h of this.store.listHuddles(slug)) {
         if (h.status === "closed") continue;
+        if (this.store.getTicket(slug, h.hostTicket)?.status === "done") {
+          this.close(slug, h.id, "the host ticket moved to Done");
+          continue;
+        }
         for (const p of h.participants) {
           if (p.kind !== "agent") continue;
-          const cut = p.interrupted || p.status === "working";
-          if (h.status === "live" && cut && p.status !== "stopped") {
-            const digest = this.takeUnread(profile.slug, h.id, p.handle, true)?.digest ?? "";
-            this.runAgent(profile.slug, h.id, p.handle, huddleAgentPrompt(p.sessionStarted ? "interrupted" : "start", p, digest));
-          } else if (p.status === "working" || p.interrupted) this.updateP(profile.slug, h.id, p.handle, { status: "idle", interrupted: false });
+          // working: cut off mid-turn. interrupted while idle: a wake held back by the pending restart.
+          const cut = p.status === "working" || (p.interrupted && !p.sessionStarted);
+          if (h.status === "live" && p.status !== "stopped" && (cut || p.interrupted)) {
+            if (cut) {
+              const digest = this.takeUnread(slug, h.id, p.handle, true)?.digest ?? "";
+              this.runAgent(slug, h.id, p.handle, huddleAgentPrompt(p.sessionStarted ? "interrupted" : "start", p, digest));
+              continue;
+            }
+            this.updateP(slug, h.id, p.handle, { interrupted: false });
+          } else if (p.status === "working" || p.interrupted) this.updateP(slug, h.id, p.handle, { status: "idle", interrupted: false });
         }
+        for (const p of h.participants) if (p.kind !== "human") this.wakeIfOwed(slug, h.id, p.handle);
       }
     }
   }
 
   async whenIdle(): Promise<void> {
-    while (this.runs.size) await Promise.all([...this.runs.values()].map((r) => r.promise));
+    while (this.runs.size || this.chores.size) await Promise.all([...this.runs.values()].map((r) => r.promise).concat([...this.chores]));
   }
+}
+
+export type StatusChange = "done" | "blocked" | "active";
+
+/** Remove an agent's own worktree and branch; the reason it was kept instead, or null once removed. */
+async function removeOwnWorktree(repo: string, dir: string, branch: string | null, base: string): Promise<string | null> {
+  const hasBranch = !!branch && (await branchExists(repo, branch));
+  if (hasBranch) {
+    const ahead = await git(["git", "rev-list", "--count", `${base}..${branch}`], repo);
+    if (ahead.code !== 0) return `couldn't compare it with ${base}: ${ahead.stderr.trim()}`;
+    const n = Number(ahead.stdout.trim());
+    if (n > 0) return `${n} commit${n === 1 ? "" : "s"} not on ${base}`;
+  }
+  const r = await removeWorktree(repo, dir);
+  if (!r.removed) return r.reason ?? "couldn't remove it";
+  if (hasBranch) await git(["git", "branch", "-D", branch!], repo);
+  return null;
 }

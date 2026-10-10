@@ -231,7 +231,8 @@ test("every tool advertises a profile argument; change tools are flagged", () =>
   expect(TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name).sort()).toEqual(["huddle_read", "list_huddle_presets", ...PLANNING].sort());
   // Huddle tools work inside runs: the daemon checks who the run is (lead, coordinator, the participant itself).
   expect(TOOLS.filter((t) => t.allowInRun).map((t) => t.name).sort()).toEqual([
-    "ask_ticket", "create_schedule", "delete_huddle_preset", "delete_schedule", "huddle_add_participant", "huddle_findings", "huddle_mode", "huddle_post", "reply_ticket",
+    "ask_ticket", "create_schedule", "delete_huddle_preset", "delete_schedule", "huddle_add_participant", "huddle_close", "huddle_findings", "huddle_mode", "huddle_post", "huddle_status",
+    "reply_ticket",
     "save_huddle_preset", "update_schedule",
   ]);
 });

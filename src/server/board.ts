@@ -162,6 +162,8 @@ export class Board {
   private shuttingDown = false;
   /** A restart waits for active runs to finish: no new run starts until then (see requestRestart). */
   private restartPending = false;
+  /** Other work a restart waits for besides board runs (huddle agents mid-turn), see onRestartBusy. */
+  private restartBusy: (() => number)[] = [];
   private sessionExists: (id: string) => boolean;
   private isSessionLive: (id: string, title: string | null) => Promise<boolean>;
   private notify: (title: string, body: string) => void;
@@ -1415,12 +1417,22 @@ export class Board {
     this.patch(r.slug, r.id, { interrupted: i, lastActivity: null, runStartedAt: null });
   }
 
+  /** Count more active work a restart waits for (e.g. huddle agents mid-turn). */
+  onRestartBusy(busy: () => number): void {
+    this.restartBusy.push(busy);
+  }
+
+  /** Board runs plus other active work a restart waits for. */
+  private activeWork(): number {
+    return this.runs.size + this.restartBusy.reduce((n, f) => n + f(), 0);
+  }
+
   /**
    * Restart once no run is active. Until then nothing new starts: Ready tickets wait, chat messages queue and
    * Planning interviews are held; recover() starts them after the restart. After maxWaitMs it restarts anyway.
    */
   requestRestart(onIdle: () => void, maxWaitMs = RESTART_MAX_WAIT_MS): { running: number; alreadyPending: boolean } {
-    const running = this.runs.size;
+    const running = this.activeWork();
     if (this.restartPending) return { running, alreadyPending: true };
     this.restartPending = true;
     this.emitRestart();
@@ -1428,8 +1440,9 @@ export class Board {
       const deadline = Date.now() + maxWaitMs;
       // Always yield first, so the caller's HTTP response goes out before the daemon exits.
       do await Bun.sleep(200);
-      while (this.runs.size && Date.now() < deadline);
-      if (this.runs.size) console.log(`restart: ${this.runs.size} run(s) still active after ${Math.round(maxWaitMs / 1000)}s; restarting anyway`);
+      while (this.activeWork() && Date.now() < deadline);
+      const left = this.activeWork();
+      if (left) console.log(`restart: ${left} run(s) still active after ${Math.round(maxWaitMs / 1000)}s; restarting anyway`);
       onIdle();
     })();
     return { running, alreadyPending: false };
@@ -1441,7 +1454,12 @@ export class Board {
 
   /** pending: a restart holds new runs; waiting: active runs it waits for. */
   restartState(): { pending: boolean; waiting: number } {
-    return { pending: this.restartPending, waiting: this.runs.size };
+    return { pending: this.restartPending, waiting: this.activeWork() };
+  }
+
+  /** Other active work (see onRestartBusy) changed: update the pending restart's count. */
+  restartWorkChanged(): void {
+    if (this.restartPending) this.emitRestart();
   }
 
   private emitRestart(): void {
