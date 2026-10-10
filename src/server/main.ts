@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Board } from "./board";
 import { Bus } from "./events";
 import { createServer } from "./http";
+import { Huddles } from "./huddle";
 import { withUtf8Locale } from "./locale";
 import { McpManager } from "./mcp";
 import { startPoller } from "./prpoller";
@@ -31,11 +32,13 @@ export async function startDaemon(): Promise<void> {
   const shells = new ShellManager();
   const mcp = new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude", seenFile: join(store.root, "mcp-seen.json") });
   const scheduler = new Scheduler(board, store, bus);
+  const huddles = new Huddles(store, board, bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
   // launchd (KeepAlive) starts the daemon again once it exits.
   const restart = () => board.requestRestart(() => void shutdown());
-  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, mcp, scheduler, assets: WEB_ASSETS, restart });
+  const server = createServer({ store, bus, board, port, webDir, sessions, terminals, shells, mcp, scheduler, huddles, assets: WEB_ASSETS, restart });
   console.log(`ckanban v${VERSION} listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();
+  huddles.recover();
   void board.sweepWorktrees();
   void detectMissing(store, (profile) => bus.emit({ type: "profile.updated", slug: profile.slug, profile }));
   const stopPoller = startPoller(board, store, config.prPollMinutes);
@@ -53,7 +56,7 @@ export async function startDaemon(): Promise<void> {
     stopTerminals();
     shells.killAll();
     stopMcp();
-    await board.shutdown();
+    await Promise.all([board.shutdown(), huddles.shutdown()]);
     server.stop(true);
     process.exit(0);
   };

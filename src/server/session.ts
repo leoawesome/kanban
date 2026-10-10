@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { commandText, localCommandOutput, TERMINAL_COMMANDS } from "./commands";
 import type { Bus } from "./events";
+import { rosterError, type RosterEntry } from "./huddle-roster";
 import { mockupName, stripMockups } from "./mockups";
 import { parseResult } from "./result";
 import type { Store } from "./store";
@@ -59,6 +60,8 @@ export interface SessionEntry {
   newTickets?: NewTicketDraft[];
   /** Claude offered to branch this ticket (rendered with a Branch button). */
   branch?: { reason: string };
+  /** Claude proposed a huddle roster (propose_huddle; rendered with a Start button). */
+  huddle?: { roster: RosterEntry[]; reason: string };
   /** Mockups Claude sent as blocks (saved to outputs/mockups; the chat links to them). */
   mockups?: string[];
   /** Claude asked the board to move the ticket (a planning-only request arrived in Review). */
@@ -336,10 +339,11 @@ const QUESTIONS_TOOL = /(?:^|__)ask_questions$/;
 const PROPOSAL_TOOL = /(?:^|__)propose_ticket$/;
 const TICKETS_TOOL = /(?:^|__)propose_tickets$/;
 const BRANCH_TOOL = /(?:^|__)propose_branch$/;
+const HUDDLE_TOOL = /(?:^|__)propose_huddle$/;
 const REPLY_HEAD = /^Reply from ticket (\S+) .*:\n\n/;
 
 /** The form or card a planning-chat tool call shows, or null for other tools (or input that can't be read). */
-function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "newTickets" | "branch"> | null {
+function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "newTickets" | "branch" | "huddle"> | null {
   const name = String(block.name ?? "");
   if (QUESTIONS_TOOL.test(name)) {
     const questions = parseQuestions(block.input?.questions);
@@ -354,6 +358,11 @@ function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "n
     return newTickets && { newTickets };
   }
   if (BRANCH_TOOL.test(name)) return { branch: { reason: typeof block.input?.reason === "string" ? block.input.reason.trim() : "" } };
+  if (HUDDLE_TOOL.test(name)) {
+    const roster = block.input?.roster;
+    if (rosterError(roster)) return null;
+    return { huddle: { roster, reason: typeof block.input?.reason === "string" ? block.input.reason.trim() : "" } };
+  }
   return null;
 }
 

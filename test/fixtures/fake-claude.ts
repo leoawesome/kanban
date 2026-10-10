@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Fake `claude` CLI for tests. Behaviour controlled by env:
 // FAKE_MODE=ok|fail|slow|partial|blocked|noresult|background|bgsilent|asks|nosession, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
+// FAKE_HEARD_FILE=<path>: appends {session, text} for every user message it reads (huddle routing tests).
 // FAKE_NO_SAVE=1: stopped before the session transcript is saved (under CLAUDE_CONFIG_DIR, like the real CLI).
 // With --input-format stream-json it reads user messages from stdin like the real CLI: messages that
 // arrive mid-run are picked up at the next step (replayed with --replay-user-messages), later ones
@@ -51,6 +52,7 @@ async function nextMessage(): Promise<string | null> {
 const heard: string[] = [];
 function take(text: string) {
   heard.push(text);
+  if (process.env.FAKE_HEARD_FILE) appendFileSync(process.env.FAKE_HEARD_FILE, JSON.stringify({ session: sessionId, text, env: process.env.CKANBAN_HUDDLE_AGENT ?? null }) + "\n");
   if (replay) emit({ type: "user", message: { role: "user", content: [{ type: "text", text }] }, isReplay: true });
 }
 /** Pick up messages sent while "working", as the real CLI does between steps. */

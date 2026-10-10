@@ -16,11 +16,15 @@ export interface RunHandle {
    * so it must not hold input open waiting for that.
    */
   send(text: string, opts?: { local?: boolean }): boolean;
+  /** A run started with idleMs: stop keeping input open, and end it now if Claude is idle. */
+  endWhenIdle(): void;
   readonly stopped: boolean;
 }
 
 /** After Claude's last task finishes, how long to wait for the turn it starts before ending input anyway. */
 export const BACKGROUND_GRACE_MS = 10_000;
+/** How long a monitor-mode huddle session stays open between turns before it exits (later messages resume it). */
+export const MONITOR_IDLE_MS = 30 * 60_000;
 const TASK_DONE = new Set(["completed", "failed", "killed", "stopped"]);
 
 const STDERR_TAIL = 2048;
@@ -102,6 +106,11 @@ export function startRun(opts: {
    */
   onWaiting?: (tasks: BackgroundTask[] | null) => void;
   graceMs?: number;
+  /**
+   * Keep input open this long after Claude goes idle, so more messages reach the live session (huddle monitor
+   * mode); then end it. 0/undefined: end input as soon as Claude is idle with nothing unread.
+   */
+  idleMs?: number;
 }): RunHandle {
   let stopped = false;
   let proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -120,6 +129,22 @@ export function startRun(opts: {
     if (grace) clearTimeout(grace);
     grace = null;
   };
+  let keepMs = opts.idleMs ?? 0;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
+  };
+  const quiet = () => idle && unread === 0 && !tasks.size;
+  /** Claude is done and nothing is waiting: end input (so the process exits), or wait idleMs for more messages first. */
+  const finish = () => {
+    if (!keepMs) return closeInput();
+    clearIdle();
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      if (quiet()) closeInput();
+    }, keepMs);
+  };
   const report = () => {
     const now = idle && tasks.size > 0 && !!stdin;
     if (!now && !waiting) return;
@@ -128,6 +153,7 @@ export function startRun(opts: {
   };
   const closeInput = () => {
     clearGrace();
+    clearIdle();
     const s = stdin;
     stdin = null;
     try {
@@ -147,7 +173,10 @@ export function startRun(opts: {
   };
   const write = (text: string, local = false): boolean => {
     if (!writeLine(userMessage(text))) return false;
-    if (!local) unread++;
+    if (!local) {
+      unread++;
+      clearIdle();
+    }
     return true;
   };
 
@@ -206,17 +235,18 @@ export function startRun(opts: {
         else if (ev?.type === "assistant" || ev?.type === "stream_event" || (ev?.type === "system" && ev.subtype === "init")) {
           idle = false;
           clearGrace();
+          clearIdle();
         }
         // Claude is done and nothing is waiting: end input so the process exits. Messages still
         // unread keep it open; Claude answers them in another turn with its own result. So do
         // background tasks: Claude resumes on its own when they finish.
         if (idle && unread === 0 && stdin) {
-          if (!tasks.size && ev?.type === "result") closeInput();
+          if (!tasks.size && ev?.type === "result") finish();
           // The last task finished after the result: Claude normally starts a turn for it at
           // once; if it doesn't, don't keep the process around forever.
-          else if (!tasks.size && !grace) grace = setTimeout(() => {
+          else if (!tasks.size && !grace && !idleTimer) grace = setTimeout(() => {
             grace = null;
-            if (idle && unread === 0 && !tasks.size) closeInput();
+            if (quiet()) finish();
           }, opts.graceMs ?? BACKGROUND_GRACE_MS);
         }
         report();
@@ -244,6 +274,10 @@ export function startRun(opts: {
   return {
     done,
     send: (text, o) => !stopped && write(text, o?.local),
+    endWhenIdle() {
+      keepMs = 0;
+      if (idleTimer && quiet()) closeInput();
+    },
     get stopped() {
       return stopped;
     },

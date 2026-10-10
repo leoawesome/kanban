@@ -1,9 +1,10 @@
 // `ckanban mcp`: a stdio MCP server (newline-delimited JSON-RPC 2.0) exposing the board as tools.
 // Hand-rolled instead of @modelcontextprotocol/sdk: we only need initialize, tools/list and tools/call.
 import {
-  assertCanChange, BoardClient, bugReportText, ClientError, parseMode, parseStatus, profileList, resolveProfile, RUN_ENV, runProfile,
-  ticketLine, ticketText, type ScheduleHistoryInfo, type ScheduleInfo, type ScheduleInput, type TicketPatch,
+  assertCanChange, BoardClient, bugReportText, ClientError, huddleCaller, parseMode, parseStatus, profileList, resolveProfile, RUN_ENV, runProfile,
+  ticketLine, ticketText, type HuddlePage, type ScheduleHistoryInfo, type ScheduleInfo, type ScheduleInput, type TicketPatch,
 } from "./client";
+import { HUDDLE_PRESETS, rosterEntryError, rosterError } from "./server/huddle-roster";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -104,7 +105,7 @@ export interface ToolContext {
   client: Pick<BoardClient,
     | "listProfiles" | "listTickets" | "getTicket" | "createTicket" | "updateTicket" | "deleteTicket" | "chat" | "stop" | "listComments"
     | "comment" | "ask" | "pollQuestion" | "replyQuestion" | "reportBug" | "listSchedules" | "createSchedule" | "updateSchedule" | "deleteSchedule" | "runSchedule"
-    | "scheduleHistory" | "cronPreview" | "adopt" | "planAction">;
+    | "scheduleHistory" | "cronPreview" | "adopt" | "planAction" | "huddleRead" | "huddlePost" | "huddleMode" | "huddleAdd" | "huddleFindings">;
   cwd: string;
   env: Record<string, string | undefined>;
   main?: (dir: string) => string | null;
@@ -554,6 +555,181 @@ const PLANNING_TOOLS: Tool[] = [
   },
 ];
 
+// ---- Huddles: several Claude sessions working on one ticket in a shared room (see src/server/huddle.ts) ----
+
+const HUDDLE = {
+  type: "string",
+  description: "Huddle id (h_...). Omit inside a board run to use your own huddle; required outside one.",
+};
+const PRESET_NAMES = Object.keys(HUDDLE_PRESETS);
+const ROSTER_ENTRY = {
+  type: "object",
+  properties: {
+    preset: { type: "string", enum: PRESET_NAMES, description: `Built-in role: ${PRESET_NAMES.map((n) => `${n} (${HUDDLE_PRESETS[n].role}, ${HUDDLE_PRESETS[n].mode})`).join(", ")}.` },
+    role: { type: "string", description: "Free-form role when no preset fits, e.g. \"Accessibility tester\"." },
+    count: { type: "integer", minimum: 1, maximum: 8, description: "How many of this role (handles get -1, -2, ...). Default 1." },
+    focus: { type: "string", description: "What exactly this participant should look at." },
+    model: { type: "string", description: "Model, e.g. sonnet. Default: the board's." },
+    mode: { type: "string", enum: ["tagged", "monitor"], description: "tagged: sleeps until @mentioned. monitor: gets every new message. Default: the preset's." },
+    workspace: {
+      type: "string", enum: ["shared", "own"],
+      description: "shared: works in the host ticket's worktree, read-only (review, QA). own: a new git worktree off the host's branch where it may edit (several agents writing code in parallel).",
+    },
+    lead: { type: "boolean", description: "May add participants and manage the findings list." },
+    handle: { type: "string", description: "Handle for @mentions. Default: the preset or role." },
+  },
+};
+
+/** Inside a run: its own huddle unless one is named; outside: the named one, as the user. */
+function huddleId(args: any, ctx: ToolContext): string {
+  const id = str(args, "huddle", false);
+  if (id) return id.trim();
+  if (!ctx.env[RUN_ENV]) throw new ClientError("huddle is required outside a board run");
+  return "current";
+}
+
+export function huddlePageText(p: HuddlePage): string {
+  const h = p.huddle;
+  const lines = [
+    `Huddle ${h.id} on ticket ${h.hostTicket}${h.hostTitle ? ` "${h.hostTitle}"` : ""}: ${h.status}. You are @${p.you}.`,
+    "",
+    `Participants (${h.participants.filter((x) => x.kind !== "human").length}/${h.maxParticipants}):`,
+    ...h.participants.map((x) => `- @${x.handle}: ${x.role}${x.lead ? ", lead" : ""}, ${x.mode}, ${x.status}${x.focus ? ` (focus: ${x.focus})` : ""}`),
+  ];
+  const open = h.findings.filter((f) => f.status === "open");
+  if (h.findings.length) {
+    lines.push("", `Findings (${open.length} open of ${h.findings.length}):`, ...h.findings.map((f) => `- ${f.id} [${f.status}${f.resolvedBy ? ` by @${f.resolvedBy}` : ""}] ${f.text} (by @${f.by})`));
+  }
+  lines.push("", p.messages.length ? "Messages:" : "No messages.");
+  for (const m of p.messages) lines.push(m.kind === "system" ? `[#${m.seq}] (system) ${m.text}` : `[#${m.seq}] @${m.from}${m.kind === "finding" ? " (finding)" : ""}: ${m.text}`);
+  if (p.hasMore) lines.push("", `More messages: call huddle_read with since=${p.messages.at(-1)?.seq ?? 0}.`);
+  return lines.join("\n");
+}
+
+const HUDDLE_TOOLS: Tool[] = [
+  {
+    name: "huddle_post",
+    description:
+      "Post a message in your huddle. Tag who should act with @handle (@all for everyone): tagged participants sleep until someone tags them, " +
+      "monitor-mode ones see every message. The board stamps you as the sender. kind finding marks a bug or problem you found.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "The message, with @mentions." },
+        kind: { type: "string", enum: ["message", "finding"], description: "Default message." },
+        huddle: HUDDLE, profile: PROFILE,
+      },
+      required: ["text"],
+    },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const m = await ctx.client.huddlePost(slug, huddleId(args, ctx), str(args, "text")!, args?.kind === "finding" ? "finding" : "message", huddleCaller(ctx.env));
+      return `Posted #${m.seq} as @${m.from}${m.mentions.length ? `; woke ${m.mentions.map((x) => `@${x}`).join(", ")}` : ""}.`;
+    },
+  },
+  {
+    name: "huddle_read",
+    description: "Read your huddle: the roster, the pinned findings and recent messages (or the ones after `since`).",
+    inputSchema: {
+      type: "object",
+      properties: { since: { type: "integer", description: "Only messages after this #seq." }, huddle: HUDDLE, profile: PROFILE },
+    },
+    annotations: { readOnlyHint: true },
+    changes: false,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const since = Number.isInteger(args?.since) ? args.since : undefined;
+      return huddlePageText(await ctx.client.huddleRead(slug, huddleId(args, ctx), { since, limit: 60 }, huddleCaller(ctx.env)));
+    },
+  },
+  {
+    name: "huddle_mode",
+    description: "Switch your own huddle mode. tagged: you sleep until someone @mentions you. monitor: every new message reaches you between your turns.",
+    inputSchema: { type: "object", properties: { mode: { type: "string", enum: ["tagged", "monitor"] }, huddle: HUDDLE, profile: PROFILE }, required: ["mode"] },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const mode = args?.mode === "monitor" ? "monitor" : args?.mode === "tagged" ? "tagged" : null;
+      if (!mode) throw new ClientError("mode must be tagged or monitor");
+      const slug = await slugFor(args, ctx);
+      const hid = huddleId(args, ctx);
+      const me = await ctx.client.huddleRead(slug, hid, { limit: 1 }, huddleCaller(ctx.env));
+      if (me.you === "you") throw new ClientError("outside a board run you are the user; change a participant's mode on the board");
+      await ctx.client.huddleMode(slug, me.huddle.id, me.you, mode, huddleCaller(ctx.env));
+      return `@${me.you} is now in ${mode} mode.`;
+    },
+  },
+  {
+    name: "huddle_add_participant",
+    description:
+      "Add participants to your huddle (leads and @main only). Give a preset or a role, how many, and their focus. " +
+      "The huddle has a participant limit; when it is full the call fails: then ask the user (tag @you) instead of working around it.",
+    inputSchema: { type: "object", properties: { ...ROSTER_ENTRY.properties, huddle: HUDDLE, profile: PROFILE }, required: ["focus"] },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const { huddle: _h, profile: _p, ...entry } = args ?? {};
+      const e = rosterEntryError(entry);
+      if (e) throw new ClientError(`${e}. Fix it and call huddle_add_participant again.`);
+      const slug = await slugFor(args, ctx);
+      const r = await ctx.client.huddleAdd(slug, huddleId(args, ctx), entry, huddleCaller(ctx.env));
+      return `Added ${r.added.map((p) => `@${p.handle} (${p.role}, ${p.mode})`).join(", ")}; they start now. ` +
+        `${r.huddle.participants.filter((p) => p.kind !== "human").length}/${r.huddle.maxParticipants} participants.`;
+    },
+  },
+  {
+    name: "huddle_findings",
+    description:
+      "The huddle's pinned findings list. list: everyone. add (text) and resolve (id): leads and @main only; " +
+      "others post their findings to their lead with huddle_post.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["add", "resolve", "list"] },
+        text: { type: "string", description: "add: the finding, with file:line or steps to reproduce." },
+        id: { type: "string", description: "resolve: finding id, e.g. f2." },
+        huddle: HUDDLE, profile: PROFILE,
+      },
+      required: ["action"],
+    },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const action = args?.action === "add" || args?.action === "resolve" || args?.action === "list" ? args.action : null;
+      if (!action) throw new ClientError("action must be add, resolve or list");
+      const slug = await slugFor(args, ctx);
+      const fs = await ctx.client.huddleFindings(slug, huddleId(args, ctx), action, { text: str(args, "text", false), id: str(args, "id", false) }, huddleCaller(ctx.env));
+      if (!fs.length) return "No findings yet.";
+      return fs.map((f) => `- ${f.id} [${f.status}${f.resolvedBy ? ` by @${f.resolvedBy}` : ""}] ${f.text} (by @${f.by})`).join("\n");
+    },
+  },
+  {
+    name: "propose_huddle",
+    description:
+      "Board ticket chat (the ticket's own session, as coordinator): propose a huddle, a room where helper Claude sessions (reviewer, QA testers, a QA lead...) " +
+      "work on this ticket with you and talk to each other; you join as @main. The board shows the roster as a card; nothing starts until the user presses Start. " +
+      "For each entry choose workspace: shared (read-only in this ticket's worktree) for review and QA, own (its own worktree and branch) when several agents would edit code in parallel. " +
+      "A lead (e.g. qa-lead) gathers findings so you are woken with one consolidated list. Keep it small (limit 8 including you). Nothing starts by the call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        roster: { type: "array", minItems: 1, items: ROSTER_ENTRY },
+        reason: { type: "string", description: "One line: what the huddle is for." },
+      },
+      required: ["roster"],
+    },
+    annotations: { readOnlyHint: true },
+    changes: false,
+    async run(args) {
+      const e = rosterError(args?.roster);
+      if (e) throw new ClientError(`${e}. Fix it and call propose_huddle again.`);
+      return SHOWN;
+    },
+  },
+];
+
 export const TOOLS: Tool[] = [
   {
     name: "list_profiles",
@@ -891,6 +1067,7 @@ export const TOOLS: Tool[] = [
     },
   },
   ...PLANNING_TOOLS,
+  ...HUDDLE_TOOLS,
   ...ARTIFACT_TOOLS,
   ...SCHEDULE_TOOLS,
 ];

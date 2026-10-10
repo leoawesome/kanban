@@ -260,3 +260,91 @@ export interface Plan {
   /** Why the plan is stuck. */
   reason?: string | null;
 }
+
+// ---- Huddles: several Claude sessions working on one ticket in a shared message room (see huddle.ts) ----
+
+export type HuddleStatus = "live" | "stopped" | "closed";
+/** tagged: sleeps until @mentioned. monitor: every new message reaches its live session at its next turn boundary. */
+export type HuddleMode = "tagged" | "monitor";
+/** shared: the host ticket's worktree. own: a new git worktree branched off the host ticket's branch. */
+export type HuddleWorkspace = "shared" | "own";
+export type HuddleParticipantStatus = "working" | "idle" | "stopped" | "failed";
+/** agent: a headless session the huddle runs. ticket-main: a ticket's own session (the host's is @main). human: the user (@you). */
+export type HuddleParticipantKind = "agent" | "ticket-main" | "human";
+
+export interface HuddleParticipant {
+  /** Unique in the huddle, used in @mentions: main, reviewer, qa-1, api-main, you. */
+  handle: string;
+  role: string;
+  /** Preset it was made from (see HUDDLE_PRESETS) and that preset's prompt. */
+  preset: string | null;
+  prompt: string;
+  /** What this participant should look at (from the roster). */
+  focus?: string;
+  model: string | null;
+  mode: HuddleMode;
+  /** May add participants and manage findings. The coordinator (@main) always may. */
+  lead: boolean;
+  /** May edit tracked files; only the coordinator (and agents in their own worktree) by default. */
+  canEdit: boolean;
+  workspace: HuddleWorkspace;
+  /** workspace own: its worktree and branch, once made. */
+  worktree?: string | null;
+  branch?: string | null;
+  /** Its own Claude session (agents only; a ticket-main uses its ticket's session). */
+  sessionId: string | null;
+  sessionStarted?: boolean;
+  status: HuddleParticipantStatus;
+  kind: HuddleParticipantKind;
+  /** ticket-main: the ticket whose session this is. */
+  ticketId?: string | null;
+  /** seq of the last message it was given (or posted); later ones are unread. */
+  cursor: number;
+  joinedAt: string;
+  lastActivity?: string | null;
+  error?: string | null;
+  /** A daemon restart cut its turn off: recover() resumes it. */
+  interrupted?: boolean;
+  /** Secret the agent's run proves its identity with (CKANBAN_HUDDLE_AGENT); never sent to clients. */
+  token?: string;
+}
+
+export interface HuddleFinding {
+  id: string;
+  text: string;
+  by: string;
+  status: "open" | "resolved";
+  resolvedBy: string | null;
+  at: string;
+}
+
+export interface Huddle {
+  id: string;
+  /** Ticket whose work the huddle is about; its session is @main, the coordinator. */
+  hostTicket: string;
+  status: HuddleStatus;
+  maxParticipants: number;
+  participants: HuddleParticipant[];
+  findings: HuddleFinding[];
+  /** Other tickets (same board) whose main session was invited. */
+  invited: string[];
+  /** Highest message seq so far. */
+  seq: number;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | null;
+}
+
+export type HuddleMessageKind = "message" | "finding" | "system";
+
+export interface HuddleMessage {
+  id: string;
+  seq: number;
+  ts: string;
+  /** Handle of the sender, stamped by the daemon from the calling run's identity (never from tool input). "system" for system messages. */
+  from: string;
+  text: string;
+  /** Handles mentioned with @handle; "all" for @all. */
+  mentions: string[];
+  kind: HuddleMessageKind;
+}

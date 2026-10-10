@@ -1,9 +1,10 @@
 // Talks to the local daemon's HTTP API for the `ckanban ticket` CLI and the `ckanban mcp` server.
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { HUDDLE_AGENT_ENV, HUDDLE_HEADER, type RosterEntry } from "./server/huddle-roster";
 import { RUN_HEADER } from "./server/scheduler";
 import { defaultRoot, Store } from "./server/store";
-import { STATUSES, type Status, type TicketMode } from "./server/types";
+import { STATUSES, type HuddleFinding, type HuddleMessage, type HuddleMode, type Status, type TicketMode } from "./server/types";
 
 export class ClientError extends Error {}
 
@@ -131,6 +132,49 @@ export interface AdoptReply {
   skipped: { id: string; reason: string }[];
 }
 
+export interface HuddleParticipantInfo {
+  handle: string;
+  role: string;
+  mode: HuddleMode;
+  lead: boolean;
+  canEdit: boolean;
+  workspace: string;
+  status: string;
+  kind: string;
+  focus?: string;
+  ticketId?: string | null;
+  running: boolean;
+}
+
+export interface HuddleInfo {
+  id: string;
+  hostTicket: string;
+  hostTitle: string | null;
+  status: string;
+  maxParticipants: number;
+  participants: HuddleParticipantInfo[];
+  findings: HuddleFinding[];
+  seq: number;
+}
+
+/** A huddle with a page of its messages; `you` is the caller's own handle. */
+export interface HuddlePage {
+  huddle: HuddleInfo;
+  you: string;
+  messages: HuddleMessage[];
+  hasMore: boolean;
+}
+
+/** Who calls the huddle API from a run: its ticket (CKANBAN_TICKET) and, for a huddle agent, CKANBAN_HUDDLE_AGENT. */
+export interface HuddleCaller {
+  run?: string | null;
+  agent?: string | null;
+}
+
+export function huddleCaller(env: Record<string, string | undefined>): HuddleCaller {
+  return { run: env[RUN_ENV] ?? null, agent: env[HUDDLE_AGENT_ENV] ?? null };
+}
+
 export interface BugReportRequest {
   title: string;
   description: string;
@@ -235,6 +279,27 @@ export class BoardClient {
     this.req<{ entry: ScheduleHistoryInfo; schedule: ScheduleInfo }>("POST", `${this.s(slug, id)}/run`, {});
   scheduleHistory = (slug: string, id: string) => this.req<ScheduleHistoryInfo[]>("GET", `${this.s(slug, id)}/history`);
   cronPreview = (expr: string) => this.req<CronPreviewInfo>("GET", `/api/cron/preview?expr=${encodeURIComponent(expr)}`);
+
+  // Huddles. The daemon decides who the caller is from these headers, never from the request body.
+  private h(slug: string, hid: string): string {
+    return `/api/profiles/${encodeURIComponent(slug)}/huddles/${encodeURIComponent(hid)}`;
+  }
+  private as = (c: HuddleCaller): Record<string, string> => ({ ...this.by(c.run), ...(c.agent ? { [HUDDLE_HEADER]: c.agent } : {}) });
+  /** hid "current": the caller's own huddle. */
+  huddleRead = (slug: string, hid: string, q: { since?: number; limit?: number }, c: HuddleCaller) => {
+    const qs = new URLSearchParams();
+    if (q.since !== undefined) qs.set("since", String(q.since));
+    if (q.limit !== undefined) qs.set("limit", String(q.limit));
+    return this.req<HuddlePage>("GET", `${this.h(slug, hid)}${qs.size ? `?${qs}` : ""}`, undefined, this.as(c));
+  };
+  huddlePost = (slug: string, hid: string, text: string, kind: "message" | "finding", c: HuddleCaller) =>
+    this.req<HuddleMessage>("POST", `${this.h(slug, hid)}/messages`, { text, kind }, this.as(c));
+  huddleMode = (slug: string, hid: string, handle: string, mode: HuddleMode, c: HuddleCaller) =>
+    this.req<HuddleInfo>("PATCH", `${this.h(slug, hid)}/participants/${encodeURIComponent(handle)}`, { mode }, this.as(c));
+  huddleAdd = (slug: string, hid: string, entry: RosterEntry, c: HuddleCaller) =>
+    this.req<{ added: HuddleParticipantInfo[]; huddle: HuddleInfo }>("POST", `${this.h(slug, hid)}/participants`, entry, this.as(c));
+  huddleFindings = (slug: string, hid: string, action: "add" | "resolve" | "list", arg: { text?: string; id?: string }, c: HuddleCaller) =>
+    this.req<HuddleFinding[]>("POST", `${this.h(slug, hid)}/findings`, { action, ...arg }, this.as(c));
 }
 
 function real(p: string): string {

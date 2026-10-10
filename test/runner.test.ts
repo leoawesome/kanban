@@ -187,3 +187,43 @@ test("stop while waiting on a background task ends the run", withMode("backgroun
     delete process.env.FAKE_BG_MS;
   }
 }), 10000);
+
+test("idleMs (huddle monitor mode) keeps input open between turns, then ends it after the idle timeout", withMode("ok", async () => {
+  const results: number[] = [];
+  const t0 = Date.now();
+  const h = startRun({
+    bin: FAKE, cwd: tempDir(), args: ["--input-format", "stream-json", "--replay-user-messages"], input: "first", idleMs: 400,
+    onEvent: (e) => { if (e.type === "result") results.push(Date.now()); },
+  });
+  let exited = false;
+  void h.done.then(() => (exited = true));
+  while (!results.length) await Bun.sleep(10);
+  // Idle after its turn, but still alive: a message reaches the live session.
+  await Bun.sleep(150);
+  expect(exited).toBe(false);
+  expect(h.send("second")).toBe(true);
+  while (results.length < 2) await Bun.sleep(10);
+  const r = await h.done;
+  expect(r.code).toBe(0);
+  expect(r.events.filter((e) => e.type === "result").map((e) => e.result.split("\n")[0])).toEqual(["Work complete.", "Reply: second"]);
+  // It ended about idleMs after the last turn, not right away.
+  expect(Date.now() - results[1]).toBeGreaterThanOrEqual(350);
+  expect(Date.now() - t0).toBeLessThan(5000);
+}), 10000);
+
+test("without idleMs input ends as soon as Claude is idle; endWhenIdle ends a kept-open run at once", withMode("ok", async () => {
+  const quick = startRun({ bin: FAKE, cwd: tempDir(), args: ["--input-format", "stream-json", "--replay-user-messages"], input: "x", onEvent: () => {} });
+  const t0 = Date.now();
+  await quick.done;
+  expect(Date.now() - t0).toBeLessThan(3000);
+  let idle = false;
+  const kept = startRun({
+    bin: FAKE, cwd: tempDir(), args: ["--input-format", "stream-json", "--replay-user-messages"], input: "x", idleMs: 60_000,
+    onEvent: (e) => { if (e.type === "result") idle = true; },
+  });
+  while (!idle) await Bun.sleep(10);
+  const t1 = Date.now();
+  kept.endWhenIdle();
+  expect((await kept.done).code).toBe(0);
+  expect(Date.now() - t1).toBeLessThan(3000);
+}), 10000);

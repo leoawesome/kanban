@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import YAML from "yaml";
 import type {
-  ActivityEntry, Comment, Config, OutputFile, Profile, Schedule, ScheduleHistoryEntry, Status, Ticket, TicketMode, TicketQuestion,
+  ActivityEntry, Comment, Config, Huddle, HuddleMessage, OutputFile, Profile, Schedule, ScheduleHistoryEntry, Status, Ticket, TicketMode, TicketQuestion,
 } from "./types";
 import { newId, newTicketId, nowIso } from "./util";
 
@@ -305,5 +305,51 @@ export class Store {
 
   saveQuestions(slug: string, qs: TicketQuestion[]): void {
     atomicWrite(join(this.profileDir(slug), "questions.json"), JSON.stringify(qs, null, 2) + "\n");
+  }
+
+  private huddlesDir(slug: string) {
+    return join(this.profileDir(slug), "huddles");
+  }
+
+  listHuddles(slug: string): Huddle[] {
+    const dir = this.huddlesDir(slug);
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => this.getHuddle(slug, f.slice(0, -5)))
+      .filter((h): h is Huddle => h !== null)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  getHuddle(slug: string, id: string): Huddle | null {
+    if (!/^h_[a-z0-9_]+$/i.test(id)) return null;
+    const file = join(this.huddlesDir(slug), `${id}.json`);
+    if (!existsSync(file)) return null;
+    try {
+      return JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  saveHuddle(slug: string, h: Huddle): void {
+    atomicWrite(join(this.huddlesDir(slug), `${h.id}.json`), JSON.stringify(h, null, 2) + "\n");
+  }
+
+  /** The message log is append-only: messages are never edited or removed. */
+  appendHuddleMessage(slug: string, id: string, m: HuddleMessage): void {
+    mkdirSync(this.huddlesDir(slug), { recursive: true });
+    appendFileSync(join(this.huddlesDir(slug), `${id}.messages.jsonl`), JSON.stringify(m) + "\n");
+  }
+
+  readHuddleMessages(slug: string, id: string): HuddleMessage[] {
+    return readJsonl<HuddleMessage>(join(this.huddlesDir(slug), `${id}.messages.jsonl`));
+  }
+
+  /** Where a huddle participant saves reports and scripts: outputs/<handle>/ of the host ticket. */
+  huddleOutputsDir(slug: string, ticketId: string, handle: string): string {
+    const dir = join(this.ticketDir(slug, ticketId), "outputs", handle);
+    mkdirSync(dir, { recursive: true });
+    return dir;
   }
 }

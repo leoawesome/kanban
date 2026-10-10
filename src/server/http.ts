@@ -13,6 +13,8 @@ import { cronError, describeCron, nextRuns, parseCron } from "./cron";
 import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
 import { SnippetError, Snippets } from "./snippets";
 import { QuestionError, Questions } from "./questions";
+import { HuddleError, Huddles, type Caller } from "./huddle";
+import { HUDDLE_HEADER } from "./huddle-roster";
 import { ticketAttention, userWaitReason } from "./attention";
 import { isComplete, MAX_RETRIES, planActive } from "./plan";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
@@ -49,6 +51,7 @@ export interface ServerDeps {
   scheduler?: Scheduler;
   agents?: AgentRegistry;
   questions?: Questions;
+  huddles?: Huddles;
   /** Restart the daemon once no run is active (POST /api/restart); missing when not running as the daemon. */
   restart?: () => { running: number; alreadyPending: boolean };
   /** Runs `gh` for bug reports (tests pass a fake). */
@@ -133,6 +136,7 @@ export function createServer(deps: ServerDeps) {
   const scheduler = deps.scheduler ?? new Scheduler(board, store, bus);
   const agents = deps.agents ?? new AgentRegistry();
   const questions = deps.questions ?? new Questions(store, board);
+  const huddles = deps.huddles ?? new Huddles(store, board, bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
   const snippets = new Snippets(store, bus);
   const windowsFile = join(store.root, "usage-windows.json");
   const usage = new UsageCache(deps.usage ?? fetchUsage, (r) => recordWindow(windowsFile, r));
@@ -160,7 +164,8 @@ export function createServer(deps: ServerDeps) {
     const h = req.headers.get(RUN_HEADER);
     if (!h) return undefined;
     const [runSlug, runId] = h.split("/");
-    const planner = runSlug === slug && runId ? board.plannerRights(slug, runId) : null;
+    // A huddle agent runs as its host ticket but is not that ticket's planner.
+    const planner = runSlug === slug && runId && !req.headers.get(HUDDLE_HEADER) ? board.plannerRights(slug, runId) : null;
     if (!planner) {
       throw new HttpError(403, "changing the board is disabled inside a board run, so runs can't create or start other runs; " +
         "only a planner may change its own child tickets: while its plan runs, or when the user asked for it in the planner's own chat");
@@ -610,6 +615,9 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
 
+    // /profiles/:p/huddles — shared rooms where several Claude sessions work on a ticket (see huddle.ts)
+    if (parts[2] === "huddles") return huddleApi(req, url, slug, parts.slice(3));
+
     // /profiles/:p/tickets
     if (parts[2] !== "tickets") throw new HttpError(404, "not found");
     if (parts.length === 3) {
@@ -707,6 +715,7 @@ export function createServer(deps: ServerDeps) {
       }
       if (m === "DELETE") {
         if (req.headers.get(RUN_HEADER)) throw new HttpError(403, "deleting tickets is disabled inside a board run");
+        huddles.closeForTicket(slug, id);
         await board.deleteTicket(slug, id);
         return new Response(null, { status: 204 });
       }
@@ -926,6 +935,81 @@ export function createServer(deps: ServerDeps) {
     throw new HttpError(404, "not found");
   }
 
+  /**
+   * Huddle routes. The sender of a message is never taken from the body: a request from a board run is that run's
+   * participant (its token for agents), anything else is the user (@you). Stop, resume, close and stopping one
+   * participant are the user's alone.
+   */
+  async function huddleApi(req: Request, url: URL, slug: string, rest: string[]): Promise<Response> {
+    const m = req.method;
+    const who: Caller = { run: req.headers.get(RUN_HEADER), agent: req.headers.get(HUDDLE_HEADER) };
+    const userOnly = (what: string) => {
+      if (who.run || who.agent) throw new HttpError(403, `only the user can ${what}; ask them in the huddle (tag @you)`);
+    };
+    const num = (k: string) => {
+      const v = url.searchParams.get(k);
+      return v === null || v === "" || !Number.isFinite(Number(v)) ? undefined : Number(v);
+    };
+    if (rest.length === 0) {
+      if (m === "GET") return json(huddles.list(slug, url.searchParams.get("ticket") ?? undefined));
+      if (m === "POST") {
+        userOnly("start a huddle (propose a roster with propose_huddle instead)");
+        const b = await body(req);
+        const ticketId = String(b.ticketId ?? "");
+        if (!ticketId) throw new HttpError(400, "ticketId is required");
+        const h = huddles.create(slug, ticketId, Array.isArray(b.roster) ? b.roster : [], { maxParticipants: Number(b.maxParticipants) || undefined });
+        return json(huddles.view(slug, h), 201);
+      }
+      throw new HttpError(404, "not found");
+    }
+    const { h, me } = huddles.identify(slug, rest[0], who);
+    const [, action, handle, sub] = rest;
+    if (!action && m === "GET") {
+      const page = huddles.messages(slug, h.id, { before: num("before"), since: num("since"), limit: num("limit") });
+      return json({ huddle: huddles.view(slug, h), you: me.handle, ...page });
+    }
+    if (m === "POST" && action === "messages" && !handle) {
+      const b = await body(req);
+      const kind = b.kind === "finding" ? "finding" : "message";
+      return json(huddles.post(slug, h.id, me, String(b.text ?? ""), kind), 201);
+    }
+    if (action === "participants") {
+      if (m === "POST" && !handle) {
+        const b = await body(req);
+        const added = huddles.addParticipants(slug, h.id, me, b ?? {});
+        return json({ added: added.map(({ token: _t, ...p }) => p), huddle: huddles.view(slug, huddles.get(slug, h.id)) }, 201);
+      }
+      if (m === "PATCH" && handle && !sub) {
+        const b = await body(req);
+        huddles.setMode(slug, h.id, me, handle, b.mode);
+        return json(huddles.view(slug, huddles.get(slug, h.id)));
+      }
+      if (m === "POST" && handle && sub === "stop") {
+        userOnly("stop a participant");
+        huddles.stopParticipant(slug, h.id, handle);
+        return json(huddles.view(slug, huddles.get(slug, h.id)));
+      }
+    }
+    if (m === "POST" && !handle && (action === "stop" || action === "resume" || action === "close")) {
+      userOnly(`${action} the huddle`);
+      const out = action === "stop" ? huddles.stopAll(slug, h.id) : action === "resume" ? huddles.resume(slug, h.id) : huddles.close(slug, h.id);
+      return json(huddles.view(slug, out));
+    }
+    if (m === "POST" && action === "invite" && !handle) {
+      const b = await body(req);
+      const ticketId = String(b.ticketId ?? "");
+      if (!ticketId) throw new HttpError(400, "ticketId is required");
+      const { token: _t, ...p } = huddles.invite(slug, h.id, me, ticketId, typeof b.handle === "string" ? b.handle : undefined);
+      return json(p, 201);
+    }
+    if (m === "POST" && action === "findings" && !handle) {
+      const b = await body(req);
+      const act = b.action === "add" || b.action === "resolve" ? b.action : "list";
+      return json(huddles.findings(slug, h.id, me, act, { text: typeof b.text === "string" ? b.text : undefined, id: typeof b.id === "string" ? b.id : undefined }));
+    }
+    throw new HttpError(404, "not found");
+  }
+
   function sse(req: Request): Response {
     let unsubscribe = () => {};
     let ping: ReturnType<typeof setInterval>;
@@ -1028,6 +1112,7 @@ export function createServer(deps: ServerDeps) {
         if (e instanceof ScheduleError) return json({ error: e.message }, e.status);
         if (e instanceof SnippetError) return json({ error: e.message }, e.status);
         if (e instanceof QuestionError) return json({ error: e.message }, e.status);
+        if (e instanceof HuddleError) return json({ error: e.message }, e.status);
         if (e instanceof URIError) return json({ error: "malformed URL" }, 400);
         console.error(e);
         return json({ error: (e as Error).message ?? "internal error" }, 500);

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { helperCommand } from "./artifact";
 import { MOCKUPS_DIR } from "./mockups";
 import { MAX_RETRIES } from "./plan";
-import type { Comment, Ticket, TicketQuestion } from "./types";
+import type { Comment, Huddle, HuddleMessage, HuddleParticipant, Ticket, TicketQuestion } from "./types";
 import { shellQuote } from "./util";
 
 const RESULT_RULE = `When you finish this run, end your final message with exactly one line in this format (valid JSON, single line):
@@ -379,4 +379,76 @@ Children that share a device or other resource only one may use at a time (e.g. 
 End with status "blocked" (or "questions" after asking with the ask_questions tool) only when a human must decide or fix something. That pauses the plan and notifies the user. Otherwise end with "done".
 
 ${RESULT_RULE}`)}`;
+}
+
+// ---- Huddles (see huddle.ts) ----
+
+function rosterLines(h: Huddle): string {
+  return h.participants
+    .map((p) => `- @${p.handle}: ${p.role}${p.kind === "ticket-main" && p.handle === "main" ? " (coordinator)" : ""}${p.lead ? ", lead" : ""}, ${p.mode} mode${p.status === "stopped" ? ", stopped" : ""}`)
+    .join("\n");
+}
+
+/** Messages a participant hasn't seen, oldest first. omitted: older unread ones left out (huddle_read has them). */
+export function huddleDigest(msgs: HuddleMessage[], omitted = 0): string {
+  const lines = msgs.map((m) => m.kind === "system" ? `[#${m.seq}] (system) ${m.text}` : `[#${m.seq}] @${m.from}${m.kind === "finding" ? " (finding)" : ""}: ${m.text}`);
+  return [...(omitted ? [`(${omitted} earlier unread message${omitted === 1 ? "" : "s"} left out; read them with huddle_read)`] : []), ...lines].join("\n\n");
+}
+
+const HUDDLE_TOOLS = `- \`huddle_post\`: post a message. Tag who should act with @handle (@all for everyone). Tagged participants sleep until someone tags them, so tag the one you need; untagged messages only reach monitor-mode participants.
+- \`huddle_read\`: the roster and recent messages. \`huddle_mode\`: switch yourself between tagged and monitor mode.
+- \`huddle_findings\`: the pinned findings list (leads and @main add and resolve; everyone can list).
+- \`huddle_add_participant\`: leads and @main only, capped; if the huddle is full, ask the user instead of working around it.
+(ckanban MCP tools; if they are deferred, load them with ToolSearch first.)`;
+
+/** System prompt of a huddle agent's run: who it is, the room's rules, and what it may change. */
+export function huddleAgentSystemPrompt(h: Huddle, p: HuddleParticipant, host: Ticket, outputDir: string, workdir: string): string {
+  const edit = p.canEdit
+    ? `You work in your own git worktree (${workdir}) on branch ${p.branch ?? "(your branch)"}: edit and commit there. Never push to or edit the host ticket's worktree.`
+    : `You must NOT edit tracked files in this repository (Edit, Write and NotebookEdit are disabled; don't change files through the shell either). You may run the app, tests and read-only commands. Put reports, notes and test scripts in your outputs folder: ${outputDir}`;
+  return `# Huddle
+You are @${p.handle} (${p.role}) in a huddle: a shared message room where several Claude sessions work together on ticket ${host.id} "${host.title}". @main is that ticket's own session and coordinates; @you is the user.
+
+## Your job
+${p.prompt}${p.focus ? `\n\nFocus: ${p.focus}` : ""}
+
+## Rules
+- ${edit}
+- Talk only through the huddle tools; your final text reply is not shown to anyone. Keep messages short and concrete (file:line, steps to reproduce).
+- Every message's sender is stamped by the board; you can't post as someone else.
+- When your part is done, post your result, tag who needs it (usually your lead or @main), and end your turn. You are woken again when someone tags you${p.mode === "monitor" ? ", and in monitor mode new messages also arrive between your turns" : ""}.
+- Don't tag @main for small things; leads collect findings and send @main one consolidated list.
+
+## Tools
+${HUDDLE_TOOLS}
+
+## Participants
+${rosterLines(h)}
+
+Huddle id: ${h.id}. Working folder: ${workdir}`;
+}
+
+/** First message of a huddle agent's run, or the messages that woke it. */
+export function huddleAgentPrompt(kind: "start" | "wake" | "interrupted", p: HuddleParticipant, digest: string): string {
+  const head = kind === "start"
+    ? `You just joined the huddle as @${p.handle}. Start on your job now.`
+    : kind === "interrupted"
+    ? "The board restarted while you were working, so your last turn was cut off. Carry on where you stopped."
+    : `New huddle messages${digest.includes(`@${p.handle}`) ? ` (you were tagged)` : ""}:`;
+  return digest ? `${head}\n\n${digest}` : head;
+}
+
+/**
+ * Huddle messages for a ticket's own session (@main or an invited ticket), sent into its chat like a message from
+ * another ticket: the digest first so the chat shows it, the instructions wrapped so the UI hides them.
+ */
+export function huddleMainPrompt(h: Huddle, p: HuddleParticipant, digest: string): string {
+  const coordinator = p.handle === "main";
+  return `${digest}
+
+${context("Huddle messages", `(Messages from huddle ${h.id}, where you are @${p.handle}${coordinator ? ", the coordinator" : ""}. Participants:
+${rosterLines(h)}
+Answer in the huddle with the ckanban \`huddle_post\` tool, tagging who should act; your chat reply is not posted there.${coordinator ? " You may edit the code; the other agents can't (except in their own worktrees). Keep the pinned findings current with `huddle_findings`, and add participants with `huddle_add_participant` if needed (capped; ask the user when it's full)." : ""}
+If you were in the middle of work, carry on with it afterwards and keep following the instructions you were given for that run, including how to end it. Otherwise just act on these messages and end your turn.)
+${HUDDLE_TOOLS}`, { huddle: h.id })}`;
 }
