@@ -1,9 +1,10 @@
 // Whole-huddle templates: a named roster plus the rules the huddle runs by (rounds, budget, report format).
-// Built-ins ship here; a board keeps its own and its overrides in profiles/<slug>/huddle-templates.json, the same way
-// as role presets (see huddle-presets.ts). Starting a huddle from a template uses its roster and budget, and its rules
+// Built-ins ship here; the user's global ones live in <home>/huddle-templates.json and a board's own in
+// profiles/<slug>/huddle-templates.json, merged the same way as role presets (built-in -> global -> board, see layers.ts). Starting a huddle from a template uses its roster and budget, and its rules
 // become the huddle's pinned brief. Plain helpers shared by the daemon and the MCP server (no file access here).
 import { presetName } from "./huddle-presets";
 import { rosterError, type RosterEntry } from "./huddle-roster";
+import { type Layered, mergeLayers, withItem } from "./layers";
 
 export interface HuddleTemplate {
   /** Key, e.g. design-review. Lowercase letters, digits and dashes. */
@@ -21,8 +22,7 @@ export interface HuddleTemplate {
   report: string;
 }
 
-export type TemplateSource = "builtin" | "board" | "override";
-export type HuddleTemplateView = HuddleTemplate & { source: TemplateSource };
+export type HuddleTemplateView = Layered<HuddleTemplate>;
 
 const MAX_TEXT = 4000;
 const MAX_ROUNDS = 20;
@@ -45,9 +45,8 @@ export const BUILTIN_TEMPLATES: HuddleTemplate[] = [
         prompt: DESIGN_REVIEW_READ + "Review the core design and engine code: routing bugs, races, recovery after restarts, cost leaks, missing tests.",
       },
       {
-        handle: "ux", role: "UX critic",
-        prompt: DESIGN_REVIEW_READ + "Critique the user experience: can the user tell at a glance who is doing what, what needs them, what it costs and when it is done? " +
-          "Propose concrete UI changes (what, where, why), ranked by user impact.",
+        handle: "ux", preset: "ux-critic",
+        prompt: DESIGN_REVIEW_READ + "Critique the feature under review.",
       },
       {
         handle: "safety", role: "Safety reviewer", preset: "security",
@@ -59,15 +58,13 @@ export const BUILTIN_TEMPLATES: HuddleTemplate[] = [
           "Use this very huddle as evidence: note anything confusing you hit yourself while taking part.",
       },
       {
-        handle: "research", role: "Product researcher",
-        prompt: "Compare the design with how other products and multi-agent frameworks solve the same problem. Use web search and cite sources. " +
+        handle: "research", role: "Product researcher", preset: "researcher",
+        prompt: "Compare the design with how other products and multi-agent frameworks solve the same problem. " +
           "Keep to ideas that fit the project's scale; report the top 5 with effort and benefit.",
       },
       {
-        handle: "facilitator", role: "Facilitator", lead: true,
-        prompt: "Run the discussion: make sure every participant posts, challenge weak or duplicate findings, ask follow-ups and settle disagreements. " +
-          "Keep the pinned findings list with huddle_findings: de-duplicate, tag each MUST / SHOULD / COULD with effort S/M/L. Don't add participants unless a clear gap appears. " +
-          "When the rounds are over, tag @main once with the final ranked list (about 12 items at most).",
+        handle: "facilitator", preset: "facilitator",
+        prompt: "Run the rounds the brief sets; when they are over, send @main the final ranked list.",
       },
     ],
   },
@@ -77,15 +74,9 @@ const BUILTIN = new Map(BUILTIN_TEMPLATES.map((t) => [t.name, t]));
 
 export const isBuiltinTemplate = (name: string) => BUILTIN.has(name);
 
-/** Built-ins (or their board overrides) first, then the board's own templates by name. */
-export function mergeTemplates(board: HuddleTemplate[]): HuddleTemplateView[] {
-  const mine = new Map(board.map((t) => [t.name, t]));
-  const out: HuddleTemplateView[] = BUILTIN_TEMPLATES.map((b) => {
-    const o = mine.get(b.name);
-    return o ? { ...o, source: "override" as const } : { ...b, source: "builtin" as const };
-  });
-  const added = board.filter((t) => !BUILTIN.has(t.name)).sort((a, b) => a.name.localeCompare(b.name));
-  return [...out, ...added.map((t) => ({ ...t, source: "board" as const }))];
+/** Built-ins (or their overrides) first, then the user's own templates by name; each at its highest level. */
+export function mergeTemplates(global: HuddleTemplate[], board: HuddleTemplate[] = []): HuddleTemplateView[] {
+  return mergeLayers(BUILTIN_TEMPLATES, global, board);
 }
 
 /**
@@ -121,22 +112,25 @@ export function templateFromInput(input: any, base?: HuddleTemplate, presets?: s
   };
 }
 
-/** Board templates after saving `input`: replaces a board template of that name, or adds an override or a new one. */
-export function saveTemplate(board: HuddleTemplate[], input: any, presets?: string[]): { board: HuddleTemplate[]; template: HuddleTemplate } {
+/**
+ * One level's templates after saving `input`: replaces its template of that name, or adds an override or a new one.
+ * `lower`: the templates under this level, which an edit starts from.
+ */
+export function saveTemplate(list: HuddleTemplate[], input: any, presets?: string[], lower: HuddleTemplate[] = BUILTIN_TEMPLATES): { list: HuddleTemplate[]; template: HuddleTemplate } {
   const name = presetName(typeof input?.name === "string" ? input.name : "");
-  const base = board.find((t) => t.name === name) ?? BUILTIN.get(name);
+  const base = list.find((t) => t.name === name) ?? lower.find((t) => t.name === name);
   const template = templateFromInput(input, base, presets);
-  return { board: [...board.filter((t) => t.name !== template.name), template], template };
+  return { list: withItem(list, template), template };
 }
 
-/** Board templates after deleting `name`: a board template goes away, an override goes back to the built-in. */
-export function deleteTemplate(board: HuddleTemplate[], name: string): { board: HuddleTemplate[]; reset: boolean } {
+/** One level's templates after deleting `name`; `reset`: a lower level has it, so it falls back to that version. */
+export function deleteTemplate(list: HuddleTemplate[], name: string, lower: HuddleTemplate[] = BUILTIN_TEMPLATES): { list: HuddleTemplate[]; reset: boolean } {
   const n = presetName(name);
-  if (!board.some((t) => t.name === n)) {
+  if (!list.some((t) => t.name === n)) {
     if (BUILTIN.has(n)) throw new Error(`"${n}" is a built-in template; it can only be changed, not deleted`);
-    throw new Error(`no template "${name}" on this board`);
+    throw new Error(`no template "${name}" at this level`);
   }
-  return { board: board.filter((t) => t.name !== n), reset: BUILTIN.has(n) };
+  return { list: list.filter((t) => t.name !== n), reset: lower.some((t) => t.name === n) };
 }
 
 /** Keeps only well-formed entries from a hand-edited or old huddle-templates.json. */

@@ -4,7 +4,7 @@ import {
   assertCanChange, BoardClient, bugReportText, ClientError, huddleCaller, parseMode, parseStatus, profileList, resolveProfile, RUN_ENV, runProfile,
   ticketLine, ticketText, type HuddlePage, type ScheduleHistoryInfo, type ScheduleInfo, type ScheduleInput, type TicketPatch,
 } from "./client";
-import { BUILTIN_PRESETS, MAIN_PRESET, presetLine } from "./server/huddle-presets";
+import { BUILTIN_PRESETS, MAIN_PRESET, presetLine, presetName } from "./server/huddle-presets";
 import { huddleLine, rosterEntryError, rosterError } from "./server/huddle-roster";
 import { BUILTIN_TEMPLATES, templateLine } from "./server/huddle-templates";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -885,7 +885,7 @@ const HUDDLE_TOOLS: Tool[] = [
   },
   {
     name: "list_huddle_presets",
-    description: "List the board's huddle role presets (built-ins and the board's own) with their prompt, default model, mode, lead, canEdit and workspace, and the board's huddle templates. " +
+    description: "List the board's teammates (huddle role presets: built-ins, the user's for all boards and the board's own) with their prompt, default model, mode, lead, canEdit and workspace, and the huddle templates. " +
       "Use the preset names in propose_huddle and huddle_add_participant, the template names in propose_huddle.",
     inputSchema: { type: "object", properties: { profile: PROFILE } },
     annotations: { readOnlyHint: true },
@@ -893,16 +893,16 @@ const HUDDLE_TOOLS: Tool[] = [
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
       const [ps, ts] = await Promise.all([ctx.client.listHuddlePresets(slug), ctx.client.listHuddleTemplates(slug).catch(() => [])]);
-      return `Huddle presets on board ${slug}:\n${ps.map(presetLine).join("\n")}` +
+      return `Teammates (huddle presets) on board ${slug}:\n${ps.map(presetLine).join("\n")}` +
         (ts.length ? `\n\nHuddle templates (whole rosters with rules; use with propose_huddle template):\n${ts.map(templateLine).join("\n")}` : "");
     },
   },
   {
     name: "save_huddle_preset",
     description:
-      "Create or change a huddle role preset on this board, e.g. when a role you need keeps coming up. Saving a built-in's name (reviewer, qa, qa-lead, engineer, security, main) " +
-      "overrides it on this board; delete_huddle_preset resets it. Fields you leave out keep the existing preset's values. " +
-      "From a board or huddle run you can only add new names, not change built-ins or the board's presets.",
+      `Create or change a teammate (huddle role preset), e.g. when a role you need keeps coming up. Saving a built-in's name (${BUILTIN_PRESETS.map((p) => p.name).join(", ")}) ` +
+      "overrides it; delete_huddle_preset resets it. scope board (default) saves it for this board only, global for every board. Fields you leave out keep the existing teammate's values. " +
+      "From a board or huddle run you can only add new names to the board, not change built-ins or the user's teammates.",
     inputSchema: {
       type: "object",
       properties: {
@@ -914,6 +914,7 @@ const HUDDLE_TOOLS: Tool[] = [
         lead: { type: "boolean", description: "May add participants and manage the findings list. Default false." },
         canEdit: { type: "boolean", description: "May edit tracked files (only in its own worktree). Default: true for workspace own." },
         workspace: { type: "string", enum: ["shared", "own"], description: "shared: read-only in the host ticket's worktree. own: its own worktree and branch. Default shared." },
+        scope: { type: "string", enum: ["board", "global"], description: "board: this board only (default). global: every board (not from a run)." },
         profile: PROFILE,
       },
       required: ["name", "prompt"],
@@ -924,20 +925,31 @@ const HUDDLE_TOOLS: Tool[] = [
       const { profile: _p, ...input } = args ?? {};
       const slug = await slugFor(args, ctx);
       const p = await ctx.client.saveHuddlePreset(slug, input, huddleCaller(ctx.env));
-      return `Saved preset "${p.name}" on board ${slug}${p.source === "override" ? " (overrides the built-in)" : ""}:\n${presetLine(p)}`;
+      const where = p.source === "global" ? "for all boards" : `on board ${slug}`;
+      return `Saved preset "${p.name}" ${where}${p.base ? ` (overrides the ${p.base === "builtin" ? "built-in" : "all-boards version"})` : ""}:\n${presetLine(p)}`;
     },
   },
   {
     name: "delete_huddle_preset",
-    description: "Delete one of the board's own huddle presets, or reset a changed built-in to its default. Built-in presets themselves can't be deleted. Not from a board or huddle run (ask the user).",
-    inputSchema: { type: "object", properties: { name: { type: "string", description: "Preset name." }, profile: PROFILE }, required: ["name"] },
+    description: "Delete a teammate (huddle role preset), or reset a changed one to the version below it (all boards, then built-in). Built-ins themselves can't be deleted. Not from a board or huddle run (ask the user).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Preset name." },
+        scope: { type: "string", enum: ["board", "global"], description: "The level to delete at. Default: the version in effect on this board." },
+        profile: PROFILE,
+      },
+      required: ["name"],
+    },
     changes: true,
     allowInRun: true,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
       const name = str(args, "name")!.trim();
-      const r = await ctx.client.deleteHuddlePreset(slug, name, huddleCaller(ctx.env));
-      return r.reset ? `Reset "${name}" to the built-in preset on board ${slug}.` : `Deleted preset "${name}" from board ${slug}.`;
+      const scope = args?.scope === "global" || args?.scope === "board" ? args.scope : undefined;
+      const r = await ctx.client.deleteHuddlePreset(slug, name, huddleCaller(ctx.env), scope);
+      const now = r.presets.find((p) => p.name === presetName(name));
+      return r.reset && now ? `Reset "${name}": board ${slug} now uses the ${now.source === "builtin" ? "built-in" : "all-boards"} version.` : `Deleted preset "${name}".`;
     },
   },
 ];

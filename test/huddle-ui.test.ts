@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { resetTitle, scopeChip, usageText } from "../web/src/teamText";
 import {
   applyTemplate, brakeLabel, cardHuddleBadge, digestPreview, digestSenders, parseDigest, draftError, draftTags, idleFor, isForYou, untaggedHint, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, sourceLabel, upsertHuddle, withActivity,
 } from "../web/src/huddleText";
@@ -214,4 +215,17 @@ test("session viewer helpers: model names, meta line, tool icons, merging a refr
   expect(sessionState(agent, true)).toBe("Stopped · the huddle is closed; its steps stay viewable");
   expect(sessionState({ ...agent, sessionId: null }, false)).toContain("No session yet");
   expect(sessionState({ ...agent, kind: "ticket-main" }, false)).toContain("ticket's own chat");
+});
+
+test("team tab: usage text, scope chips only for exceptions, reset target", () => {
+  expect(usageText(undefined)).toBe("never used");
+  expect(usageText({ huddles: 0, lastUsed: null })).toBe("never used");
+  expect(usageText({ huddles: 1, lastUsed: new Date(Date.now() - 5 * 3600_000).toISOString() })).toBe("5h ago · 1 huddle");
+  expect(usageText({ huddles: 9, lastUsed: new Date(Date.now() - 2 * 86400_000).toISOString() })).toBe("2d ago · 9 huddles");
+  expect(scopeChip({ source: "builtin", base: null, builtin: true })).toBeNull();
+  expect(scopeChip({ source: "global", base: null, builtin: false })).toBeNull();
+  expect(scopeChip({ source: "board", base: "global", builtin: false })).toEqual({ text: "changed on this board", tone: "warn" });
+  expect(scopeChip({ source: "board", base: null, builtin: false })).toEqual({ text: "this board only", tone: "" });
+  expect(resetTitle({ base: "global" })).toBe("Back to the all-boards version");
+  expect(resetTitle({ base: "builtin" })).toBe("Back to the built-in version");
 });

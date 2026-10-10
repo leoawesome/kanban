@@ -35,14 +35,16 @@ import {
   rosterError, USER_HANDLE, type RosterEntry,
 } from "./huddle-roster";
 import {
-  deletePreset, type HuddlePreset, type HuddlePresetView, MAIN_PRESET, mergePresets, presetName, savePreset,
+  BUILTIN_PRESETS, deletePreset, type HuddlePreset, type HuddlePresetView, MAIN_PRESET, mergePresets, presetName, savePreset,
 } from "./huddle-presets";
 import {
   ALL_ROLES, cleanLessons, cleanNotes, type HuddleNote, lessonsSection, type LessonInput, NOTE_MAX, noteRole, noteText, type NoteScope, type RoleNotes,
 } from "./huddle-notes";
 import {
-  deleteTemplate, type HuddleTemplate, type HuddleTemplateView, mergeTemplates, saveTemplate, templateBrief,
+  BUILTIN_TEMPLATES, deleteTemplate, type HuddleTemplate, type HuddleTemplateView, mergeTemplates, saveTemplate, templateBrief,
 } from "./huddle-templates";
+import { huddleUsage, type Usage } from "./huddle-usage";
+import { isLevel, type Level, lowerLevels } from "./layers";
 import { huddleAgentPrompt, huddleAgentSystemPrompt, huddleDigest, huddleMainPrompt } from "./prompts";
 import { buildArgs, MONITOR_IDLE_MS, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
@@ -381,74 +383,109 @@ export class Huddles {
     return { h, me: h.participants.find((p) => p.kind === "human")! };
   }
 
-  // ---- Role presets (built-ins + the board's huddle-presets.json) ----
+  // ---- Role presets ("teammates"): built-ins, the global huddle-presets.json and the board's (see layers.ts) ----
 
   presets(slug: string): HuddlePresetView[] {
-    return mergePresets(this.store.listHuddlePresets(slug));
+    return mergePresets(this.store.listHuddlePresets(null), this.store.listHuddlePresets(slug));
   }
 
   private presetMap(slug: string): Map<string, HuddlePreset> {
     return new Map(this.presets(slug).map((p) => [p.name, p]));
   }
 
-  /** Add or change a board preset (a built-in's name overrides it). addOnly (any board or huddle run): only a new name. */
-  savePreset(slug: string, input: unknown, addOnly = false): HuddlePresetView {
+  /**
+   * Add or change a preset at one level: "board" (default) or "global" (every board). A lower level's name overrides it.
+   * Saving for every board drops this board's own version of it, so the saved one is what this board uses.
+   * addOnly (any board or huddle run): only a new name, and only on the board.
+   */
+  savePreset(slug: string, input: unknown, addOnly = false, level: unknown = "board"): HuddlePresetView {
     if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
+    if (!isLevel(level)) throw new HuddleError(400, "scope must be board or global");
     const name = presetName(String((input as any)?.name ?? ""));
+    if (addOnly && level !== "board") throw new HuddleError(403, "a board or huddle run may only add presets to its board; ask the user to save one for all boards");
     if (addOnly && this.presets(slug).some((p) => p.name === name)) {
       throw new HuddleError(403, `preset "${name}" already exists; a board or huddle run may only add new presets (pick another name, or ask the user to change it)`);
     }
+    const global = this.store.listHuddlePresets(null);
+    const board = this.store.listHuddlePresets(slug);
     let r: ReturnType<typeof savePreset>;
     try {
-      r = savePreset(this.store.listHuddlePresets(slug), input);
+      r = savePreset(level === "global" ? global : board, input, lowerLevels(BUILTIN_PRESETS, global, level));
     } catch (e) {
       throw new HuddleError(400, (e as Error).message);
     }
-    this.store.saveHuddlePresets(slug, r.board);
+    this.store.saveHuddlePresets(level === "global" ? null : slug, r.list);
+    if (level === "global" && board.some((p) => p.name === r.preset.name)) this.store.saveHuddlePresets(slug, board.filter((p) => p.name !== r.preset.name));
     return this.presets(slug).find((p) => p.name === r.preset.name)!;
   }
 
-  /** Delete a board preset, or reset an overridden built-in. Built-ins themselves can't be deleted. */
-  deletePreset(slug: string, name: string): { reset: boolean; presets: HuddlePresetView[] } {
+  /**
+   * Delete a preset at one level (default: the level whose version is in effect); it falls back to the level below,
+   * or goes away. Built-ins themselves can't be deleted.
+   */
+  deletePreset(slug: string, name: string, level?: unknown): { reset: boolean; presets: HuddlePresetView[] } {
+    const lvl = this.levelOf(level, this.presets(slug).find((p) => p.name === presetName(name))?.source);
+    const global = this.store.listHuddlePresets(null);
     let r: ReturnType<typeof deletePreset>;
     try {
-      r = deletePreset(this.store.listHuddlePresets(slug), name);
+      r = deletePreset(this.store.listHuddlePresets(lvl === "global" ? null : slug), name, lowerLevels(BUILTIN_PRESETS, global, lvl));
     } catch (e) {
       throw new HuddleError(/built-in/.test((e as Error).message) ? 409 : 404, (e as Error).message);
     }
-    this.store.saveHuddlePresets(slug, r.board);
+    this.store.saveHuddlePresets(lvl === "global" ? null : slug, r.list);
     return { reset: r.reset, presets: this.presets(slug) };
   }
 
-  // ---- Whole-huddle templates (built-ins + the board's huddle-templates.json) ----
-
-  templates(slug: string): HuddleTemplateView[] {
-    return mergeTemplates(this.store.listHuddleTemplates(slug));
+  /** The level a delete goes to: the one asked for, else the one in effect (a built-in: the board, which then says no). */
+  private levelOf(level: unknown, source: string | undefined): Level {
+    if (level !== undefined && level !== null && level !== "") {
+      if (!isLevel(level)) throw new HuddleError(400, "scope must be board or global");
+      return level;
+    }
+    return source === "global" ? "global" : "board";
   }
 
-  /** Add or change a board template (a built-in's name overrides it). */
-  saveTemplate(slug: string, input: unknown): HuddleTemplateView {
+  // ---- Whole-huddle templates: built-ins, the global huddle-templates.json and the board's ----
+
+  templates(slug: string): HuddleTemplateView[] {
+    return mergeTemplates(this.store.listHuddleTemplates(null), this.store.listHuddleTemplates(slug));
+  }
+
+  /** Add or change a template at one level, like savePreset (a lower level's name overrides it). */
+  saveTemplate(slug: string, input: unknown, level: unknown = "board"): HuddleTemplateView {
     if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
+    if (!isLevel(level)) throw new HuddleError(400, "scope must be board or global");
+    const global = this.store.listHuddleTemplates(null);
+    const board = this.store.listHuddleTemplates(slug);
     let r: ReturnType<typeof saveTemplate>;
     try {
-      r = saveTemplate(this.store.listHuddleTemplates(slug), input, this.presets(slug).map((p) => p.name));
+      r = saveTemplate(level === "global" ? global : board, input, this.presets(slug).map((p) => p.name), lowerLevels(BUILTIN_TEMPLATES, global, level));
     } catch (e) {
       throw new HuddleError(400, (e as Error).message);
     }
-    this.store.saveHuddleTemplates(slug, r.board);
+    this.store.saveHuddleTemplates(level === "global" ? null : slug, r.list);
+    if (level === "global" && board.some((t) => t.name === r.template.name)) this.store.saveHuddleTemplates(slug, board.filter((t) => t.name !== r.template.name));
     return this.templates(slug).find((t) => t.name === r.template.name)!;
   }
 
-  /** Delete a board template, or reset a changed built-in. Built-ins themselves can't be deleted. */
-  deleteTemplate(slug: string, name: string): { reset: boolean; templates: HuddleTemplateView[] } {
+  /** Delete a template at one level (default: the one in effect); it falls back to the level below. */
+  deleteTemplate(slug: string, name: string, level?: unknown): { reset: boolean; templates: HuddleTemplateView[] } {
+    const lvl = this.levelOf(level, this.templates(slug).find((t) => t.name === presetName(name))?.source);
+    const global = this.store.listHuddleTemplates(null);
     let r: ReturnType<typeof deleteTemplate>;
     try {
-      r = deleteTemplate(this.store.listHuddleTemplates(slug), name);
+      r = deleteTemplate(this.store.listHuddleTemplates(lvl === "global" ? null : slug), name, lowerLevels(BUILTIN_TEMPLATES, global, lvl));
     } catch (e) {
       throw new HuddleError(/built-in/.test((e as Error).message) ? 409 : 404, (e as Error).message);
     }
-    this.store.saveHuddleTemplates(slug, r.board);
+    this.store.saveHuddleTemplates(lvl === "global" ? null : slug, r.list);
     return { reset: r.reset, templates: this.templates(slug) };
+  }
+
+  /** How every teammate and template has been used, from the huddles on every board (closed ones included). */
+  usage(): { teammates: Record<string, Usage>; templates: Record<string, Usage> } {
+    return huddleUsage(this.store.listProfiles().flatMap((p) =>
+      this.store.listHuddles(p.slug).map((h) => ({ board: p.slug, huddle: h, title: this.store.getTicket(p.slug, h.hostTicket)?.title ?? null }))));
   }
 
   // ---- Role notes (huddle-notes.ts): only the user writes them ----
@@ -464,7 +501,7 @@ export class Huddles {
     return out;
   }
 
-  /** Replace a role's notes in one scope (the user added, edited or deleted lines in board settings). */
+  /** Replace a role's notes in one scope (the user added, edited or deleted lines in the Team tab). */
   setNotes(slug: string, role: string, scope: string, notes: unknown): HuddleNote[] {
     if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
     const r = noteRole(role);

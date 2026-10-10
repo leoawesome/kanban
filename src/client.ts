@@ -300,14 +300,15 @@ export class BoardClient {
   scheduleHistory = (slug: string, id: string) => this.req<ScheduleHistoryInfo[]>("GET", `${this.s(slug, id)}/history`);
   cronPreview = (expr: string) => this.req<CronPreviewInfo>("GET", `/api/cron/preview?expr=${encodeURIComponent(expr)}`);
 
-  // Huddle role presets: built-ins merged with the board's own.
+  // Huddle role presets (teammates): built-ins merged with the global ones and the board's own.
   private hp = (slug: string, name?: string) =>
     `/api/profiles/${encodeURIComponent(slug)}/huddle-presets${name ? `/${encodeURIComponent(name)}` : ""}`;
   listHuddlePresets = (slug: string) => this.req<HuddlePresetView[]>("GET", this.hp(slug));
   /** c: the calling run (a run may only add new presets). */
   saveHuddlePreset = (slug: string, preset: Record<string, unknown>, c: HuddleCaller = {}) => this.req<HuddlePresetView>("POST", this.hp(slug), preset, this.as(c));
-  deleteHuddlePreset = (slug: string, name: string, c: HuddleCaller = {}) =>
-    this.req<{ reset: boolean; presets: HuddlePresetView[] }>("DELETE", this.hp(slug, name), undefined, this.as(c));
+  /** scope: the level to delete at (default: the one in effect). */
+  deleteHuddlePreset = (slug: string, name: string, c: HuddleCaller = {}, scope?: "board" | "global") =>
+    this.req<{ reset: boolean; presets: HuddlePresetView[] }>("DELETE", `${this.hp(slug, name)}${scope ? `?scope=${scope}` : ""}`, undefined, this.as(c));
 
   // Whole-huddle templates (roster and rules): built-ins merged with the board's own.
   listHuddleTemplates = (slug: string) => this.req<HuddleTemplateView[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates`);

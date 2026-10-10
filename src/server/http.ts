@@ -328,6 +328,8 @@ export function createServer(deps: ServerDeps) {
     if (parts[0] === "events" && m === "GET") return sse(req);
     if (parts[0] === "version" && m === "GET") return json(await updates.status());
     if (parts[0] === "usage" && m === "GET") return json(await usage.get(0));
+    // How every teammate (huddle preset) and template was used, from the huddles on every board.
+    if (parts[0] === "team-usage" && m === "GET") return json(huddles.usage());
     if (parts[0] === "inbox" && m === "GET") {
       // Every board: tickets where Claude is waiting on the user (Review is left out on purpose).
       const out = [];
@@ -632,28 +634,42 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
 
-    // /profiles/:p/huddle-presets[/:name] — huddle role presets: built-ins merged with the board's own (any caller, runs included).
-    // A run (a huddle agent's or a ticket's, the coordinator included) may only add new presets: it can't change or
-    // delete what the user or a built-in defined.
+    // /profiles/:p/huddle-presets[/:name] — huddle role presets ("teammates"): built-ins merged with the global ones and
+    // the board's own (any caller, runs included). Body `scope`: "board" (default) or "global" (every board); DELETE
+    // ?scope= defaults to the level in effect. A run (a huddle agent's or a ticket's, the coordinator included) may only
+    // add new presets to its board: it can't change or delete what the user or a built-in defined.
     if (parts[2] === "huddle-presets") {
       const addOnly = !!(req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER));
       if (parts.length === 3 && m === "GET") return json(huddles.presets(slug));
-      if (parts.length === 3 && m === "POST") return json(huddles.savePreset(slug, await body(req), addOnly), 201);
-      if (parts.length === 4 && m === "PUT") return json(huddles.savePreset(slug, { ...(await body(req)), name: parts[3] }, addOnly));
+      if (parts.length === 3 && m === "POST") {
+        const b = await body(req);
+        return json(huddles.savePreset(slug, b, addOnly, b?.scope ?? "board"), 201);
+      }
+      if (parts.length === 4 && m === "PUT") {
+        const b = await body(req);
+        return json(huddles.savePreset(slug, { ...b, name: parts[3] }, addOnly, b?.scope ?? "board"));
+      }
       if (parts.length === 4 && m === "DELETE") {
         if (addOnly) throw new HttpError(403, "a board or huddle run can't delete or reset presets; ask the user");
-        return json(huddles.deletePreset(slug, parts[3]));
+        return json(huddles.deletePreset(slug, parts[3], url.searchParams.get("scope") ?? undefined));
       }
       throw new HttpError(404, "not found");
     }
 
-    // /profiles/:p/huddle-templates[/:name] — whole-huddle templates (roster and rules). Anyone reads; only the user changes them.
+    // /profiles/:p/huddle-templates[/:name] — whole-huddle templates (roster and rules), levels as for presets. Anyone
+    // reads; only the user changes them.
     if (parts[2] === "huddle-templates") {
       if (parts.length === 3 && m === "GET") return json(huddles.templates(slug));
-      if (req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER)) throw new HttpError(403, "only the user changes huddle templates (board settings)");
-      if (parts.length === 3 && m === "POST") return json(huddles.saveTemplate(slug, await body(req)), 201);
-      if (parts.length === 4 && m === "PUT") return json(huddles.saveTemplate(slug, { ...(await body(req)), name: parts[3] }));
-      if (parts.length === 4 && m === "DELETE") return json(huddles.deleteTemplate(slug, parts[3]));
+      if (req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER)) throw new HttpError(403, "only the user changes huddle templates (the Team tab)");
+      if (parts.length === 3 && m === "POST") {
+        const b = await body(req);
+        return json(huddles.saveTemplate(slug, b, b?.scope ?? "board"), 201);
+      }
+      if (parts.length === 4 && m === "PUT") {
+        const b = await body(req);
+        return json(huddles.saveTemplate(slug, { ...b, name: parts[3] }, b?.scope ?? "board"));
+      }
+      if (parts.length === 4 && m === "DELETE") return json(huddles.deleteTemplate(slug, parts[3], url.searchParams.get("scope") ?? undefined));
       throw new HttpError(404, "not found");
     }
 
@@ -661,7 +677,7 @@ export function createServer(deps: ServerDeps) {
     // user writes them, so no agent can change what future agents are told.
     if (parts[2] === "huddle-notes") {
       if (parts.length === 3 && m === "GET") return json({ notes: huddles.notes(slug), cap: NOTES_CAP });
-      if (req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER)) throw new HttpError(403, "only the user changes huddle role notes (board settings)");
+      if (req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER)) throw new HttpError(403, "only the user changes huddle role notes (the Team tab)");
       if (parts.length === 5 && m === "PUT") return json(huddles.setNotes(slug, parts[3], parts[4], (await body(req))?.notes));
       throw new HttpError(404, "not found");
     }

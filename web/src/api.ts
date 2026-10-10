@@ -422,8 +422,22 @@ export interface McpConfig extends McpAddInput {
   commandLine: string | null;
 }
 
-/** A huddle role preset (src/server/huddle-presets.ts): built-in, a board override of one, or the board's own. */
-export interface HuddlePreset {
+/** Where a teammate or template is saved (src/server/layers.ts): built-in, for every board (global) or this board. */
+export type LayerSource = "builtin" | "global" | "board";
+/** A saved level. */
+export type Level = "global" | "board";
+
+export interface LayerInfo {
+  /** The level whose version is in effect. */
+  source: LayerSource;
+  /** The version Reset falls back to; null: deleting removes it. */
+  base: LayerSource | null;
+  /** The name is a built-in. */
+  builtin: boolean;
+}
+
+/** A huddle role preset, a "teammate" in the UI (src/server/huddle-presets.ts). */
+export interface HuddlePreset extends LayerInfo {
   name: string;
   role: string;
   prompt: string;
@@ -432,11 +446,10 @@ export interface HuddlePreset {
   lead: boolean;
   canEdit: boolean;
   workspace: "shared" | "own";
-  source: "builtin" | "override" | "board";
 }
 
 /** A whole-huddle template (src/server/huddle-templates.ts): a roster and its rules. */
-export interface HuddleTemplate {
+export interface HuddleTemplate extends LayerInfo {
   name: string;
   label: string;
   description: string;
@@ -447,7 +460,24 @@ export interface HuddleTemplate {
   maxCostUsd: number | null;
   /** Report format ("" for none). */
   report: string;
-  source: "builtin" | "override" | "board";
+}
+
+/** One huddle a teammate or template took part in (src/server/huddle-usage.ts). */
+export interface UsageHuddle {
+  board: string;
+  huddle: string;
+  ticket: string;
+  title: string | null;
+  at: string;
+  costUsd: number;
+}
+
+export interface TeamUsage {
+  huddles: number;
+  lastUsed: string | null;
+  costUsd: number;
+  /** Newest first. */
+  recent: UsageHuddle[];
 }
 
 /** One line of a huddle roster (src/server/huddle-roster.ts): `count` participants from a preset or a free-form role. */
@@ -762,11 +792,14 @@ export const api = {
   detectSetup: (slug: string) => req<SetupDetection>("POST", `/api/profiles/${slug}/detect-setup`),
   tickets: (slug: string) => req<Ticket[]>("GET", t(slug)),
   huddlePresets: (slug: string) => req<HuddlePreset[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets`),
-  saveHuddlePreset: (slug: string, p: Omit<HuddlePreset, "source">) =>
-    req<HuddlePreset>("POST", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets`, p),
-  /** Deletes a board preset, or resets an overridden built-in. */
-  deleteHuddlePreset: (slug: string, name: string) =>
-    req<{ reset: boolean; presets: HuddlePreset[] }>("DELETE", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets/${encodeURIComponent(name)}`),
+  /** scope: global (every board) or this board. */
+  saveHuddlePreset: (slug: string, p: Omit<HuddlePreset, keyof LayerInfo>, scope: Level) =>
+    req<HuddlePreset>("POST", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets`, { ...p, scope }),
+  /** Deletes a teammate at one level: it falls back to the level below (all boards, then built-in), or goes away. */
+  deleteHuddlePreset: (slug: string, name: string, scope: Level) =>
+    req<{ reset: boolean; presets: HuddlePreset[] }>("DELETE", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets/${encodeURIComponent(name)}?scope=${scope}`),
+  /** How every teammate and template was used, from the huddles on every board. */
+  teamUsage: () => req<{ teammates: Record<string, TeamUsage>; templates: Record<string, TeamUsage> }>("GET", "/api/team-usage"),
   /** Every huddle on the board (live, stopped and closed). */
   boardHuddles: (slug: string) => req<Huddle[]>("GET", hud(slug)),
   /** Huddles the ticket hosts or takes part in. */
@@ -780,11 +813,11 @@ export const api = {
     req<Huddle>("POST", hud(slug), { ticketId, roster, maxParticipants, maxCostUsd, template }),
   setHuddleBrief: (slug: string, id: string, text: string) => req<Huddle>("PUT", `${hud(slug, id)}/brief`, { text }),
   huddleTemplates: (slug: string) => req<HuddleTemplate[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates`),
-  saveHuddleTemplate: (slug: string, t: Omit<HuddleTemplate, "source">) =>
-    req<HuddleTemplate>("POST", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates`, t),
-  /** A board template goes away; a changed built-in goes back to its default. */
-  deleteHuddleTemplate: (slug: string, name: string) =>
-    req<{ reset: boolean; templates: HuddleTemplate[] }>("DELETE", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates/${encodeURIComponent(name)}`),
+  saveHuddleTemplate: (slug: string, t: Omit<HuddleTemplate, keyof LayerInfo>, scope: Level) =>
+    req<HuddleTemplate>("POST", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates`, { ...t, scope }),
+  /** Deletes a template at one level: it falls back to the level below, or goes away. */
+  deleteHuddleTemplate: (slug: string, name: string, scope: Level) =>
+    req<{ reset: boolean; templates: HuddleTemplate[] }>("DELETE", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates/${encodeURIComponent(name)}?scope=${scope}`),
   postHuddle: (slug: string, id: string, text: string) => req<HuddleMessage>("POST", `${hud(slug, id)}/messages`, { text }),
   addHuddleParticipants: (slug: string, id: string, entry: RosterEntry) =>
     req<{ added: HuddleParticipant[]; huddle: Huddle }>("POST", `${hud(slug, id)}/participants`, entry),

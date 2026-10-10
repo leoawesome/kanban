@@ -25,6 +25,7 @@ import { Markdown } from "./Transcript";
 import { NeedsField } from "./Needs";
 import { useHuddle, members } from "./huddle";
 import { HuddlePanel } from "./HuddlePanel";
+import type { HuddleSeed } from "./Team";
 
 // v2: widths saved under the old 80% default are dropped once so the new default shows.
 const WIDTH_KEY = "ckanban.panelWidth.v2";
@@ -185,7 +186,7 @@ function usePanelWidth(fit: number) {
 }
 
 /** Ticket view: details on the left, the chat with Claude filling the right side. */
-export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, nav, slideIn = true, tabRequest }: {
+export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, nav, slideIn = true, tabRequest, huddleSeed }: {
   profile: Profile;
   ticket: Ticket;
   /** The board's tickets, for the planner/child links. */
@@ -198,6 +199,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   slideIn?: boolean;
   /** Show this tab (e.g. a card's huddle badge); `n` changes for each new request. */
   tabRequest?: { tab: "huddle"; n: number } | null;
+  /** The Team tab's Start huddle: fill this roster in on the Huddle tab; `n` changes for each new request. */
+  huddleSeed?: { seed: HuddleSeed; n: number } | null;
 }) {
   // Errors from actions in this ticket show here, next to what failed, not in the page's top strip.
   const [panelError, setPanelError] = useState<string | null>(null);
@@ -646,7 +649,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                 <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
               </div>
             ) : tab === "huddle" ? (
-              <HuddlePanel slug={slug} ticket={ticket} tickets={tickets} state={huddleState} onError={onError}
+              <HuddlePanel slug={slug} ticket={ticket} tickets={tickets} state={huddleState} onError={onError} seed={huddleSeed ?? null}
                 onOpenChat={() => setTab("chat")} onOpenTicket={onOpenTicket} />
             ) : tab === "changes" ? (
               <Changes slug={slug} ticket={ticket} state={diffState} onSent={() => setTab("chat")} onError={onError} />

@@ -7,7 +7,7 @@ import {
   type HuddleState,
 } from "./huddle";
 import { DEFAULT_MAX, draftError, RosterEditor, rosterDraft, startFromDraft, TemplatePicker, usePresets, useTemplates, type RosterDraft } from "./HuddleRoster";
-import { BRIEF_MAX, DEFAULT_BUDGET, POST_MAX } from "./huddleText";
+import { applyTemplate, BRIEF_MAX, DEFAULT_BUDGET, POST_MAX } from "./huddleText";
 import { CloseIcon } from "./icons";
 import { KeyHint } from "./KeyHint";
 import { useLayer } from "./layers";
@@ -16,6 +16,7 @@ import { fullTime, useNow } from "./time";
 import { SessionPanel } from "./HuddleSession";
 import { Markdown } from "./Transcript";
 import { usePersistentState } from "./usePersistentState";
+import type { HuddleSeed } from "./Team";
 
 const clock = (iso: string) => {
   const d = new Date(iso);
@@ -39,11 +40,13 @@ function Avatar({ handle, small }: { handle: string; small?: boolean }) {
 }
 
 /** The Huddle tab: the ticket's huddle (feed, roster, findings, composer), or a roster editor to start one. */
-export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat, onOpenTicket }: {
+export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat, onOpenTicket, seed = null }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
   state: HuddleState;
+  /** The Team tab's Start huddle: a roster to fill in (a new huddle, or + Add agent on an open one); `n` changes per request. */
+  seed?: { seed: HuddleSeed; n: number } | null;
   onError: (m: string) => void;
   /** The session viewer's link for @main (the ticket's own chat) and for invited tickets. */
   onOpenChat: () => void;
@@ -53,6 +56,10 @@ export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat,
   const [fresh, setFresh] = useState(false);
   const h = state.huddle;
   useEffect(() => setFresh(false), [h?.id]);
+  // A closed huddle: Start huddle from the Team tab starts a new one.
+  useEffect(() => {
+    if (seed && h?.status === "closed") setFresh(true);
+  }, [seed?.n, h?.id]);
   if (!state.loaded) return <div className="panel-scroll muted"><span className="spinner" /> Loading the huddle…</div>;
   if (state.error && !h) {
     return (
@@ -63,24 +70,41 @@ export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat,
   }
   if (!h || fresh) {
     return <StartHuddle slug={slug} ticket={ticket} tickets={tickets} onError={onError} onBack={h ? () => setFresh(false) : undefined}
-      onStarted={() => state.reload()} />;
+      onStarted={() => state.reload()} seed={seed} />;
   }
   return <HuddleRoom slug={slug} ticket={ticket} tickets={tickets} huddle={h} state={state} onError={onError} onNew={() => setFresh(true)}
-    onOpenChat={onOpenChat} onOpenTicket={onOpenTicket} />;
+    onOpenChat={onOpenChat} onOpenTicket={onOpenTicket} seed={seed} />;
 }
 
 /** No huddle yet: pick a roster and start one by hand. */
-function StartHuddle({ slug, ticket, tickets, onError, onBack, onStarted }: {
+function StartHuddle({ slug, ticket, tickets, onError, onBack, onStarted, seed }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
   onError: (m: string) => void;
   onBack?: () => void;
   onStarted: () => void;
+  seed: { seed: HuddleSeed; n: number } | null;
 }) {
   const presets = usePresets(slug);
   const templates = useTemplates(slug);
-  const [draft, setDraft] = useState<RosterDraft>(() => rosterDraft([{ preset: "reviewer" }, { preset: "qa" }]));
+  const [draft, setDraft] = useState<RosterDraft>(() => rosterDraft(seed && "preset" in seed.seed ? [{ preset: seed.seed.preset }] : [{ preset: "reviewer" }, { preset: "qa" }]));
+  // Start huddle from the Team tab: that teammate alone, or the template's roster and rules (once they load).
+  const seeded = useRef(0);
+  useEffect(() => {
+    if (!seed || seeded.current === seed.n) return;
+    if ("preset" in seed.seed) {
+      seeded.current = seed.n;
+      setDraft(rosterDraft([{ preset: seed.seed.preset }]));
+      return;
+    }
+    if (!templates) return;
+    seeded.current = seed.n;
+    const name = seed.seed.template;
+    const t = templates.find((x) => x.name === name);
+    if (t) setDraft((d) => applyTemplate(d, t));
+    else onError(`No template "${name}" on this board.`);
+  }, [seed?.n, templates]);
   const [busy, setBusy] = useState(false);
   const err = draftError(draft);
   // Built-ins renamed or removed on this board: drop rows whose preset doesn't exist.
@@ -125,7 +149,7 @@ function StartHuddle({ slug, ticket, tickets, onError, onBack, onStarted }: {
   );
 }
 
-function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, onOpenChat, onOpenTicket }: {
+function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, onOpenChat, onOpenTicket, seed }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
@@ -135,6 +159,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
   onNew: () => void;
   onOpenChat: () => void;
   onOpenTicket: (id: string) => void;
+  seed: { seed: HuddleSeed; n: number } | null;
 }) {
   const [confirm, setConfirm] = useState<"stop" | "close" | null>(null);
   // The participant whose session is open beside the feed; Message @handle pre-fills the composer (n: each press).
@@ -149,6 +174,13 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
     if (next) setViewing(next.handle);
   };
   const [adding, setAdding] = useState(false);
+  // Start huddle with @x from the Team tab while this huddle is open: add @x to it instead.
+  const addSeed = seed && "preset" in seed.seed ? seed.seed.preset : null;
+  useEffect(() => {
+    if (!seed || h.status === "closed") return;
+    if ("preset" in seed.seed) setAdding(true);
+    else onError("This ticket already has an open huddle. Close it to start one from a template.");
+  }, [seed?.n]);
   const log = useRef<HTMLDivElement>(null);
   const learnings = (h.learnings ?? []).filter((l) => l.status !== "discarded");
   const pending = learnings.filter((l) => l.status === "pending");
@@ -271,7 +303,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
           <b>@{h.closeRequest.by}</b> asks to close the huddle: {h.closeRequest.reason}. The summary is in the ticket's outputs (huddle-summary.md).
         </div>
       )}
-      {adding && !closed && <AddAgent slug={slug} huddle={h} onDone={() => setAdding(false)} onError={onError} />}
+      {adding && !closed && <AddAgent key={seed?.n} slug={slug} huddle={h} preset={addSeed ?? undefined} onDone={() => setAdding(false)} onError={onError} />}
       <div className="huddle-body">
         <div className="huddle-feed">
           <Feed huddle={h} state={state} handles={handles} scroller={log} onSeen={(seq) => run(api.huddleSeen(slug, h.id, seq))} />
@@ -811,9 +843,9 @@ function Findings({ slug, huddle: h, handles, onError }: { slug: string; huddle:
 }
 
 /** + Add agent: one roster line added to the live huddle. */
-function AddAgent({ slug, huddle: h, onDone, onError }: { slug: string; huddle: Huddle; onDone: () => void; onError: (m: string) => void }) {
+function AddAgent({ slug, huddle: h, preset = "qa", onDone, onError }: { slug: string; huddle: Huddle; preset?: string; onDone: () => void; onError: (m: string) => void }) {
   const presets = usePresets(slug);
-  const [draft, setDraft] = useState<RosterDraft>(() => rosterDraft([{ preset: "qa" }]));
+  const [draft, setDraft] = useState<RosterDraft>(() => rosterDraft([{ preset }]));
   const [busy, setBusy] = useState(false);
   const room = h.maxParticipants - members(h).length;
   const size = draft.rows.reduce((n, r) => n + (r.count ?? 1), 0);

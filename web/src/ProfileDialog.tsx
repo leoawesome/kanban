@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type ClaudeProject, type Profile, type SetupDetection } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { HuddleRoles } from "./HuddleRoles";
-import { HuddleTemplates } from "./HuddleTemplates";
 import { Modal } from "./Modal";
 import { Select } from "./Select";
 import { timeAgo } from "./time";
@@ -16,9 +14,11 @@ function folderName(path: string): string {
   return path.replace(/\/+$/, "").split("/").pop() ?? "";
 }
 
-export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
+export function ProfileDialog({ profile, onClose, onSaved, onDeleted, onOpenTeam }: {
   profile: Profile | null;
   onClose: () => void;
+  /** Close and open the dock's Team tab (teammates and templates live there). */
+  onOpenTeam?: () => void;
   onSaved: (p: Profile) => void;
   onDeleted: () => void;
 }) {
@@ -247,8 +247,9 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
                 placeholder="e.g. docker compose down" />
               <span className="muted small setup-hint">Runs in the worktree before the board removes it.</span>
             </label>
-            <HuddleRoles slug={profile.slug} />
-            <HuddleTemplates slug={profile.slug} />
+            <span className="muted small">
+              Teammates and templates moved to the Team tab{onOpenTeam && <> · <button type="button" className="link-btn" onClick={onOpenTeam}>Open Team</button></>}
+            </span>
           </>
         )}
 

@@ -1,6 +1,8 @@
-// Huddle role presets: built-ins shipped here, plus per-board overrides and additions in
-// profiles/<slug>/huddle-presets.json. A board preset with a built-in's name overrides it; deleting it resets the built-in.
+// Huddle role presets ("teammates" in the UI): built-ins shipped here, the user's global ones in <home>/huddle-presets.json
+// (every board) and a board's own in profiles/<slug>/huddle-presets.json. Merge order: built-in -> global -> board (see
+// layers.ts); a preset with a lower level's name overrides it there, and deleting it falls back to the level below.
 // Plain helpers shared by the daemon and the MCP server (no file access here; see Store.listHuddlePresets).
+import { type Layered, mergeLayers, withItem } from "./layers";
 import type { HuddleMode, HuddleWorkspace } from "./types";
 
 export interface HuddlePreset {
@@ -19,8 +21,7 @@ export interface HuddlePreset {
   workspace: HuddleWorkspace;
 }
 
-export type PresetSource = "builtin" | "board" | "override";
-export type HuddlePresetView = HuddlePreset & { source: PresetSource };
+export type HuddlePresetView = Layered<HuddlePreset>;
 
 /** The coordinator's preset: the host ticket's own session. Only its role, mode and prompt apply. */
 export const MAIN_PRESET = "main";
@@ -57,6 +58,23 @@ export const BUILTIN_PRESETS: HuddlePreset[] = [
     name: "security", role: "Security reviewer", model: null, mode: "tagged", lead: false, canEdit: false, workspace: "shared",
     prompt: "Review the host ticket's changes for security problems: injection, auth and permission gaps, secrets, unsafe file or shell use. Report each with file:line and impact.",
   },
+  {
+    name: "researcher", role: "Researcher", model: "sonnet", mode: "tagged", lead: false, canEdit: false, workspace: "shared",
+    prompt: "Research the topic on the web and in linked repos (README, docs, source). Post facts with URLs or file:line refs, and one line on what problem each one solves. " +
+      "No opinions on our product unless asked. Write long reports to your outputs folder and post the path.",
+  },
+  {
+    name: "ux-critic", role: "Solo-dev UX critic", model: null, mode: "tagged", lead: false, canEdit: false, workspace: "shared",
+    prompt: "Critique the user experience as a friction filter for one developer who uses the tool every day: can they tell at a glance who is doing what, " +
+      "what needs them, what it costs and when it is done? Flag extra clicks, settings, jargon and anything built for teams that a solo user doesn't need. " +
+      "Propose concrete changes (what, where, why), ranked by user impact; prefer removing over adding.",
+  },
+  {
+    name: "facilitator", role: "Facilitator", model: null, mode: "tagged", lead: true, canEdit: false, workspace: "shared",
+    prompt: "Drive a study with several critics: make sure every participant posts, challenge weak or duplicate findings, ask follow-ups and settle disagreements. " +
+      "Keep the pinned findings list with huddle_findings: de-duplicate, tag each MUST / SHOULD / COULD with effort S/M/L. Don't add participants unless a clear gap appears. " +
+      "When the work is done, tag @main once with one ranked list (about 12 items at most).",
+  },
 ];
 
 const BUILTIN = new Map(BUILTIN_PRESETS.map((p) => [p.name, p]));
@@ -68,15 +86,9 @@ export function presetName(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, MAX_NAME);
 }
 
-/** Built-ins (or their board overrides) first in their usual order, then the board's own presets by name. */
-export function mergePresets(board: HuddlePreset[]): HuddlePresetView[] {
-  const mine = new Map(board.map((p) => [p.name, p]));
-  const out: HuddlePresetView[] = BUILTIN_PRESETS.map((b) => {
-    const o = mine.get(b.name);
-    return o ? { ...o, source: "override" as const } : { ...b, source: "builtin" as const };
-  });
-  const added = board.filter((p) => !BUILTIN.has(p.name)).sort((a, b) => a.name.localeCompare(b.name));
-  return [...out, ...added.map((p) => ({ ...p, source: "board" as const }))];
+/** Built-ins (or their overrides) first in their usual order, then the user's own by name; each at its highest level. */
+export function mergePresets(global: HuddlePreset[], board: HuddlePreset[] = []): HuddlePresetView[] {
+  return mergeLayers(BUILTIN_PRESETS, global, board);
 }
 
 /** A preset to save, filled in from `input` over `base` (the preset it overrides or edits, if any); throws a readable message when invalid. */
@@ -112,22 +124,25 @@ export function presetFromInput(input: any, base?: HuddlePreset): HuddlePreset {
   };
 }
 
-/** Board presets after saving `input`: replaces a board preset of that name, or adds an override/new one. */
-export function savePreset(board: HuddlePreset[], input: any): { board: HuddlePreset[]; preset: HuddlePreset } {
+/**
+ * One level's presets after saving `input`: replaces its preset of that name, or adds an override or a new one.
+ * `lower`: the presets under this level (built-ins for global; built-ins and global for a board), which an edit starts from.
+ */
+export function savePreset(list: HuddlePreset[], input: any, lower: HuddlePreset[] = BUILTIN_PRESETS): { list: HuddlePreset[]; preset: HuddlePreset } {
   const name = presetName(typeof input?.name === "string" ? input.name : "");
-  const base = board.find((p) => p.name === name) ?? BUILTIN.get(name);
+  const base = list.find((p) => p.name === name) ?? lower.find((p) => p.name === name);
   const preset = presetFromInput(input, base);
-  return { board: [...board.filter((p) => p.name !== preset.name), preset], preset };
+  return { list: withItem(list, preset), preset };
 }
 
-/** Board presets after deleting `name`: a board preset goes away, an override goes back to the built-in. */
-export function deletePreset(board: HuddlePreset[], name: string): { board: HuddlePreset[]; reset: boolean } {
+/** One level's presets after deleting `name`; `reset`: a lower level has it, so it falls back to that version. */
+export function deletePreset(list: HuddlePreset[], name: string, lower: HuddlePreset[] = BUILTIN_PRESETS): { list: HuddlePreset[]; reset: boolean } {
   const n = presetName(name);
-  if (!board.some((p) => p.name === n)) {
-    if (BUILTIN.has(n)) throw new Error(`"${n}" is a built-in preset; it can only be overridden (save_huddle_preset), not deleted`);
-    throw new Error(`no preset "${name}" on this board`);
+  if (!list.some((p) => p.name === n)) {
+    if (BUILTIN.has(n)) throw new Error(`"${n}" is a built-in teammate; it can only be changed (save_huddle_preset), not deleted`);
+    throw new Error(`no teammate "${name}" at this level`);
   }
-  return { board: board.filter((p) => p.name !== n), reset: BUILTIN.has(n) };
+  return { list: list.filter((p) => p.name !== n), reset: lower.some((p) => p.name === n) };
 }
 
 /** Keeps only well-formed entries from a hand-edited or old huddle-presets.json. */
@@ -146,6 +161,14 @@ export function cleanPresets(v: unknown): HuddlePreset[] {
 /** One line per preset, for list_huddle_presets and tool descriptions. */
 export function presetLine(p: HuddlePresetView): string {
   const tags = [p.mode, p.workspace === "own" ? "own worktree" : "shared worktree", p.lead && "lead", p.canEdit && p.workspace === "own" && "edits", p.model && `model ${p.model}`];
-  const src = p.source === "builtin" ? "built-in" : p.source === "override" ? "built-in, changed on this board" : "board";
+  const src = presetSourceText(p);
   return `- ${p.name}: ${p.role} (${tags.filter(Boolean).join(", ")}; ${src})${p.name === MAIN_PRESET ? " [the coordinator, @main; not for rosters]" : ""}\n  ${p.prompt}`;
+}
+
+/** Where a preset comes from, in words: "built-in", "built-in, changed on this board", "all boards", "this board only"… */
+export function presetSourceText(p: Pick<HuddlePresetView, "source" | "base" | "builtin">): string {
+  const kind = p.builtin ? "built-in" : p.base === "global" || p.source === "global" ? "all boards" : "this board only";
+  if (p.source === "board" && p.base) return `${kind}, changed on this board`;
+  if (p.source === "global" && p.base) return `${kind}, changed for all boards`;
+  return kind;
 }

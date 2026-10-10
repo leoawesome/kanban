@@ -312,34 +312,36 @@ export class Store {
     atomicWrite(join(this.profileDir(slug), "questions.json"), JSON.stringify(qs, null, 2) + "\n");
   }
 
-  /** The board's own huddle presets and overrides of the built-ins (merge with mergePresets). */
-  listHuddlePresets(slug: string): HuddlePreset[] {
-    const file = join(this.profileDir(slug), "huddle-presets.json");
+  /** Huddle presets at one level: a board's own (slug), or the global ones every board gets (slug null). Merge with mergePresets. */
+  listHuddlePresets(slug: string | null): HuddlePreset[] {
+    return this.readList(this.levelFile(slug, "huddle-presets.json"), cleanPresets);
+  }
+
+  saveHuddlePresets(slug: string | null, ps: HuddlePreset[]): void {
+    atomicWrite(this.levelFile(slug, "huddle-presets.json"), JSON.stringify(ps, null, 2) + "\n");
+  }
+
+  /** Huddle templates at one level: a board's own (slug), or the global ones (slug null). Merge with mergeTemplates. */
+  listHuddleTemplates(slug: string | null): HuddleTemplate[] {
+    return this.readList(this.levelFile(slug, "huddle-templates.json"), cleanTemplates);
+  }
+
+  saveHuddleTemplates(slug: string | null, ts: HuddleTemplate[]): void {
+    atomicWrite(this.levelFile(slug, "huddle-templates.json"), JSON.stringify(ts, null, 2) + "\n");
+  }
+
+  /** <home>/<name> for the global level (slug null), else the board's profiles/<slug>/<name>. */
+  private levelFile(slug: string | null, name: string): string {
+    return join(slug === null ? this.root : this.profileDir(slug), name);
+  }
+
+  private readList<T>(file: string, clean: (v: unknown) => T[]): T[] {
     if (!existsSync(file)) return [];
     try {
-      return cleanPresets(JSON.parse(readFileSync(file, "utf8")));
+      return clean(JSON.parse(readFileSync(file, "utf8")));
     } catch {
       return [];
     }
-  }
-
-  saveHuddlePresets(slug: string, ps: HuddlePreset[]): void {
-    atomicWrite(join(this.profileDir(slug), "huddle-presets.json"), JSON.stringify(ps, null, 2) + "\n");
-  }
-
-  /** The board's own huddle templates and overrides of the built-ins (merge with mergeTemplates). */
-  listHuddleTemplates(slug: string): HuddleTemplate[] {
-    const file = join(this.profileDir(slug), "huddle-templates.json");
-    if (!existsSync(file)) return [];
-    try {
-      return cleanTemplates(JSON.parse(readFileSync(file, "utf8")));
-    } catch {
-      return [];
-    }
-  }
-
-  saveHuddleTemplates(slug: string, ts: HuddleTemplate[]): void {
-    atomicWrite(join(this.profileDir(slug), "huddle-templates.json"), JSON.stringify(ts, null, 2) + "\n");
   }
 
   /** A role's notes file: general ones are global (<home>/huddle-notes), repo ones the board's. role: "_all" or a preset name. */

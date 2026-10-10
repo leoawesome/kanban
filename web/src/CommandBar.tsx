@@ -8,6 +8,8 @@ import { useFocusTrap, useLayer } from "./layers";
 export interface CommandAction {
   id: string;
   label: string;
+  /** Muted words after the label, e.g. what the action opens. */
+  hint?: string;
   /** Keys shown on the right, e.g. ["N"] or ["Ctrl", "`"]. */
   keys?: string[];
   icon?: ReactNode;
@@ -141,7 +143,7 @@ export function CommandBar({ profiles, current, tickets, needYou, actions, onOpe
                   {item.kind === "action" && (
                     <>
                       <span className="cmdbar-icon" aria-hidden>{item.action.icon}</span>
-                      <span className="cmdbar-title"><Marked text={item.action.label} at={item.at} /></span>
+                      <span className="cmdbar-title"><Marked text={item.action.label} at={item.at} />{item.action.hint && <span className="cmdbar-hint"> · {item.action.hint}</span>}</span>
                       {item.action.keys && <span className="cmdbar-keys">{item.action.keys.map((k, n) => <kbd key={n}>{k}</kbd>)}</span>}
                     </>
                   )}

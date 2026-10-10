@@ -7,7 +7,8 @@ import { Board } from "../src/server/board";
 import { Bus, type BusEvent } from "../src/server/events";
 import { createServer } from "../src/server/http";
 import { findingTitle, Huddles, POST_MAX, SUMMARY_FILE } from "../src/server/huddle";
-import { BUILTIN_PRESETS, deletePreset, mergePresets, savePreset } from "../src/server/huddle-presets";
+import { BUILTIN_PRESETS, deletePreset, mergePresets, presetSourceText, savePreset } from "../src/server/huddle-presets";
+import { huddleUsage } from "../src/server/huddle-usage";
 import { cleanLessons, LESSON_MAX, noteRole, parseNotes, serializeNotes } from "../src/server/huddle-notes";
 import { HUDDLE_HEADER, parseMentions, rosterError } from "../src/server/huddle-roster";
 import { BUILTIN_TEMPLATES, deleteTemplate, mergeTemplates, saveTemplate } from "../src/server/huddle-templates";
@@ -530,19 +531,19 @@ test("presets: board presets merge with built-ins; overriding and resetting a bu
   const added = savePreset([], { name: "A11y Tester", prompt: "Check accessibility.", mode: "monitor" });
   expect(added.preset).toMatchObject({ name: "a11y-tester", role: "A11y tester", mode: "monitor", workspace: "shared", canEdit: false, lead: false, model: null });
   // Overriding keeps the built-in's other fields.
-  const over = savePreset(added.board, { name: "qa", prompt: "Only test the API.", model: "sonnet" });
+  const over = savePreset(added.list, { name: "qa", prompt: "Only test the API.", model: "sonnet" });
   expect(over.preset).toMatchObject({ name: "qa", role: "QA tester", mode: "monitor", model: "sonnet", prompt: "Only test the API." });
-  const merged = mergePresets(over.board);
+  const merged = mergePresets([], over.list);
   expect(merged.map((p) => p.name)).toEqual([...BUILTIN_PRESETS.map((p) => p.name), "a11y-tester"]);
-  expect(merged.find((p) => p.name === "qa")!.source).toBe("override");
-  expect(merged.find((p) => p.name === "reviewer")!.source).toBe("builtin");
-  expect(merged.find((p) => p.name === "a11y-tester")!.source).toBe("board");
+  expect(merged.find((p) => p.name === "qa")).toMatchObject({ source: "board", base: "builtin", builtin: true });
+  expect(merged.find((p) => p.name === "reviewer")).toMatchObject({ source: "builtin", base: null, builtin: true });
+  expect(merged.find((p) => p.name === "a11y-tester")).toMatchObject({ source: "board", base: null, builtin: false });
   // Deleting an override resets the built-in; a built-in itself can't be deleted.
-  const reset = deletePreset(over.board, "qa");
+  const reset = deletePreset(over.list, "qa");
   expect(reset.reset).toBe(true);
-  expect(mergePresets(reset.board).find((p) => p.name === "qa")).toMatchObject({ source: "builtin", model: null });
-  expect(() => deletePreset(reset.board, "qa")).toThrow("built-in");
-  expect(deletePreset(reset.board, "a11y-tester")).toEqual({ board: [], reset: false });
+  expect(mergePresets([], reset.list).find((p) => p.name === "qa")).toMatchObject({ source: "builtin", model: null });
+  expect(() => deletePreset(reset.list, "qa")).toThrow("built-in");
+  expect(deletePreset(reset.list, "a11y-tester")).toEqual({ list: [], reset: false });
   expect(() => savePreset([], { name: "you", prompt: "x" })).toThrow("reserved");
   expect(() => savePreset([], { name: "x" })).toThrow("prompt is required");
   expect(() => savePreset([], { name: "x", prompt: "p", mode: "loud" })).toThrow("mode");
@@ -561,7 +562,7 @@ test("presets: saved through the MCP tool from a run, used by rosters, deleted o
   expect((await callTool("save_huddle_preset", { name: "main", prompt: "Coordinate tersely." }, ctx)).isError).toBe(true);
   huddles.savePreset("p", { name: "main", prompt: "Coordinate tersely." });
   const list = text(await callTool("list_huddle_presets", {}, ctx));
-  expect(list).toContain("- a11y: Accessibility tester (tagged, own worktree, model haiku; board)");
+  expect(list).toContain("- a11y: Accessibility tester (tagged, own worktree, model haiku; this board only)");
   expect(list).toContain("- main: Coordinator (tagged, shared worktree, lead; built-in, changed on this board)");
 
   // propose_huddle knows the board's presets.
@@ -711,7 +712,7 @@ test("board and huddle runs may add presets but not override built-ins or the bo
   expect((await callTool("save_huddle_preset", { name: "docs", prompt: "Check the docs." }, mainCtx(h))).isError).toBeUndefined();
   expect(store.listHuddlePresets("p").map((p) => p.name)).toEqual(["a11y", "perf", "docs"]);
   // The user still may.
-  expect(huddles.savePreset("p", { name: "qa", prompt: "Test it all." }).source).toBe("override");
+  expect(huddles.savePreset("p", { name: "qa", prompt: "Test it all." })).toMatchObject({ source: "board", base: "builtin" });
 }, 20000);
 
 test("budget brake: @main's huddle replies count, the leads are warned at 80%, everything stops at 100%; resume adds budget", async () => {
@@ -1154,13 +1155,13 @@ test("huddle_read: since skips the brief, roster and findings; the brief, findin
 test("templates: built-ins merge with the board's own; overriding, resetting and checking", () => {
   const added = saveTemplate([], { name: "Bug Bash", roster: [{ preset: "qa", count: 2 }, { preset: "qa-lead" }], rounds: 1, report: "steps, expected, actual" });
   expect(added.template).toMatchObject({ name: "bug-bash", label: "Bug bash", rounds: 1, maxCostUsd: null, report: "steps, expected, actual", description: "" });
-  const over = saveTemplate(added.board, { name: "design-review", maxCostUsd: 35 });
+  const over = saveTemplate(added.list, { name: "design-review", maxCostUsd: 35 });
   // An override keeps the built-in's other fields.
   expect(over.template).toMatchObject({ name: "design-review", label: "Design review", rounds: 2, maxCostUsd: 35 });
   expect(over.template.roster).toEqual(BUILTIN_TEMPLATES[0].roster);
-  const merged = mergeTemplates(over.board);
-  expect(merged.map((t) => [t.name, t.source])).toEqual([["design-review", "override"], ["bug-bash", "board"]]);
-  expect(deleteTemplate(over.board, "design-review").reset).toBe(true);
+  const merged = mergeTemplates([], over.list);
+  expect(merged.map((t) => [t.name, t.source, t.base])).toEqual([["design-review", "board", "builtin"], ["bug-bash", "board", null]]);
+  expect(deleteTemplate(over.list, "design-review").reset).toBe(true);
   expect(() => deleteTemplate([], "design-review")).toThrow("built-in");
   expect(() => saveTemplate([], { name: "x" })).toThrow("roster is required");
   expect(() => saveTemplate([], { name: "x", roster: [{ preset: "nope" }] }, ["qa"])).toThrow("unknown preset");
@@ -1294,7 +1295,7 @@ test("role notes files: newest first, source kept, round trip; lessons are check
 
 test("lessons: huddle_status done attaches up to 3, they count for you, and only with done", async () => {
   const t = await host();
-  const h = huddles.create("p", t.id, [{ preset: "qa" }, { role: "UX critic", prompt: "Critique the UI." }]);
+  const h = huddles.create("p", t.id, [{ preset: "qa" }, { role: "Copy critic", prompt: "Critique the UI." }]);
   await idle();
   const view = () => huddles.view("p", store.getHuddle("p", h.id)!);
   const before = view().forYou;
@@ -1309,12 +1310,12 @@ test("lessons: huddle_status done attaches up to 3, they count for you, and only
   expect(text(r)).toContain("2 lessons sent to the user");
   expect(participant(h, "qa").status).toBe("done");
   // huddle_post's status flag takes lessons too; an ad-hoc role's default target is every role.
-  await callTool("huddle_post", { text: "UI reviewed", status: "done", lessons: [lesson("Check light and dark mode.")] }, agentCtx(h, "ux-critic"));
+  await callTool("huddle_post", { text: "UI reviewed", status: "done", lessons: [lesson("Check light and dark mode.")] }, agentCtx(h, "copy-critic"));
   const ls = store.getHuddle("p", h.id)!.learnings!;
   expect(ls.map((l) => [l.id, l.from, l.preset, l.scope, l.status, l.target])).toEqual([
     ["l1", "qa", "qa", "repo", "pending", "qa"],
     ["l2", "qa", "qa", "general", "pending", "qa"],
-    ["l3", "ux-critic", null, "general", "pending", "_all"],
+    ["l3", "copy-critic", null, "general", "pending", "_all"],
   ]);
   expect(messages(h).some((m) => m.text.includes("@qa is done: tested. It proposed 2 lessons"))).toBe(true);
   expect(view()).toMatchObject({ learningsPending: 3 });
@@ -1328,10 +1329,10 @@ test("lessons: huddle_status done attaches up to 3, they count for you, and only
 
 test("learnings: save to role general, role repo, all roles and a new role; discard; runs and agents are refused", async () => {
   const t = await host();
-  const h = huddles.create("p", t.id, [{ preset: "qa" }, { role: "UX critic", prompt: "Critique the UI." }]);
+  const h = huddles.create("p", t.id, [{ preset: "qa" }, { role: "Copy critic", prompt: "Critique the UI." }]);
   await idle();
   await callTool("huddle_status", { status: "done", lessons: [lesson("Repro command for every bug."), lesson("Clear CKANBAN_* before tests.", "repo"), lesson("Weak one.")] }, agentCtx(h, "qa"));
-  await callTool("huddle_status", { status: "done", lessons: [lesson("Check light and dark mode.", "repo"), lesson("Handles without @ when only referring.")] }, agentCtx(h, "ux-critic"));
+  await callTool("huddle_status", { status: "done", lessons: [lesson("Check light and dark mode.", "repo"), lesson("Handles without @ when only referring.")] }, agentCtx(h, "copy-critic"));
   const url = (id: string, what: string) => `/huddles/${h.id}/learnings/${id}${what}`;
   // Not from a board run or a huddle agent.
   const agent = { [HUDDLE_HEADER]: `${h.id}/qa/${participant(h, "qa").token}` };
@@ -1359,9 +1360,9 @@ test("learnings: save to role general, role repo, all roles and a new role; disc
   // A new role from the ad-hoc participant: the preset is made from its label and prompt.
   const made = await postJson(url("l4", "/save"), { target: "new" });
   expect(made.status).toBe(200);
-  expect(await made.json()).toMatchObject({ status: "saved", target: "ux-critic", newRole: true });
-  expect(huddles.presets("p").find((p) => p.name === "ux-critic")).toMatchObject({ role: "UX critic", prompt: "Critique the UI.", source: "board" });
-  expect(store.readHuddleNotes("p", "ux-critic", "repo").map((n) => n.text)).toEqual(["Check light and dark mode."]);
+  expect(await made.json()).toMatchObject({ status: "saved", target: "copy-critic", newRole: true });
+  expect(huddles.presets("p").find((p) => p.name === "copy-critic")).toMatchObject({ role: "Copy critic", prompt: "Critique the UI.", source: "board" });
+  expect(store.readHuddleNotes("p", "copy-critic", "repo").map((n) => n.text)).toEqual(["Check light and dark mode."]);
   // All roles, switched to repo scope at save time.
   expect((await postJson(url("l5", "/save"), { target: "_all", scope: "repo" })).status).toBe(200);
   expect(store.readHuddleNotes("p", "_all", "repo").map((n) => n.text)).toEqual(["Handles without @ when only referring."]);
@@ -1369,7 +1370,7 @@ test("learnings: save to role general, role repo, all roles and a new role; disc
   // The board's notes as settings shows them.
   const all = (await (await api("/huddle-notes")).json()) as { cap: number; notes: Record<string, unknown> };
   expect(all.cap).toBe(30);
-  expect(Object.keys(all.notes).sort()).toEqual(["_all", "qa", "ux-critic"]);
+  expect(Object.keys(all.notes).sort()).toEqual(["_all", "copy-critic", "qa"]);
 }, 20000);
 
 test("a new agent's system prompt has the role's notes and All roles notes, newest first, capped, from its own board only", async () => {
@@ -1384,7 +1385,7 @@ test("a new agent's system prompt has the role's notes and All roles notes, newe
   store.writeHuddleNotes("other", "qa", "repo", [{ text: "other board rule", by: "you", date: day, huddle: null }]);
   store.writeHuddleNotes("other", "_all", "repo", [{ text: "other board all rule", by: "you", date: day, huddle: null }]);
   const t = await host();
-  huddles.create("p", t.id, [{ preset: "qa" }, { role: "UX critic", prompt: "Critique the UI." }]);
+  huddles.create("p", t.id, [{ preset: "qa" }, { role: "Copy critic", prompt: "Critique the UI." }]);
   await idle();
   const sys = (handle: string) => {
     const r = processes().find((x) => x.args.join(" ").includes(`You are @${handle} `))!;
@@ -1400,7 +1401,7 @@ test("a new agent's system prompt has the role's notes and All roles notes, newe
   const at = (s: string) => qa.indexOf(s);
   expect(at("all general rule") < at("all repo rule") && at("all repo rule") < at("qa rule 1\n") && at("qa rule 30\n") < at("qa repo rule")).toBe(true);
   // An ad-hoc agent gets All roles notes only.
-  const ux = sys("ux-critic");
+  const ux = sys("copy-critic");
   expect(ux).toContain("all general rule");
   expect(ux).not.toContain("qa rule");
 }, 20000);
@@ -1454,3 +1455,100 @@ test("session viewer: a participant's steps over HTTP, also after the huddle clo
   expect(existsSync(p.worktree!)).toBe(false);
   await check();
 }, 30000);
+
+test("teammates: built-in -> global -> board merge; deleting falls back one level", () => {
+  const global = savePreset([], { name: "qa", prompt: "Global QA.", model: "sonnet" }).list;
+  const withA11y = savePreset(global, { name: "a11y", prompt: "Check a11y." }).list;
+  // A board edit of qa starts from the global version, not the built-in.
+  const board = savePreset([], { name: "qa", prompt: "Board QA." }, mergePresets(withA11y)).list;
+  expect(board[0]).toMatchObject({ name: "qa", prompt: "Board QA.", model: "sonnet", role: "QA tester" });
+  const merged = mergePresets(withA11y, [...board, ...savePreset([], { name: "local", prompt: "Here only." }).list]);
+  expect(merged.map((p) => p.name)).toEqual([...BUILTIN_PRESETS.map((p) => p.name), "a11y", "local"]);
+  expect(merged.find((p) => p.name === "qa")).toMatchObject({ source: "board", base: "global", builtin: true, prompt: "Board QA." });
+  expect(merged.find((p) => p.name === "a11y")).toMatchObject({ source: "global", base: null, builtin: false });
+  expect(merged.find((p) => p.name === "local")).toMatchObject({ source: "board", base: null, builtin: false });
+  expect(presetSourceText(merged.find((p) => p.name === "qa")!)).toBe("built-in, changed on this board");
+  expect(presetSourceText(merged.find((p) => p.name === "a11y")!)).toBe("all boards");
+  expect(presetSourceText(merged.find((p) => p.name === "local")!)).toBe("this board only");
+  // Board reset: back to the global version; global reset: back to the built-in.
+  const boardReset = deletePreset(board, "qa", mergePresets(withA11y));
+  expect(boardReset.reset).toBe(true);
+  expect(mergePresets(withA11y, boardReset.list).find((p) => p.name === "qa")).toMatchObject({ source: "global", base: "builtin", prompt: "Global QA." });
+  const globalReset = deletePreset(withA11y, "qa");
+  expect(mergePresets(globalReset.list, boardReset.list).find((p) => p.name === "qa")).toMatchObject({ source: "builtin", base: null, model: null });
+  // The new built-ins, and the design-review template points at them.
+  for (const n of ["researcher", "ux-critic", "facilitator"]) expect(BUILTIN_PRESETS.some((p) => p.name === n)).toBe(true);
+  expect(BUILTIN_PRESETS.find((p) => p.name === "researcher")).toMatchObject({ model: "sonnet", mode: "tagged", workspace: "shared", canEdit: false });
+  expect(BUILTIN_PRESETS.find((p) => p.name === "facilitator")!.lead).toBe(true);
+  const roster = BUILTIN_TEMPLATES[0].roster;
+  expect(Object.fromEntries(roster.map((e) => [e.handle, e.preset ?? null]))).toMatchObject({ research: "researcher", ux: "ux-critic", facilitator: "facilitator" });
+  expect(rosterError(roster, 32, BUILTIN_PRESETS.map((p) => p.name))).toBeNull();
+});
+
+test("teammates: saved for all boards show on another board; a board override shows and resets to it", async () => {
+  const other: Profile = { name: "Q", slug: "q", path: await makeRepo(), baseBranch: "main", maxParallel: 3, model: null, createdAt: new Date().toISOString() };
+  store.saveProfile(other);
+  expect((await postJson("/huddle-presets", { name: "a11y", prompt: "Check a11y.", scope: "global" })).status).toBe(201);
+  expect(store.listHuddlePresets(null).map((p) => p.name)).toEqual(["a11y"]);
+  expect(huddles.presets("q").find((p) => p.name === "a11y")).toMatchObject({ source: "global", base: null });
+  // Board q changes it: only q sees the change.
+  expect(huddles.savePreset("q", { name: "a11y", prompt: "Check a11y on mobile." })).toMatchObject({ source: "board", base: "global" });
+  expect(huddles.presets("p").find((p) => p.name === "a11y")!.prompt).toBe("Check a11y.");
+  // Reset (delete at the level in effect) falls back to the all-boards version.
+  const r = huddles.deletePreset("q", "a11y");
+  expect(r.reset).toBe(true);
+  expect(r.presets.find((p) => p.name === "a11y")).toMatchObject({ source: "global", prompt: "Check a11y." });
+  // A global change of a built-in; saving for all boards drops this board's own version.
+  huddles.savePreset("p", { name: "qa", prompt: "Board QA." });
+  huddles.savePreset("p", { name: "qa", prompt: "Everyone's QA." }, false, "global");
+  expect(store.listHuddlePresets("p")).toEqual([]);
+  expect(huddles.presets("q").find((p) => p.name === "qa")).toMatchObject({ source: "global", base: "builtin", prompt: "Everyone's QA." });
+  expect((await api("/huddle-presets/qa?scope=global", { method: "DELETE" })).status).toBe(200);
+  expect(huddles.presets("q").find((p) => p.name === "qa")!.source).toBe("builtin");
+  // Deleting the global teammate removes it everywhere; a run can't save for all boards.
+  expect((await api("/huddle-presets/a11y", { method: "DELETE" })).status).toBe(200);
+  expect(huddles.presets("q").some((p) => p.name === "a11y")).toBe(false);
+  expect((await postJson("/huddle-presets", { name: "perf", prompt: "Profile.", scope: "global" }, { "x-ckanban-run": "p/t_x" })).status).toBe(403);
+  expect((await postJson("/huddle-presets", { name: "perf", prompt: "Profile.", scope: "everywhere" })).status).toBe(400);
+  // Templates take the same levels.
+  expect((await postJson("/huddle-templates", { name: "bug-bash", roster: [{ preset: "qa" }], scope: "global" })).status).toBe(201);
+  expect(huddles.templates("q").find((t) => t.name === "bug-bash")).toMatchObject({ source: "global" });
+});
+
+test("teammates: rosters and propose_huddle resolve presets through all three levels", async () => {
+  const t = await host();
+  huddles.savePreset("p", { name: "a11y", prompt: "Check a11y.", model: "haiku" }, false, "global");
+  huddles.savePreset("p", { name: "reviewer", prompt: "Review everywhere." }, false, "global");
+  huddles.savePreset("p", { name: "reviewer", prompt: "Review this repo." });
+  const ctx: ToolContext = { client, cwd: "/", env: { CKANBAN_TICKET: `p/${t.id}` } };
+  expect((await callTool("propose_huddle", { roster: [{ preset: "a11y" }, { preset: "researcher" }] }, ctx)).isError).toBeUndefined();
+  expect(text(await callTool("list_huddle_presets", {}, ctx))).toContain("- a11y: A11y (tagged, shared worktree, model haiku; all boards)");
+  const h = huddles.create("p", t.id, [{ preset: "a11y" }, { preset: "reviewer" }]);
+  expect(participant(h, "a11y")).toMatchObject({ preset: "a11y", model: "haiku", prompt: "Check a11y." });
+  expect(participant(h, "reviewer").prompt).toBe("Review this repo.");
+  await huddles.stopAll("p", h.id);
+}, 20000);
+
+test("usage stats: per teammate and template, from every board's huddles, closed ones included", async () => {
+  const mk = (id: string, createdAt: string, template: string | null, ps: [string | null, string, number, string?][]): Huddle => ({
+    id, hostTicket: "t_1", status: "closed", maxParticipants: 8, findings: [], invited: [], seq: 0, template, createdAt, updatedAt: createdAt,
+    participants: ps.map(([preset, joinedAt, costUsd, kind]) => ({
+      handle: `${preset}-${joinedAt}`, role: "r", preset, prompt: "", model: null, mode: "tagged", lead: false, canEdit: false, workspace: "shared",
+      sessionId: null, status: "done", kind: (kind ?? "agent") as any, cursor: 0, joinedAt, costUsd,
+    })),
+  });
+  const u = huddleUsage([
+    { board: "p", title: "Login", huddle: mk("h_1", "2026-10-01T00:00:00Z", "design-review", [["qa", "2026-10-01T00:00:00Z", 0.5], ["qa", "2026-10-01T01:00:00Z", 0.25], ["reviewer", "2026-10-01T00:00:00Z", 1], [null, "2026-10-01T00:00:00Z", 2]]) },
+    { board: "q", title: null, huddle: mk("h_2", "2026-10-05T00:00:00Z", null, [["qa", "2026-10-05T00:00:00Z", 1], [null, "2026-10-05T00:00:00Z", 0, "human"]]) },
+  ]);
+  expect(u.teammates.qa).toMatchObject({ huddles: 2, lastUsed: "2026-10-05T00:00:00Z", costUsd: 1.75 });
+  expect(u.teammates.qa.recent.map((r) => [r.board, r.huddle, r.costUsd])).toEqual([["q", "h_2", 1], ["p", "h_1", 0.75]]);
+  expect(u.teammates.reviewer).toMatchObject({ huddles: 1, costUsd: 1 });
+  expect(u.teammates.researcher).toBeUndefined();
+  expect(u.templates["design-review"]).toMatchObject({ huddles: 1, lastUsed: "2026-10-01T00:00:00Z", costUsd: 3.75 });
+  // Over HTTP, from the files: a closed huddle still counts.
+  const t = await host();
+  store.saveHuddle("p", { ...mk("h_3", "2026-10-06T00:00:00Z", null, [["security", "2026-10-06T00:00:00Z", 0.3]]), hostTicket: t.id });
+  const r = (await (await fetch(`http://127.0.0.1:${server.port}/api/team-usage`)).json()) as { teammates: Record<string, any> };
+  expect(r.teammates.security).toMatchObject({ huddles: 1, costUsd: 0.3, recent: [{ board: "p", huddle: "h_3", title: "Login page" }] });
+});
