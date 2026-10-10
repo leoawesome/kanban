@@ -630,14 +630,15 @@ export function createServer(deps: ServerDeps) {
     }
 
     // /profiles/:p/huddle-presets[/:name] — huddle role presets: built-ins merged with the board's own (any caller, runs included).
-    // A huddle agent's run may only add new presets: it can't change what the user or a built-in defined.
+    // A run (a huddle agent's or a ticket's, the coordinator included) may only add new presets: it can't change or
+    // delete what the user or a built-in defined.
     if (parts[2] === "huddle-presets") {
-      const addOnly = !!req.headers.get(HUDDLE_HEADER);
+      const addOnly = !!(req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER));
       if (parts.length === 3 && m === "GET") return json(huddles.presets(slug));
       if (parts.length === 3 && m === "POST") return json(huddles.savePreset(slug, await body(req), addOnly), 201);
       if (parts.length === 4 && m === "PUT") return json(huddles.savePreset(slug, { ...(await body(req)), name: parts[3] }, addOnly));
       if (parts.length === 4 && m === "DELETE") {
-        if (addOnly) throw new HttpError(403, "a huddle run can't delete or reset presets; ask the user");
+        if (addOnly) throw new HttpError(403, "a board or huddle run can't delete or reset presets; ask the user");
         return json(huddles.deletePreset(slug, parts[3]));
       }
       throw new HttpError(404, "not found");
@@ -1069,6 +1070,12 @@ export function createServer(deps: ServerDeps) {
       const add = b?.addBudgetUsd === undefined || b?.addBudgetUsd === null ? 0 : Number(b.addBudgetUsd);
       const out = action === "stop" ? huddles.stopAll(slug, h.id) : action === "resume" ? huddles.resume(slug, h.id, add) : huddles.close(slug, h.id);
       return json(huddles.view(slug, out));
+    }
+    // The user viewed the huddle up to message `seq` (scrolled to the latest): what tagged them so far counts as seen.
+    if (m === "POST" && action === "seen" && !handle) {
+      userOnly("mark the huddle seen");
+      const b = await body(req);
+      return json(huddles.view(slug, huddles.markSeen(slug, h.id, Number(b?.seq))));
     }
     if (m === "POST" && action === "invite" && !handle) {
       const b = await body(req);

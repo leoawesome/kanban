@@ -222,7 +222,8 @@ export class Huddles {
 
   /**
    * The huddle file changed since the board last saved it (an agent's shell can write it): whatever it raised (lead,
-   * canEdit, the limits, new participants' rights) goes back to what the board had, and a system message says so.
+   * canEdit, the limits) goes back to what the board had, as do the status, any lowered cost or message count, and
+   * participants the board didn't add; a system message says so.
    * The first read after a daemon start is taken as is.
    */
   private guard(slug: string, h: Huddle): Huddle {
@@ -235,11 +236,21 @@ export class Huddles {
     }
     if (stamp === last.stamp) return h;
     const was = last.h;
+    // Only the board adds participants; one the board doesn't know is dropped.
+    h.participants = h.participants.filter((p) => was.participants.some((x) => x.handle === p.handle));
     for (const p of h.participants) {
-      const before = was.participants.find((x) => x.handle === p.handle);
-      if (!before?.lead) p.lead = false;
-      if (!before?.canEdit) p.canEdit = false;
-      if (before) p.kind = before.kind;
+      const before = was.participants.find((x) => x.handle === p.handle)!;
+      if (!before.lead) p.lead = false;
+      if (!before.canEdit) p.canEdit = false;
+      p.kind = before.kind;
+      // Spend only goes up, so a lowered cost can't get under the budget brake.
+      if ((before.costUsd ?? 0) > (p.costUsd ?? 0)) p.costUsd = before.costUsd;
+    }
+    // Paused, stopped or closed only changes through the board (Resume, close), not by editing the file.
+    h.status = was.status;
+    h.stopReason = was.stopReason;
+    for (const k of ["posts", "sinceUser"] as const) {
+      if ((was[k] ?? 0) > (h[k] ?? 0)) h[k] = was[k];
     }
     for (const k of ["maxParticipants", "maxCostUsd", "maxMessages"] as const) {
       const limit = was[k];
@@ -249,7 +260,7 @@ export class Huddles {
     // Not from inside this read: it may be part of an update that saves after it.
     queueMicrotask(() => {
       if (this.store.getHuddle(slug, h.id)) {
-        this.system(slug, h.id, "Huddle file edited outside the board. Any rise in lead, canEdit or the limits made there was ignored; only the board changes them.");
+        this.system(slug, h.id, "Huddle file edited outside the board. Changes there to lead, canEdit, the limits, the status, the costs or the participants were ignored; only the board changes them.");
       }
     });
     return h;
@@ -367,12 +378,12 @@ export class Huddles {
     return new Map(this.presets(slug).map((p) => [p.name, p]));
   }
 
-  /** Add or change a board preset (a built-in's name overrides it). addOnly (a huddle run): only a new name. */
+  /** Add or change a board preset (a built-in's name overrides it). addOnly (any board or huddle run): only a new name. */
   savePreset(slug: string, input: unknown, addOnly = false): HuddlePresetView {
     if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
     const name = presetName(String((input as any)?.name ?? ""));
     if (addOnly && this.presets(slug).some((p) => p.name === name)) {
-      throw new HuddleError(403, `preset "${name}" already exists; a huddle run may only add new presets (pick another name, or ask the user to change it)`);
+      throw new HuddleError(403, `preset "${name}" already exists; a board or huddle run may only add new presets (pick another name, or ask the user to change it)`);
     }
     let r: ReturnType<typeof savePreset>;
     try {
@@ -1160,6 +1171,19 @@ export class Huddles {
     const live = h.status === "live";
     this.system(slug, hid, `@${handle} was restarted by @you${live ? "" : "; it wakes when the huddle resumes"}.`, live ? [handle] : []);
     this.userActed(slug, hid);
+  }
+
+  /** The user viewed the huddle up to message `seq` (the Huddle tab, scrolled to the latest): the "for you" count clears up to there. */
+  markSeen(slug: string, hid: string, seq: number): Huddle {
+    const h = this.get(slug, hid);
+    const me = h.participants.find((p) => p.handle === USER_HANDLE);
+    if (!Number.isFinite(seq)) throw new HuddleError(400, "seq must be a number");
+    const to = Math.min(Math.floor(seq), h.seq);
+    if (!me || me.cursor >= to) return h;
+    return this.update(slug, hid, (x) => {
+      const m = x.participants.find((p) => p.handle === USER_HANDLE)!;
+      m.cursor = Math.max(m.cursor, to);
+    });
   }
 
   /** The user acted on the huddle: what tagged them so far counts as seen (the "for you" count starts over). */

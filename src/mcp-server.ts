@@ -880,7 +880,7 @@ const HUDDLE_TOOLS: Tool[] = [
     description:
       "Create or change a huddle role preset on this board, e.g. when a role you need keeps coming up. Saving a built-in's name (reviewer, qa, qa-lead, engineer, security, main) " +
       "overrides it on this board; delete_huddle_preset resets it. Fields you leave out keep the existing preset's values. " +
-      "From a huddle agent's run you can only add new names, not change built-ins or the board's presets.",
+      "From a board or huddle run you can only add new names, not change built-ins or the board's presets.",
     inputSchema: {
       type: "object",
       properties: {
@@ -907,7 +907,7 @@ const HUDDLE_TOOLS: Tool[] = [
   },
   {
     name: "delete_huddle_preset",
-    description: "Delete one of the board's own huddle presets, or reset a changed built-in to its default. Built-in presets themselves can't be deleted.",
+    description: "Delete one of the board's own huddle presets, or reset a changed built-in to its default. Built-in presets themselves can't be deleted. Not from a board or huddle run (ask the user).",
     inputSchema: { type: "object", properties: { name: { type: "string", description: "Preset name." }, profile: PROFILE }, required: ["name"] },
     changes: true,
     allowInRun: true,

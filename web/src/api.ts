@@ -519,7 +519,7 @@ export interface Huddle {
   /** Live, nobody working, no unanswered tags, no open findings; idleSince: the last message or turn. */
   quiet?: boolean;
   idleSince?: string | null;
-  /** Messages tagging @you since the user last posted or acted (Stop, Resume…); forYouSince: that seq. */
+  /** Messages tagging @you since the user last posted, acted (Stop, Resume…) or viewed the latest message; forYouSince: that seq. */
   forYou?: number;
   forYouSince?: number;
   /** Pinned brief (goal, decisions) at the head of every digest. */
@@ -727,6 +727,8 @@ export const api = {
   /** resume: addBudgetUsd raises the budget (needed once it is spent). */
   huddleAction: (slug: string, id: string, action: "stop" | "resume" | "close", addBudgetUsd?: number) =>
     req<Huddle>("POST", `${hud(slug, id)}/${action}`, addBudgetUsd ? { addBudgetUsd } : undefined),
+  /** The user viewed the huddle up to message seq: the "for you" count clears up to there. */
+  huddleSeen: (slug: string, id: string, seq: number) => req<Huddle>("POST", `${hud(slug, id)}/seen`, { seq }),
   inviteToHuddle: (slug: string, id: string, ticketId: string) => req<HuddleParticipant>("POST", `${hud(slug, id)}/invite`, { ticketId }),
   huddleFindings: (slug: string, id: string, action: "add" | "resolve", arg: { text?: string; id?: string }) =>
     req<HuddleFinding[]>("POST", `${hud(slug, id)}/findings`, { action, ...arg }),

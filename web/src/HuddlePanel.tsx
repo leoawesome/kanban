@@ -139,6 +139,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
   const max = h.maxCostUsd ?? DEFAULT_BUDGET;
   const overBudget = spent >= max;
   const brake = h.status === "stopped" && h.stopReason ? h.stopReason : null;
+  const plainFirst = !!brake && brake !== "budget" && !overBudget;
   const quiet = h.status === "live" && !!h.quiet;
   const forYou = closed ? 0 : h.forYou ?? 0;
   const invitable = tickets.filter((t) => !h.participants.some((p) => p.ticketId === t.id));
@@ -216,10 +217,12 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
             {spenders.length > 0 && <> Spent: {spenders.slice(0, 3).map((p) => `${p.handle} ${money(p.costUsd ?? 0)}`).join(" · ")}{spenders.length > 3 ? " · …" : ""}</>}
           </span>
           <span className="spacer" />
-          <button className="btn small primary" onClick={() => resume(BUDGET_STEP)} title={`Resume and raise the budget to ${money(max + BUDGET_STEP)}`}>
+          {/* Out of budget: adding budget is the way on. Any other brake: plain Resume is. */}
+          {plainFirst && <button className="btn small primary" onClick={() => resume()}>Resume</button>}
+          <button className={`btn small${plainFirst ? "" : " primary"}`} onClick={() => resume(BUDGET_STEP)} title={`Resume and raise the budget to ${money(max + BUDGET_STEP)}`}>
             Resume (+{dollars(BUDGET_STEP)} budget)
           </button>
-          <button className="btn small" onClick={() => resume()} disabled={overBudget} title={overBudget ? "The budget is spent: add budget to resume" : undefined}>Resume</button>
+          {!plainFirst && <button className="btn small" onClick={() => resume()} disabled={overBudget} title={overBudget ? "The budget is spent: add budget to resume" : undefined}>Resume</button>}
           <button className="btn small" onClick={() => setConfirm("close")}>Close</button>
         </div>
       )}
@@ -239,7 +242,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
       {adding && !closed && <AddAgent slug={slug} huddle={h} onDone={() => setAdding(false)} onError={onError} />}
       <div className="huddle-body">
         <div className="huddle-feed">
-          <Feed huddle={h} state={state} handles={handles} scroller={log} />
+          <Feed huddle={h} state={state} handles={handles} scroller={log} onSeen={(seq) => run(api.huddleSeen(slug, h.id, seq))} />
           <Composer slug={slug} ticket={ticket} huddle={h} onError={onError} />
         </div>
         <aside className="huddle-side">
@@ -265,12 +268,28 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
 }
 
 /** The message feed: system lines, messages with @mention chips, finding highlights. Sticks to the bottom while you're there. */
-function Feed({ huddle: h, state, handles, scroller }: { huddle: Huddle; state: HuddleState; handles: string[]; scroller: RefObject<HTMLDivElement> }) {
+function Feed({ huddle: h, state, handles, scroller, onSeen }: {
+  huddle: Huddle; state: HuddleState; handles: string[]; scroller: RefObject<HTMLDivElement>; onSeen: (seq: number) => void;
+}) {
   const stick = useRef(true);
   const keep = useRef<number | null>(null);
+  const sent = useRef(0);
   const [loading, setLoading] = useState(false);
   const byHandle = new Map(h.participants.map((p) => [p.handle, p]));
   const last = state.messages.at(-1)?.seq;
+
+  // Viewing the latest message (at the bottom, in a visible window) counts as seeing what tagged you: "for you" clears.
+  const seen = () => {
+    if (h.status === "closed" || !(h.forYou ?? 0) || !last || last <= (h.forYouSince ?? 0) || last <= sent.current) return;
+    if (!stick.current || document.visibilityState !== "visible") return;
+    sent.current = last;
+    onSeen(last);
+  };
+  useEffect(seen);
+  useEffect(() => {
+    document.addEventListener("visibilitychange", seen);
+    return () => document.removeEventListener("visibilitychange", seen);
+  });
 
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -297,6 +316,7 @@ function Feed({ huddle: h, state, handles, scroller }: { huddle: Huddle; state: 
       onScroll={(e) => {
         const el = e.currentTarget;
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+        seen();
       }}>
       {state.hasMore && <button className="btn ghost small load-earlier" onClick={earlier} disabled={loading}>{loading ? "Loading…" : "Load earlier"}</button>}
       {!state.messages.length && <div className="hd-sys">No messages yet.</div>}
@@ -307,7 +327,7 @@ function Feed({ huddle: h, state, handles, scroller }: { huddle: Huddle; state: 
   );
 }
 
-/** forYou: it tags the user since their last post or action (highlighted, and a stop for "next for you"). */
+/** forYou: it tags the user since their last post, action or view of the latest message (highlighted, and a stop for "next for you"). */
 function Message({ m, p, handles, forYou }: { m: HuddleMessage; p: HuddleParticipant | undefined; handles: string[]; forYou: boolean }) {
   if (m.kind === "system") {
     return <div className={`hd-sys${forYou ? " for-you" : ""}`} title={fullTime(m.ts)}><MentionText text={m.text} handles={handles} /></div>;

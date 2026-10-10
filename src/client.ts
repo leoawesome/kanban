@@ -297,7 +297,7 @@ export class BoardClient {
   private hp = (slug: string, name?: string) =>
     `/api/profiles/${encodeURIComponent(slug)}/huddle-presets${name ? `/${encodeURIComponent(name)}` : ""}`;
   listHuddlePresets = (slug: string) => this.req<HuddlePresetView[]>("GET", this.hp(slug));
-  /** c: the calling run (a huddle agent may only add new presets). */
+  /** c: the calling run (a run may only add new presets). */
   saveHuddlePreset = (slug: string, preset: Record<string, unknown>, c: HuddleCaller = {}) => this.req<HuddlePresetView>("POST", this.hp(slug), preset, this.as(c));
   deleteHuddlePreset = (slug: string, name: string, c: HuddleCaller = {}) =>
     this.req<{ reset: boolean; presets: HuddlePresetView[] }>("DELETE", this.hp(slug, name), undefined, this.as(c));

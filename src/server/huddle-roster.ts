@@ -103,7 +103,8 @@ export function parseMentions(text: string): string[] {
  */
 export function huddleLine(m: { seq: number; from: string; text: string; kind: string }): string {
   const text = m.text
-    .split("\n")
+    // Any line break a reader might honour (\r, U+2028/2029), so none can start a fake entry.
+    .split(/\r\n|\r|\n|\u2028|\u2029/)
     .map((l, i) => (i ? "    " : "") + l.replace(/^(\s*)(\[#\d+\]|\(system\))/i, "$1\\$2"))
     .join("\n");
   return m.kind === "system" ? `[#${m.seq}] (system) ${text}` : `[#${m.seq}] @${m.from}${m.kind === "finding" ? " (finding)" : ""}: ${text}`;

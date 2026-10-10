@@ -103,6 +103,16 @@ function userMessage(text: string): string {
   return JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n";
 }
 
+/** A run's identity vars: each run gets its own from opts.env, never the ones of a run the daemon was started from. */
+export const RUN_IDENTITY_ENV = ["CKANBAN_TICKET", "CKANBAN_HUDDLE_AGENT", "CKANBAN_OUTPUT_DIR"] as const;
+
+/** The daemon's environment minus run identity vars, so a child can't act as a run it doesn't belong to. */
+export function inheritedEnv(env: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
+  const out = { ...env };
+  for (const k of RUN_IDENTITY_ENV) delete out[k];
+  return out;
+}
+
 export function startRun(opts: {
   bin: string;
   cwd: string;
@@ -198,7 +208,7 @@ export function startRun(opts: {
   const done = (async (): Promise<RunOutput> => {
     try {
       proc = Bun.spawn([opts.bin, ...opts.args], {
-        cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdout: "pipe", stderr: "pipe", stdin: opts.input === undefined ? "ignore" : "pipe",
+        cwd: opts.cwd, env: { ...inheritedEnv(), ...opts.env }, stdout: "pipe", stderr: "pipe", stdin: opts.input === undefined ? "ignore" : "pipe",
         // Own process group so stop() can take down tools claude spawned (shells, dev servers).
         detached: true,
       });

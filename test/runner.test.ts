@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { mcpConfig } from "../src/server/agents";
-import { buildArgs, controlResponse, startRun } from "../src/server/runner";
+import { buildArgs, controlResponse, inheritedEnv, startRun } from "../src/server/runner";
 import { tempDir } from "./helpers";
 
 const FAKE = join(import.meta.dir, "fixtures", "fake-claude.ts");
@@ -245,4 +245,9 @@ test("controlResponse allows the board tools only for Planning runs; Chrome and 
     // Deleting, file edits and shell commands stay blocked in plan mode.
     for (const t of ["mcp__ckanban__delete_ticket", "mcp__ckanban__run_schedule", "Edit", "Write", "Bash"]) expect(ask(t, planning)).toBe("deny");
   }
+});
+
+test("a run doesn't inherit the daemon's run identity vars (a daemon started from a run)", () => {
+  const env = inheritedEnv({ PATH: "/bin", CKANBAN_TICKET: "p/t_1", CKANBAN_HUDDLE_AGENT: "h/x/tok", CKANBAN_OUTPUT_DIR: "/o", CKANBAN_PORT: "1" });
+  expect(env).toEqual({ PATH: "/bin", CKANBAN_PORT: "1" });
 });

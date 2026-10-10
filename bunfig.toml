@@ -1,0 +1,3 @@
+[test]
+# Clears a parent board/huddle run's identity so `bun test test` behaves the same inside runs.
+preload = ["./test/preload.ts"]
