@@ -10,6 +10,7 @@ import { Card } from "./Card";
 import { groupByColumn } from "./columns";
 import { cardHuddleBadge } from "./huddleText";
 import { CollapseIcon, PlusIcon, SparkIcon } from "./icons";
+import { useNow } from "./time";
 
 const COLLAPSED_KEY = "ckanban.collapsedColumns";
 
@@ -45,6 +46,8 @@ function SortableCard({ ticket, onOpen, queued, held, ctx }: { ticket: Ticket; o
     id: ticket.id,
     data: { status: ticket.status },
   });
+  // The quiet badge's "idle 12m" ticks.
+  const now = useNow();
   return (
     <div
       ref={setNodeRef}
@@ -64,7 +67,7 @@ function SortableCard({ ticket, onOpen, queued, held, ctx }: { ticket: Ticket; o
       }}
     >
       <Card ticket={ticket} onClick={() => onOpen(ticket.id)} queued={queued} held={held}
-        huddle={cardHuddleBadge(ctx.huddles, ticket.id)} onOpenHuddle={ctx.onOpenHuddle} />
+        huddle={cardHuddleBadge(ctx.huddles, ticket.id, now)} onOpenHuddle={ctx.onOpenHuddle} />
     </div>
   );
 }

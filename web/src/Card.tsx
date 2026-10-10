@@ -47,6 +47,8 @@ function HuddleBadge({ badge, onOpen }: { badge: CardHuddleBadge; onOpen?: (tick
       onKeyDown={(e) => e.stopPropagation()}>
       {badge.state === "live" && <span className="live-dot" />}
       <span aria-hidden>🗣</span> {badge.label}
+      {badge.failed > 0 && <span className="hb-failed">· {badge.failed} failed</span>}
+      {badge.forYou > 0 && <span className="for-you-pill">{badge.forYou} for you</span>}
     </button>
   );
 }

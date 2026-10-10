@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Huddle, type Profile, type QuickChat } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { FilesView } from "./FilesView";
-import { guestTickets, huddleCost, members, sortHuddles } from "./huddle";
+import { brakeLabel, guestTickets, huddleCost, members, quietLabel, sortHuddles } from "./huddle";
 import { CloseIcon, RefreshIcon } from "./icons";
 import { TerminalView } from "./TerminalView";
 import { fullTime, timeAgo, useNow } from "./time";
@@ -207,7 +207,7 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
 
 /** The Huddles tab: live and recent huddles on this board; a row opens its host ticket's Huddle tab. */
 function HuddleList({ huddles, onOpen }: { huddles: Huddle[]; onOpen?: (ticketId: string) => void }) {
-  useNow();
+  const now = useNow();
   const list = sortHuddles(huddles);
   if (!list.length) {
     return <div className="dock-huddles"><div className="empty">No huddles on this board yet. Start one from a ticket's Huddle tab.</div></div>;
@@ -217,11 +217,21 @@ function HuddleList({ huddles, onOpen }: { huddles: Huddle[]; onOpen?: (ticketId
       {list.map((h) => {
         const agents = members(h).length;
         const tickets = 1 + guestTickets(h).length;
+        const brake = brakeLabel(h);
+        const quiet = quietLabel(h, now);
+        const failed = members(h).filter((p) => p.status === "failed").length;
+        const forYou = h.status === "closed" ? 0 : h.forYou ?? 0;
         return (
-          <button key={h.id} role="listitem" className={`huddle-row ${h.status}`} onClick={() => onOpen?.(h.hostTicket)}
+          <button key={h.id} role="listitem" className={`huddle-row ${h.status}${brake ? " brake" : quiet ? " quiet" : ""}`} onClick={() => onOpen?.(h.hostTicket)}
             title={`Open the huddle of ${h.hostTitle ?? h.hostTicket}`}>
-            <span className="hr-dot" aria-label={h.status} />
+            <span className="hr-dot" aria-label={brake ?? (quiet ? "quiet" : h.status)} />
             <span className="hr-title">{h.hostTitle ?? h.hostTicket}</span>
+            <span className="hr-flags">
+              {brake && <span className="hr-brake">Huddle · {brake}</span>}
+              {quiet && <span className="hr-quiet">all quiet · {quiet}</span>}
+              {failed > 0 && <span className="hb-failed">{failed} failed</span>}
+              {forYou > 0 && <span className="for-you-pill">{forYou} for you</span>}
+            </span>
             <span className="hr-meta">
               {agents} {agents === 1 ? "agent" : "agents"} · {h.status === "closed" ? "closed" : `${tickets} ${tickets === 1 ? "ticket" : "tickets"}`}
             </span>

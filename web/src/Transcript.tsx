@@ -89,7 +89,7 @@ function handleChips(doc: Document, handles: string[]) {
       const at = m.index! + m[1].length;
       frag.append(text.slice(last, at));
       const chip = doc.createElement("span");
-      chip.className = "at-chip";
+      chip.className = name.toLowerCase() === "you" ? "at-chip me" : "at-chip";
       chip.textContent = `@${name}`;
       frag.append(chip);
       last = at + 1 + name.length;

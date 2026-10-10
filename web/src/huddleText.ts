@@ -10,6 +10,7 @@ interface ParticipantLike {
   statusReason?: string | null;
   lastActivity?: string | null;
   error?: string | null;
+  costUsd?: number;
 }
 interface EntryLike { preset?: string; role?: string; count?: number; handle?: string }
 
@@ -51,6 +52,33 @@ export function mentionCandidates(h: { participants: ParticipantLike[] }): { han
     { handle: "all", label: "everyone" },
     ...ps.filter((p) => p.handle !== "main").map((p) => ({ handle: p.handle, label: `${p.role} · ${participantActivity(p)}` })),
   ];
+}
+
+/** A message that needs the user: it tags @you (brake and close-request lines too) after `since` (see the daemon's isForYou). */
+export const isForYou = (m: { seq: number; from: string; mentions: string[] }, since: number) =>
+  m.seq > since && m.from !== "you" && m.mentions.includes("you");
+
+/** Handles a draft tags (known handles and @all), in order, without duplicates. */
+export function draftTags(text: string, handles: string[]): string[] {
+  const known = new Set([...handles, "all"]);
+  const out: string[] = [];
+  for (const m of text.matchAll(/(^|[^\w@./-])@([a-z0-9][a-z0-9_-]*)/gi)) {
+    const h = m[2].toLowerCase();
+    if (known.has(h) && !out.includes(h)) out.push(h);
+  }
+  return out;
+}
+
+/** Who an untagged post wakes: monitors that are not stopped, blocked or done (the daemon's wakes()). */
+export const untaggedWakes = (h: { participants: ParticipantLike[] }) =>
+  h.participants.filter((p) => p.kind !== "human" && p.mode === "monitor" && !["stopped", "blocked", "done"].includes(p.status)).map((p) => p.handle);
+
+/** The composer's warning for a post without a tag, or null when it tags someone (or is empty). */
+export function untaggedHint(text: string, h: { participants: ParticipantLike[] }): string | null {
+  if (!text.trim() || draftTags(text, h.participants.map((p) => p.handle)).length) return null;
+  const mon = untaggedWakes(h);
+  if (!mon.length) return "No @tag: nobody wakes for this. Tag @main, @all or a handle.";
+  return `No @tag: only ${mon.map((x) => `@${x}`).join(", ")} (monitor) will see this. Nobody else wakes.`;
 }
 
 /** The `@partial` being typed right before the caret, or null. */
@@ -103,6 +131,38 @@ interface BoardHuddleLike extends HuddleLike {
   updatedAt: string;
   invited?: string[];
   participants: (ParticipantLike & { ticketId?: string | null })[];
+  stopReason?: "budget" | "messages" | "loop" | null;
+  maxCostUsd?: number;
+  quiet?: boolean;
+  idleSince?: string | null;
+  forYou?: number;
+  findings?: { status: string }[];
+}
+
+/** $20, $12.50. */
+export const dollars = (n: number) => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
+
+/** How long since `iso`, short: "<1m", "12m", "3h", "2d". */
+export function idleFor(iso: string, now = Date.now()): string {
+  const m = Math.floor((now - new Date(iso).getTime()) / 60000);
+  if (m < 1) return "<1m";
+  if (m < 60) return `${m}m`;
+  if (m < 60 * 24) return `${Math.floor(m / 60)}h`;
+  return `${Math.floor(m / 1440)}d`;
+}
+
+/** Why a huddle stopped by itself, short: "paused: $20 budget". Null for a running huddle or a plain Stop. */
+export function brakeLabel(h: { status: string; stopReason?: BoardHuddleLike["stopReason"]; maxCostUsd?: number }): string | null {
+  if (h.status !== "stopped" || !h.stopReason) return null;
+  if (h.stopReason === "budget") return `paused: ${dollars(h.maxCostUsd ?? DEFAULT_BUDGET)} budget`;
+  return h.stopReason === "messages" ? "paused: message limit" : "paused: waiting for you";
+}
+
+/** The quiet state, short: "idle 12m · 0 open". Null unless the huddle is quiet. */
+export function quietLabel(h: BoardHuddleLike, now = Date.now()): string | null {
+  if (h.status !== "live" || !h.quiet) return null;
+  const open = (h.findings ?? []).filter((f) => f.status === "open").length;
+  return `idle ${idleFor(h.idleSince ?? h.updatedAt, now)} · ${open} open`;
 }
 
 /** Tickets other than the host that take part (invited ticket sessions). */
@@ -122,29 +182,42 @@ export interface CardHuddleBadge {
   openTicket: string;
   label: string;
   title: string;
-  state: "live" | "stopped" | "closed" | "guest";
+  /** brake: stopped by a brake (err tone); quiet: live with nothing left to do (ok tone). */
+  state: "live" | "stopped" | "brake" | "quiet" | "closed" | "guest";
+  /** Messages waiting for the user (the accent "N for you" pill). */
+  forYou: number;
+  /** Agents whose run failed (err tone). */
+  failed: number;
 }
 
 /**
  * What a card says about huddles: its own open huddle (`Huddle · 8 · 3 working`), else an open one it was
  * invited to (`in huddle of k2pm`), else its newest closed one (`Huddle · closed · 31 msgs`).
  */
-export function cardHuddleBadge(list: BoardHuddleLike[], ticketId: string): CardHuddleBadge | null {
+export function cardHuddleBadge(list: BoardHuddleLike[], ticketId: string, now = Date.now()): CardHuddleBadge | null {
   const open = list.find((h) => h.hostTicket === ticketId && h.status !== "closed");
   if (open) {
     const agents = open.participants.filter((p) => p.kind !== "human");
     const working = agents.filter((p) => p.status === "working").length;
+    const failed = agents.filter((p) => p.status === "failed").length;
+    const forYou = open.forYou ?? 0;
     const live = open.status === "live";
+    const brake = brakeLabel(open);
+    const quiet = quietLabel(open, now);
+    const you = forYou ? ` ${forYou} ${forYou === 1 ? "message needs" : "messages need"} you.` : "";
+    const base = { huddleId: open.id, openTicket: ticketId, forYou, failed };
+    if (brake) return { ...base, state: "brake", label: `Huddle · ${brake}`, title: `This ticket's huddle is ${brake}.${you} Click to open it.` };
+    if (quiet) return { ...base, state: "quiet", label: `Huddle · ${agents.length} · ${quiet}`, title: `This ticket's huddle is quiet: nobody working, nothing open. Check the result, then close it.${you}` };
     return {
-      huddleId: open.id, openTicket: ticketId, state: live ? "live" : "stopped",
+      ...base, state: live ? "live" : "stopped",
       label: `Huddle · ${agents.length} · ${live ? `${working} working` : "stopped"}`,
-      title: `${agents.length} in this ticket's huddle${live ? `, ${working} working` : ", stopped"}. Click to open it.`,
+      title: `${agents.length} in this ticket's huddle${live ? `, ${working} working` : ", stopped"}${failed ? `, ${failed} failed` : ""}.${you} Click to open it.`,
     };
   }
   const guest = list.find((h) => h.status !== "closed" && h.hostTicket !== ticketId && guestTickets(h).includes(ticketId));
   if (guest) {
     return {
-      huddleId: guest.id, openTicket: guest.hostTicket, state: "guest",
+      huddleId: guest.id, openTicket: guest.hostTicket, state: "guest", forYou: 0, failed: 0,
       label: `in huddle of ${shortTicketId(guest.hostTicket)}`,
       title: `Invited to the huddle of ${guest.hostTitle ? `"${guest.hostTitle}"` : guest.hostTicket}. Click to open it.`,
     };
@@ -152,7 +225,7 @@ export function cardHuddleBadge(list: BoardHuddleLike[], ticketId: string): Card
   const closed = pickHuddle(list, ticketId);
   if (closed) {
     return {
-      huddleId: closed.id, openTicket: ticketId, state: "closed",
+      huddleId: closed.id, openTicket: ticketId, state: "closed", forYou: 0, failed: 0,
       label: `Huddle · closed · ${closed.seq} ${closed.seq === 1 ? "msg" : "msgs"}`,
       title: "This ticket's huddle is closed. Click to read it.",
     };

@@ -496,6 +496,9 @@ export interface Huddle {
   /** Live, nobody working, no unanswered tags, no open findings; idleSince: the last message or turn. */
   quiet?: boolean;
   idleSince?: string | null;
+  /** Messages tagging @you since the user last posted or acted (Stop, Resume…); forYouSince: that seq. */
+  forYou?: number;
+  forYouSince?: number;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
@@ -679,6 +682,9 @@ export const api = {
     req<Huddle>("PATCH", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}`, { mode }),
   stopHuddleParticipant: (slug: string, id: string, handle: string) =>
     req<Huddle>("POST", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}/stop`),
+  /** A failed or stopped participant is idle again (and wakes now on a live huddle). */
+  restartHuddleParticipant: (slug: string, id: string, handle: string) =>
+    req<Huddle>("POST", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}/restart`),
   /** resume: addBudgetUsd raises the budget (needed once it is spent). */
   huddleAction: (slug: string, id: string, action: "stop" | "resume" | "close", addBudgetUsd?: number) =>
     req<Huddle>("POST", `${hud(slug, id)}/${action}`, addBudgetUsd ? { addBudgetUsd } : undefined),

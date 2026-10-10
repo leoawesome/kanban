@@ -1018,6 +1018,11 @@ export function createServer(deps: ServerDeps) {
         huddles.stopParticipant(slug, h.id, handle);
         return json(huddles.view(slug, huddles.get(slug, h.id)));
       }
+      if (m === "POST" && handle && sub === "restart") {
+        userOnly("restart a participant");
+        huddles.restartParticipant(slug, h.id, handle);
+        return json(huddles.view(slug, huddles.get(slug, h.id)));
+      }
     }
     if (m === "POST" && !handle && (action === "stop" || action === "resume" || action === "close")) {
       userOnly(`${action} the huddle`);

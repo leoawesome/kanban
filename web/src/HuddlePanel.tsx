@@ -1,15 +1,17 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { api, type Huddle, type HuddleMessage, type HuddleMode, type HuddleParticipant, type Ticket } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { draftKey } from "./drafts";
 import {
-  handleColor, handleInitials, huddleCost, members, mentionCandidates, mentionQuery, participantActivity, type HuddleState,
+  dollars, handleColor, handleInitials, huddleCost, idleFor, isForYou, members, mentionCandidates, mentionQuery, participantActivity, untaggedHint,
+  type HuddleState,
 } from "./huddle";
 import { DEFAULT_MAX, draftError, RosterEditor, rosterDraft, startFromDraft, usePresets, type RosterDraft } from "./HuddleRoster";
+import { DEFAULT_BUDGET } from "./huddleText";
 import { CloseIcon } from "./icons";
 import { KeyHint } from "./KeyHint";
 import { Select } from "./Select";
-import { fullTime } from "./time";
+import { fullTime, useNow } from "./time";
 import { Markdown } from "./Transcript";
 import { usePersistentState } from "./usePersistentState";
 
@@ -20,10 +22,11 @@ const clock = (iso: string) => {
 };
 const money = (n: number) => `$${n.toFixed(2)}`;
 const STATE_LABEL = { live: "● Live", stopped: "■ Stopped", closed: "Closed" } as const;
-const STOP_REASON = {
-  budget: "budget spent",
-  messages: "message limit reached",
-  loop: "paused: many messages without you",
+/** The brake banner's headline. */
+const BRAKE_TEXT = {
+  budget: (max: number) => `Huddle paused: ${dollars(max)} budget reached.`,
+  messages: () => "Huddle paused: message limit reached.",
+  loop: () => "Huddle paused: many messages went by without you.",
 } as const;
 const STOP_AGENTS_TIP = "Stops huddle agents only. The ticket's own run keeps going.";
 /** What Resume adds when the budget is spent. */
@@ -125,27 +128,52 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
 }) {
   const [confirm, setConfirm] = useState<"stop" | "close" | null>(null);
   const [adding, setAdding] = useState(false);
+  const log = useRef<HTMLDivElement>(null);
+  const now = useNow();
   const closed = h.status === "closed";
   const run = (p: Promise<unknown>) => p.catch((e) => onError((e as Error).message));
   const count = members(h).length;
-  const overBudget = h.maxCostUsd !== undefined && huddleCost(h) >= h.maxCostUsd;
+  const spent = huddleCost(h);
+  const max = h.maxCostUsd ?? DEFAULT_BUDGET;
+  const overBudget = spent >= max;
+  const brake = h.status === "stopped" && h.stopReason ? h.stopReason : null;
+  const quiet = h.status === "live" && !!h.quiet;
+  const forYou = closed ? 0 : h.forYou ?? 0;
   const invitable = tickets.filter((t) => !h.participants.some((p) => p.ticketId === t.id));
   const handles = h.participants.map((p) => p.handle).concat("all");
+  const resume = (add?: number) => run(api.huddleAction(slug, h.id, "resume", add));
+  const spenders = members(h).filter((p) => (p.costUsd ?? 0) > 0).sort((a, b) => (b.costUsd ?? 0) - (a.costUsd ?? 0));
+
+  // ↓ next for you: the next highlighted message below the top of the feed, else the first one.
+  const jump = () => {
+    const el = log.current;
+    if (!el) return;
+    const top = el.getBoundingClientRect().top + 8;
+    const all = [...el.querySelectorAll<HTMLElement>(".for-you")];
+    const next = all.find((m) => m.getBoundingClientRect().top > top) ?? all[0];
+    next?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
 
   return (
     <div className="huddle">
       <div className="huddle-bar">
-        <span className={`huddle-state ${h.status}`}>{STATE_LABEL[h.status]}{h.status === "stopped" && h.stopReason ? ` · ${STOP_REASON[h.stopReason]}` : ""}</span>
-        {h.quiet && (
-          <span className="huddle-quiet" title="Nobody is working, no tag is unanswered and no finding is open: the huddle may be done.">
-            quiet{h.idleSince ? ` since ${clock(h.idleSince)}` : ""}
+        {brake ? (
+          <span className="huddle-state brake">■ Paused</span>
+        ) : quiet ? (
+          <span className="huddle-state quiet" title="Nobody is working, no tag is unanswered and no finding is open: the huddle may be done.">
+            ● All quiet{h.idleSince ? ` · idle ${idleFor(h.idleSince, now)}` : ""}
           </span>
+        ) : (
+          <span className={`huddle-state ${h.status}`}>{STATE_LABEL[h.status]}</span>
         )}
         <span title={fullTime(h.createdAt)}>started {clock(h.createdAt)}</span>
         <span>· {h.seq} message{h.seq === 1 ? "" : "s"}</span>
-        <span title="What the huddle spent so far: its agents' runs and @main's huddle replies. It stops at the budget.">
-          · {money(huddleCost(h))}{h.maxCostUsd ? ` of ${money(h.maxCostUsd)}` : ""}
+        <span className="hd-budget" title="What the huddle spent so far: its agents' runs and @main's huddle replies. It stops at the budget.">
+          ·
+          <span className={`hd-meter${overBudget ? " over" : ""}`} aria-hidden><i style={{ width: `${Math.min(100, (spent / max) * 100)}%` }} /></span>
+          <span className={overBudget ? "hd-over" : undefined}>{money(spent)} / {dollars(max)}</span>
         </span>
+        {forYou > 0 && <button className="link-btn hd-jump" onClick={jump} title={`${forYou} ${forYou === 1 ? "message tags" : "messages tag"} you`}>↓ next for you</button>}
         <span className="spacer" />
         {closed ? (
           <>
@@ -162,21 +190,45 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
                 onChange={(id) => run(api.inviteToHuddle(slug, h.id, id))} />
             )}
             {h.status === "stopped" ? (
-              <>
-                {!overBudget && <button className="btn small" onClick={() => run(api.huddleAction(slug, h.id, "resume"))}>▶ Resume</button>}
-                {h.maxCostUsd !== undefined && (
-                  <button className="btn small" title={`Resume and raise the budget to ${money(h.maxCostUsd + BUDGET_STEP)}`}
-                    onClick={() => run(api.huddleAction(slug, h.id, "resume", BUDGET_STEP))}>▶ Resume +{money(BUDGET_STEP)}</button>
-                )}
-              </>
+              // A brake's Resume buttons are in its banner.
+              !brake && (
+                <>
+                  {!overBudget && <button className="btn small" onClick={() => resume()}>▶ Resume</button>}
+                  <button className="btn small" title={`Resume and raise the budget to ${money(max + BUDGET_STEP)}`}
+                    onClick={() => resume(BUDGET_STEP)}>▶ Resume +{money(BUDGET_STEP)}</button>
+                </>
+              )
             ) : (
               <button className="btn small hd-danger" onClick={() => setConfirm("stop")} title={STOP_AGENTS_TIP}>■ Stop agents</button>
             )}
-            <button className={`btn small${h.closeRequest ? " primary" : ""}`} onClick={() => setConfirm("close")}
+            <button className={`btn small${h.closeRequest || quiet ? " primary" : ""}`} onClick={() => setConfirm("close")}
               title={h.closeRequest ? `@${h.closeRequest.by} asks to close: ${h.closeRequest.reason}` : undefined}>Close huddle</button>
           </>
         )}
       </div>
+      {brake && (
+        <div className="hd-banner brake" role="alert">
+          <span aria-hidden>⛔</span>
+          <span>
+            <b>{BRAKE_TEXT[brake](max)}</b> No agent will wake until you act.
+            {spenders.length > 0 && <> Spent: {spenders.slice(0, 3).map((p) => `${p.handle} ${money(p.costUsd ?? 0)}`).join(" · ")}{spenders.length > 3 ? " · …" : ""}</>}
+          </span>
+          <span className="spacer" />
+          <button className="btn small primary" onClick={() => resume(BUDGET_STEP)} title={`Resume and raise the budget to ${money(max + BUDGET_STEP)}`}>
+            Resume (+{dollars(BUDGET_STEP)} budget)
+          </button>
+          <button className="btn small" onClick={() => resume()} disabled={overBudget} title={overBudget ? "The budget is spent: add budget to resume" : undefined}>Resume</button>
+          <button className="btn small" onClick={() => setConfirm("close")}>Close</button>
+        </div>
+      )}
+      {quiet && !h.closeRequest && (
+        <div className="hd-banner quiet">
+          <span aria-hidden>✓</span>
+          <span><b>All quiet:</b> nobody working, no open tags, 0 open findings. Check the result, then close.</span>
+          <span className="spacer" />
+          <button className="btn small primary" onClick={() => setConfirm("close")}>Close huddle</button>
+        </div>
+      )}
       {h.closeRequest && !closed && (
         <div className="huddle-close-ask">
           <b>@{h.closeRequest.by}</b> asks to close the huddle: {h.closeRequest.reason}. The summary is in the ticket's outputs (huddle-summary.md).
@@ -185,7 +237,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
       {adding && !closed && <AddAgent slug={slug} huddle={h} onDone={() => setAdding(false)} onError={onError} />}
       <div className="huddle-body">
         <div className="huddle-feed">
-          <Feed huddle={h} state={state} handles={handles} />
+          <Feed huddle={h} state={state} handles={handles} scroller={log} />
           <Composer slug={slug} ticket={ticket} huddle={h} onError={onError} />
         </div>
         <aside className="huddle-side">
@@ -210,8 +262,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
 }
 
 /** The message feed: system lines, messages with @mention chips, finding highlights. Sticks to the bottom while you're there. */
-function Feed({ huddle: h, state, handles }: { huddle: Huddle; state: HuddleState; handles: string[] }) {
-  const scroller = useRef<HTMLDivElement>(null);
+function Feed({ huddle: h, state, handles, scroller }: { huddle: Huddle; state: HuddleState; handles: string[]; scroller: RefObject<HTMLDivElement> }) {
   const stick = useRef(true);
   const keep = useRef<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -246,16 +297,21 @@ function Feed({ huddle: h, state, handles }: { huddle: Huddle; state: HuddleStat
       }}>
       {state.hasMore && <button className="btn ghost small load-earlier" onClick={earlier} disabled={loading}>{loading ? "Loading…" : "Load earlier"}</button>}
       {!state.messages.length && <div className="hd-sys">No messages yet.</div>}
-      {state.messages.map((m) => <Message key={m.seq} m={m} p={byHandle.get(m.from)} handles={handles} />)}
+      {state.messages.map((m) => (
+        <Message key={m.seq} m={m} p={byHandle.get(m.from)} handles={handles} forYou={h.status !== "closed" && isForYou(m, h.forYouSince ?? 0)} />
+      ))}
     </div>
   );
 }
 
-function Message({ m, p, handles }: { m: HuddleMessage; p: HuddleParticipant | undefined; handles: string[] }) {
-  if (m.kind === "system") return <div className="hd-sys" title={fullTime(m.ts)}><MentionText text={m.text} handles={handles} /></div>;
+/** forYou: it tags the user since their last post or action (highlighted, and a stop for "next for you"). */
+function Message({ m, p, handles, forYou }: { m: HuddleMessage; p: HuddleParticipant | undefined; handles: string[]; forYou: boolean }) {
+  if (m.kind === "system") {
+    return <div className={`hd-sys${forYou ? " for-you" : ""}`} title={fullTime(m.ts)}><MentionText text={m.text} handles={handles} /></div>;
+  }
   const mine = m.from === "you";
   return (
-    <div className={`hd-msg${mine ? " mine" : ""}`}>
+    <div className={`hd-msg${mine ? " mine" : ""}${forYou ? " for-you" : ""}`}>
       <Avatar handle={m.from} />
       <div className="hd-msg-body">
         <div className="hd-msg-head">
@@ -263,6 +319,7 @@ function Message({ m, p, handles }: { m: HuddleMessage; p: HuddleParticipant | u
           {p && p.kind !== "human" && <span className="muted">{p.role}</span>}
           <time className="muted" dateTime={m.ts} title={fullTime(m.ts)}>· {clock(m.ts)}</time>
           {p?.mode === "monitor" && p.kind !== "human" && <span className="hd-mode monitor">monitor</span>}
+          {forYou && <span className="hd-for-you">· for you</span>}
         </div>
         {m.kind === "finding" ? (
           <div className="hd-finding"><span className="hd-finding-tag">⚠ Finding</span><Markdown text={m.text} handles={handles} /></div>
@@ -278,7 +335,10 @@ function Message({ m, p, handles }: { m: HuddleMessage; p: HuddleParticipant | u
 function MentionText({ text, handles }: { text: string; handles: string[] }) {
   const known = new Set(handles);
   const parts = text.split(/(@[a-z0-9][a-z0-9_-]*)/gi);
-  return <>{parts.map((s, i) => (i % 2 && known.has(s.slice(1).toLowerCase()) ? <span key={i} className="at-chip">{s}</span> : <Fragment key={i}>{s}</Fragment>))}</>;
+  return <>{parts.map((s, i) => {
+    const h = s.slice(1).toLowerCase();
+    return i % 2 && known.has(h) ? <span key={i} className={`at-chip${h === "you" ? " me" : ""}`}>{s}</span> : <Fragment key={i}>{s}</Fragment>;
+  })}</>;
 }
 
 /** The user's message box, with @ autocomplete (@main, @all, handles). */
@@ -293,6 +353,7 @@ function Composer({ slug, ticket, huddle: h, onError }: { slug: string; ticket: 
   const q = mentionQuery(draft, caret);
   const options = q ? mentionCandidates(h).filter((c) => c.handle.startsWith(q.query)) : [];
   const open = !!q && options.length > 0 && !closedPopup;
+  const hint = h.status === "live" ? untaggedHint(draft, h) : null;
   useEffect(() => setActive(0), [q?.query, q?.start]);
 
   const pick = (handle: string) => {
@@ -363,10 +424,14 @@ function Composer({ slug, ticket, huddle: h, onError }: { slug: string; ticket: 
         onBlur={() => setClosedPopup(true)} onFocus={() => setClosedPopup(false)}
         onKeyDown={onKeyDown} aria-label="Message the huddle" />
       <div className="composer-foot">
-        <span className="muted small composer-hint">
-          You post as <b>@you</b>. Tagged participants wake; monitors read everything.
-          <span className="composer-keys"> Enter to send · Shift+Enter for a new line</span>
-        </span>
+        {hint ? (
+          <span className="small composer-hint hd-untagged" role="status">{hint}</span>
+        ) : (
+          <span className="muted small composer-hint">
+            You post as <b>@you</b>. Tagged participants wake; monitors read everything.
+            <span className="composer-keys"> Enter to send · Shift+Enter for a new line</span>
+          </span>
+        )}
         <span className="composer-actions">
           <button className="btn primary small" disabled={!draft.trim() || sending} onClick={send}>{sending ? "Sending…" : "Send"}<KeyHint keys="↵" /></button>
         </span>
@@ -375,17 +440,24 @@ function Composer({ slug, ticket, huddle: h, onError }: { slug: string; ticket: 
   );
 }
 
-/** Participants: mode (click to switch), status and what each is doing; the cap counter. */
+const MODE_OPTIONS = [
+  { value: "tagged" as const, label: "tagged", hint: "wakes when @tagged" },
+  { value: "monitor" as const, label: "monitor ($)", hint: "reads every message: costs more" },
+];
+
+/** Participants: status (restart the failed and stopped), mode, what each spent; the cap counter. */
 function Roster({ slug, huddle: h, onError }: { slug: string; huddle: Huddle; onError: (m: string) => void }) {
   const closed = h.status === "closed";
   const ps = [...h.participants.filter((p) => p.kind !== "human"), ...h.participants.filter((p) => p.kind === "human")];
-  const setMode = (p: HuddleParticipant, mode: HuddleMode) => api.setHuddleMode(slug, h.id, p.handle, mode).catch((e) => onError(e.message));
+  const fail = (e: Error) => onError(e.message);
+  const setMode = (p: HuddleParticipant, mode: HuddleMode) => p.mode !== mode && api.setHuddleMode(slug, h.id, p.handle, mode).catch(fail);
   return (
     <section>
       <h3>Participants <span className="hd-cap">{members(h).length}/{h.maxParticipants}</span></h3>
       {ps.map((p) => {
         const human = p.kind === "human";
         const st = ["working", "failed", "stopped", "done", "blocked"].includes(p.status) ? p.status : "idle";
+        const restartable = !closed && !human && (p.status === "failed" || p.status === "stopped");
         return (
           <div key={p.handle} className="hd-p">
             <Avatar handle={p.handle} small />
@@ -395,21 +467,30 @@ function Roster({ slug, huddle: h, onError }: { slug: string; huddle: Huddle; on
                 {p.handle === "main" && <span className="pill lead">coordinator</span>}
                 {p.lead && p.handle !== "main" && !human && <span className="pill lead">lead</span>}
               </div>
-              <div className={`hd-p-st ${st}`} title={p.error ?? p.lastActivity ?? undefined}>
+              <div className={`hd-p-st ${st}`}>
                 {!human && <span className={`hd-dot ${st}`} />}
-                {human ? "human" : participantActivity(p, closed)}
+                <span className="hd-p-st-text" title={p.error ?? p.statusReason ?? p.lastActivity ?? undefined}>{human ? "human" : p.status === "failed" ? "failed" : participantActivity(p, closed)}</span>
+                {restartable && (
+                  <button className="link-btn hd-redo" title={h.status === "live" ? `Restart @${p.handle}: it wakes now with what it hasn't read` : `Restart @${p.handle} when the huddle resumes`}
+                    onClick={() => api.restartHuddleParticipant(slug, h.id, p.handle).catch(fail)}>restart</button>
+                )}
               </div>
             </div>
             {!human && (
               <span className="hd-p-actions">
-                <button className={`hd-mode ${p.mode}`} disabled={closed} title={closed ? undefined : `Switch to ${p.mode === "monitor" ? "tagged" : "monitor"} mode`}
-                  onClick={() => setMode(p, p.mode === "monitor" ? "tagged" : "monitor")}>{p.mode}</button>
+                {closed ? (
+                  <span className={`hd-mode ${p.mode}`}>{p.mode}</span>
+                ) : (
+                  <Select ariaLabel={`@${p.handle} mode`} className="roster-select hd-mode-select" value={p.mode} options={MODE_OPTIONS}
+                    onChange={(v) => setMode(p, v)} />
+                )}
                 {!closed && p.status !== "stopped" && (
                   <button className="icon-btn tiny hd-p-stop" aria-label={`Stop @${p.handle}`} title={`Stop @${p.handle}`}
-                    onClick={() => api.stopHuddleParticipant(slug, h.id, p.handle).catch((e) => onError(e.message))}><CloseIcon size={10} /></button>
+                    onClick={() => api.stopHuddleParticipant(slug, h.id, p.handle).catch(fail)}><CloseIcon size={10} /></button>
                 )}
               </span>
             )}
+            <span className="hd-p-cost" title={human ? undefined : `What @${p.handle} spent in this huddle`}>{human ? "" : money(p.costUsd ?? 0)}</span>
           </div>
         );
       })}

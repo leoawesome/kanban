@@ -3,8 +3,8 @@ import { api, onReconnect, subscribe, type Huddle, type HuddleMessage } from "./
 import { AVATAR_COLORS } from "./avatar";
 import { mergeMessages, pickHuddle, upsertHuddle } from "./huddleText";
 
-export { cardHuddleBadge, guestTickets, sortHuddles, type CardHuddleBadge } from "./huddleText";
-export { handleInitials, mentionCandidates, mentionQuery, participantActivity } from "./huddleText";
+export { brakeLabel, cardHuddleBadge, dollars, guestTickets, idleFor, quietLabel, sortHuddles, type CardHuddleBadge } from "./huddleText";
+export { handleInitials, isForYou, mentionCandidates, mentionQuery, participantActivity, untaggedHint } from "./huddleText";
 
 /** Participants that count toward the cap (everyone but the user). */
 export const members = (h: Huddle) => h.participants.filter((p) => p.kind !== "human");

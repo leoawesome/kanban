@@ -68,9 +68,22 @@ const money = (n: number) => `$${n.toFixed(2)}`;
 export type ParticipantView = Omit<HuddleParticipant, "token"> & { running: boolean };
 /**
  * quiet: live, nobody working, no unanswered tags and no open findings (a sign it can be wrapped up);
- * idleSince: when the last message or turn was.
+ * idleSince: when the last message or turn was. forYou: messages tagging @you since the user last posted or acted
+ * (forYouSince: that seq).
  */
-export type HuddleView = Omit<Huddle, "participants"> & { participants: ParticipantView[]; hostTitle: string | null; quiet: boolean; idleSince: string | null };
+export type HuddleView = Omit<Huddle, "participants"> & {
+  participants: ParticipantView[]; hostTitle: string | null; quiet: boolean; idleSince: string | null; forYou: number; forYouSince: number;
+};
+
+/** The seq the user has seen up to: their last post or action (Stop, Resume, restart…). */
+export function userSeenSeq(h: Huddle, msgs: HuddleMessage[]): number {
+  const me = h.participants.find((p) => p.handle === USER_HANDLE);
+  const posted = msgs.findLast((m) => m.from === USER_HANDLE)?.seq ?? 0;
+  return Math.max(me?.cursor ?? 0, posted);
+}
+
+/** A message that needs the user: it tags @you (brake and close-request system lines included) after `since`. */
+export const isForYou = (m: HuddleMessage, since: number) => m.seq > since && m.from !== USER_HANDLE && m.mentions.includes(USER_HANDLE);
 
 /** The file @main or a lead writes in the host ticket's outputs before asking to close the huddle. */
 export const SUMMARY_FILE = "huddle-summary.md";
@@ -189,6 +202,8 @@ export class Huddles {
   }
 
   view(slug: string, h: Huddle): HuddleView {
+    const msgs = h.status === "closed" ? [] : this.store.readHuddleMessages(slug, h.id);
+    const since = userSeenSeq(h, msgs);
     return {
       ...h,
       hostTitle: this.store.getTicket(slug, h.hostTicket)?.title ?? null,
@@ -198,16 +213,17 @@ export class Huddles {
         const status = p.kind === "ticket-main" && (p.status === "idle" || p.status === "working") ? (running ? "working" : "idle") : p.status;
         return { ...p, status, running };
       }),
-      ...this.quiet(slug, h),
+      ...this.quiet(slug, h, msgs),
+      forYou: msgs.filter((m) => isForYou(m, since)).length,
+      forYouSince: since,
     };
   }
 
   /** Live, nobody working, nobody with an unanswered tag and no open findings; idleSince: the last message or turn. */
-  private quiet(slug: string, h: Huddle): { quiet: boolean; idleSince: string | null } {
+  private quiet(slug: string, h: Huddle, msgs: HuddleMessage[]): { quiet: boolean; idleSince: string | null } {
     const no = { quiet: false, idleSince: null };
     const ps = h.participants.filter((p) => p.kind !== "human");
     if (h.status !== "live" || h.findings.some((f) => f.status === "open") || ps.some((p) => this.working(slug, h, p))) return no;
-    const msgs = this.store.readHuddleMessages(slug, h.id);
     if (ps.some((p) => msgs.some((m) => m.seq > p.cursor && this.wakes(h, p, m) === "mention"))) return no;
     const times = [msgs.at(-1)?.ts, ...ps.map((p) => p.idleAt)].filter((t): t is string => !!t);
     return { quiet: true, idleSince: times.length ? times.reduce((a, b) => (a > b ? a : b)) : h.createdAt };
@@ -933,6 +949,32 @@ export class Huddles {
     this.stopParticipantRun(slug, h, p);
     this.updateP(slug, hid, handle, { status: "stopped" });
     if (h.status !== "closed") this.system(slug, hid, `@${handle} was stopped by @you.`);
+    this.userActed(slug, hid);
+  }
+
+  /**
+   * The user restarts a failed or stopped participant: it is idle again and, while the huddle is live, wakes now
+   * with what it has not read yet. On a stopped huddle it wakes when the huddle resumes.
+   */
+  restartParticipant(slug: string, hid: string, handle: string): void {
+    const h = this.get(slug, hid);
+    this.assertOpen(h);
+    const p = h.participants.find((x) => x.handle === handle && x.kind !== "human");
+    if (!p) throw new HuddleError(404, `no participant @${handle}`);
+    if (p.status !== "failed" && p.status !== "stopped") throw new HuddleError(409, `@${handle} is ${p.status}, not failed or stopped`);
+    this.updateP(slug, hid, handle, { status: "idle", error: null });
+    const live = h.status === "live";
+    this.system(slug, hid, `@${handle} was restarted by @you${live ? "" : "; it wakes when the huddle resumes"}.`, live ? [handle] : []);
+    this.userActed(slug, hid);
+  }
+
+  /** The user acted on the huddle: what tagged them so far counts as seen (the "for you" count starts over). */
+  private userActed(slug: string, hid: string) {
+    if (!this.store.getHuddle(slug, hid)) return;
+    this.update(slug, hid, (x) => {
+      const me = x.participants.find((p) => p.handle === USER_HANDLE);
+      if (me) me.cursor = x.seq;
+    });
   }
 
   /**
@@ -949,6 +991,7 @@ export class Huddles {
       for (const p of x.participants) if (p.kind === "agent") p.status = "stopped";
     });
     this.system(slug, hid, "Huddle agents stopped by @you. The tickets' own runs keep going.");
+    this.userActed(slug, hid);
     return this.get(slug, hid);
   }
 
@@ -976,6 +1019,7 @@ export class Huddles {
       for (const p of x.participants) if (p.status === "stopped") p.status = "idle";
     });
     if (h.status !== "live" || addBudgetUsd) this.system(slug, hid, `Huddle resumed by @you${addBudgetUsd ? ` with ${money(addBudgetUsd)} more budget (now ${money(max)})` : ""}.`);
+    this.userActed(slug, hid);
     for (const p of this.get(slug, hid).participants) if (p.kind !== "human") this.wakeIfOwed(slug, hid, p.handle);
     return this.get(slug, hid);
   }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  cardHuddleBadge, draftError, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, upsertHuddle,
+  brakeLabel, cardHuddleBadge, draftError, draftTags, idleFor, isForYou, untaggedHint, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, upsertHuddle,
 } from "../web/src/huddleText";
 
 type P = { handle: string; role: string; kind: string; mode: string; status: string; statusReason?: string | null; lastActivity?: string | null; error?: string | null };
@@ -111,4 +111,34 @@ test("upsertHuddle replaces by id or appends", () => {
   const a = bh({ id: "a" }), b = bh({ id: "b" });
   expect(upsertHuddle([a], b).map((h) => h.id)).toEqual(["a", "b"]);
   expect(upsertHuddle([a, b], { ...a, seq: 99 })[0].seq).toBe(99);
+});
+
+test("cardHuddleBadge: brake, quiet, failed and for-you", () => {
+  const now = Date.parse("2026-10-10T02:12:00Z");
+  const brake = cardHuddleBadge([bh({ status: "stopped", stopReason: "budget", maxCostUsd: 20, forYou: 2 } as Partial<BH>)], "t_20261009_k2pm", now)!;
+  expect(brake).toMatchObject({ state: "brake", label: "Huddle · paused: $20 budget", forYou: 2 });
+  expect(brakeLabel({ status: "stopped", stopReason: "messages" })).toBe("paused: message limit");
+  expect(brakeLabel({ status: "stopped", stopReason: "loop" })).toBe("paused: waiting for you");
+  // A plain Stop keeps the quiet stopped look.
+  expect(cardHuddleBadge([bh({ status: "stopped", stopReason: null } as Partial<BH>)], "t_20261009_k2pm")).toMatchObject({ state: "stopped", label: "Huddle · 3 · stopped" });
+  const quiet = cardHuddleBadge([bh({ quiet: true, idleSince: "2026-10-10T02:00:00Z", findings: [{ status: "resolved" }] } as Partial<BH>)], "t_20261009_k2pm", now)!;
+  expect(quiet).toMatchObject({ state: "quiet", label: "Huddle · 3 · idle 12m · 0 open" });
+  const failed = bh({ participants: [...bh().participants, p("x", { status: "failed" })] });
+  expect(cardHuddleBadge([failed], "t_20261009_k2pm")).toMatchObject({ state: "live", failed: 1, forYou: 0 });
+  expect(idleFor("2026-10-10T02:11:40Z", now)).toBe("<1m");
+  expect(idleFor("2026-10-09T23:00:00Z", now)).toBe("3h");
+});
+
+test("for you and the untagged hint", () => {
+  const m = (seq: number, from: string, mentions: string[]) => ({ seq, from, mentions });
+  expect(isForYou(m(5, "qa-1", ["you"]), 4)).toBe(true);
+  expect(isForYou(m(4, "qa-1", ["you"]), 4)).toBe(false);
+  expect(isForYou(m(6, "qa-1", ["all"]), 4)).toBe(false);
+  expect(isForYou(m(6, "system", ["you"]), 4)).toBe(true);
+  const h = huddle();
+  expect(draftTags("hi @main and @nobody, @ALL", ["main", "qa-1"])).toEqual(["main", "all"]);
+  expect(untaggedHint("@qa-1 look", h)).toBeNull();
+  expect(untaggedHint("   ", h)).toBeNull();
+  expect(untaggedHint("thoughts?", h)).toBe("No @tag: only @qa-1 (monitor) will see this. Nobody else wakes.");
+  expect(untaggedHint("thoughts?", huddle({ participants: [p("main", { kind: "ticket-main" })] }))).toContain("nobody wakes");
 });

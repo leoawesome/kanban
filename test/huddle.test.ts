@@ -8,7 +8,7 @@ import { Bus, type BusEvent } from "../src/server/events";
 import { createServer } from "../src/server/http";
 import { Huddles, SUMMARY_FILE } from "../src/server/huddle";
 import { BUILTIN_PRESETS, deletePreset, mergePresets, savePreset } from "../src/server/huddle-presets";
-import { parseMentions, rosterError } from "../src/server/huddle-roster";
+import { HUDDLE_HEADER, parseMentions, rosterError } from "../src/server/huddle-roster";
 import { huddleAgentPrompt, huddleDigest } from "../src/server/prompts";
 import { controlResponse } from "../src/server/runner";
 import { Store } from "../src/server/store";
@@ -877,3 +877,46 @@ test("a pending restart waits for huddle agents mid-turn and holds new agent run
   expect(participant(h, "reviewer").interrupted).toBe(false);
   await Promise.all([fresh.shutdown(), again.shutdown()]);
 }, 30000);
+
+test("for you: tags of @you since the user's last post or action, brake messages included", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  const view = () => huddles.view("p", store.getHuddle("p", h.id)!);
+  expect(view().forYou).toBe(0);
+  huddles.post("p", h.id, participant(h, "reviewer"), "@you is $20 ok?");
+  huddles.post("p", h.id, participant(h, "reviewer"), "@main fyi");
+  expect(view().forYou).toBe(1);
+  // Posting answers it.
+  huddles.post("p", h.id, you(h), "yes");
+  await idle();
+  expect(view()).toMatchObject({ forYou: 0, forYouSince: messages(h).find((m) => m.text === "yes")!.seq });
+  // A brake tags @you; acting on it (Resume) clears it.
+  store.saveHuddle("p", { ...store.getHuddle("p", h.id)!, maxMessages: 1 });
+  huddles.post("p", h.id, participant(h, "reviewer"), "more");
+  await idle();
+  expect(view()).toMatchObject({ status: "stopped", stopReason: "messages", forYou: 1 });
+  huddles.resume("p", h.id);
+  expect(view().forYou).toBe(0);
+}, 20000);
+
+test("restart: a failed or stopped agent is idle again and wakes now on a live huddle", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  const n = heardBy("reviewer").length;
+  const url = `${client.url}/api/profiles/p/huddles/${h.id}/participants/reviewer/restart`;
+  const post = (headers: Record<string, string> = {}) => fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: "{}" });
+  // Only a failed or stopped agent restarts.
+  expect((await post()).status).toBe(409);
+  const x = store.getHuddle("p", h.id)!;
+  store.saveHuddle("p", { ...x, participants: x.participants.map((p) => (p.handle === "reviewer" ? { ...p, status: "failed" as const, error: "boom" } : p)) });
+  expect((await post()).status).toBe(200);
+  await idle();
+  expect(participant(h, "reviewer").error).toBeNull();
+  expect(heardBy("reviewer").length).toBe(n + 1);
+  expect(messages(h).some((m) => m.text === "@reviewer was restarted by @you.")).toBe(true);
+  // A run can't restart anyone.
+  const denied = await post({ [HUDDLE_HEADER]: `${h.id}/reviewer/${participant(h, "reviewer").token}` });
+  expect(denied.status).toBe(403);
+}, 20000);

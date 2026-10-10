@@ -624,6 +624,9 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               )}
               <button role="tab" aria-selected={tab === "huddle"} className={tab === "huddle" ? "active" : ""} onClick={() => setTab("huddle")}>
                 Huddle{huddle && huddle.status !== "closed" && <span className={`tab-count${huddle.status === "live" ? " ok" : ""}`}>{members(huddle).length}</span>}
+                {huddle && huddle.status !== "closed" && !!huddle.forYou && (
+                  <span className="for-you-pill" title={`${huddle.forYou} ${huddle.forYou === 1 ? "message tags" : "messages tag"} you`}>{huddle.forYou}</span>
+                )}
                 {huddle?.status === "live" && huddle.participants.some((p) => p.status === "working") && <span className="dot" />}
               </button>
               {ticket.worktree && (
