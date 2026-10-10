@@ -28,6 +28,7 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
       [["Esc"], "Clear the search"],
       [["Ctrl", "`"], "Terminal & files panel"],
       [["C"], "Quick Claude chat (no ticket)"],
+      [["T"], "Team: teammates, templates, notes"],
       [["?"], "This list"],
       [["Hold", MOD], "Show key hints on buttons"],
     ],

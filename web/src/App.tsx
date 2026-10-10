@@ -4,7 +4,7 @@ import { avatarColor, avatarLetter } from "./avatar";
 import { BugReportDialog } from "./BugReportDialog";
 import { ConnectionsDialog } from "./ConnectionsDialog";
 import { HeaderMenu } from "./HeaderMenu";
-import { AtIcon, BugIcon, ChatIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, Logo, PlugIcon, SearchIcon, TerminalIcon } from "./icons";
+import { AtIcon, BugIcon, ChatIcon, CheckIcon, ClockIcon, CloseIcon, CopyIcon, GearIcon, KeyboardIcon, Logo, PlugIcon, SearchIcon, TeamIcon, TerminalIcon } from "./icons";
 import { Inbox } from "./Inbox";
 import { UsagePill } from "./UsagePill";
 import { anyLayerOpen } from "./layers";
@@ -155,11 +155,14 @@ export function App() {
   // Tab the open dock shows (reported by the dock), for the header buttons' on state.
   const [dockShown, setDockShown] = useState<DockTab | null>(null);
   const chatOpen = dockOpen && dockShown === "claude";
+  const termOpen = dockOpen && (dockShown === "terminal" || dockShown === "files");
+  const teamOpen = dockOpen && dockShown === "team";
   /** team: what the Team tab shows (the new-teammate editor, a proposal to edit, a teammate). */
   const openDockOn = (tab: DockTab, team?: TeamRequest) => {
     setDockOpen(true);
     setDockTab({ tab, n: Date.now(), ...(team ? { team } : {}) });
   };
+  const toggleTeam = () => (teamOpen ? setDockOpen(false) : openDockOn("team"));
   const [mcp, setMcp] = useState<McpState | null>(null);
   const [connections, setConnections] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[] | null>(null);
@@ -298,7 +301,7 @@ export function App() {
   // Latest values for the window key handler below, which is bound once per dialog state.
   const live = useRef({ profiles, tickets, markDone: (_id: string) => {} });
 
-  // Shortcuts: N new ticket, / search, ? cheatsheet, C quick Claude chat, ⌘K command bar (tickets on every board, actions, boards), Ctrl+` terminal & files,
+  // Shortcuts: N new ticket, / search, ? cheatsheet, C quick Claude chat, T Team, ⌘K command bar (tickets on every board, actions, boards), Ctrl+` terminal & files,
   // B board picker, [ ] previous / next board, 1…9 board N, J/K/H/L or arrows select a card, D marks a Review card done.
   // Esc is handled by the panel and dialogs (one layer at a time, see layers.ts).
   useEffect(() => {
@@ -354,6 +357,9 @@ export function App() {
       } else if (e.key === "c" || e.key === "C") {
         e.preventDefault();
         if (slug) openDockOn("claude");
+      } else if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        if (slug) toggleTeam();
       } else if (e.key === "b" || e.key === "B") {
         e.preventDefault();
         if (boards.length) setBoardSwitcher(true);
@@ -371,7 +377,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openId, profileDialog, newTicket, connections, schedulesOpen, slug, switchBoard]);
+  }, [openId, profileDialog, newTicket, connections, schedulesOpen, slug, switchBoard, dockOpen, dockShown]);
 
   const runInTerminal = useCallback((text: string) => {
     setDockOpen(true);
@@ -540,7 +546,7 @@ export function App() {
       { id: "chat", label: "Quick Claude chat", keys: ["C"], icon: <ChatIcon size={14} />, run: () => openDockOn("claude") },
     ] : []),
     ...(profile ? [
-      { id: "team", label: "Open Team", hint: "teammates, templates, notes", run: () => openDockOn("team") },
+      { id: "team", label: "Open Team", keys: ["T"], icon: <TeamIcon size={14} />, hint: "teammates, templates, notes", run: () => openDockOn("team") },
       { id: "new-teammate", label: "New teammate…", run: () => openDockOn("team", { action: "new" }) },
     ] : []),
     ...(inbox.length ? [{ id: "inbox", label: `Open inbox (${inbox.length} need you)`, run: () => setInboxRequest(Date.now()) }] : []),
@@ -614,9 +620,9 @@ export function App() {
           openTicket(i.id, i.profile);
         }} />
         {profile && (
-          <button className={`btn ghost icon-label${dockOpen && !chatOpen ? " on" : ""}`}
-            onClick={() => (chatOpen ? openDockOn("terminal") : setDockOpen((o) => !o))}
-            aria-pressed={dockOpen && !chatOpen} title="Terminal and files for this folder (Ctrl+`)" aria-label="Terminal and files">
+          <button className={`btn ghost icon-label${termOpen ? " on" : ""}`}
+            onClick={() => (termOpen ? setDockOpen(false) : openDockOn(dockShown === "files" ? "files" : "terminal"))}
+            aria-pressed={termOpen} title="Terminal and files for this folder (Ctrl+`)" aria-label="Terminal and files">
             <TerminalIcon /><span className="label">Terminal & files</span><KeyHint keys="Ctrl+`" />
           </button>
         )}
@@ -625,6 +631,12 @@ export function App() {
             onClick={() => (chatOpen ? setDockOpen(false) : openDockOn("claude"))}
             aria-pressed={chatOpen} title="Quick chat with Claude in this folder, no ticket needed (C)" aria-label="Quick Claude chat">
             <ChatIcon /><span className="label">Claude</span><KeyHint keys="C" />
+          </button>
+        )}
+        {profile && (
+          <button className={`btn ghost icon-label${teamOpen ? " on" : ""}`} onClick={toggleTeam}
+            aria-pressed={teamOpen} title="Teammates, templates and notes (T)" aria-label="Team">
+            <TeamIcon /><span className="label">Team</span><KeyHint keys="T" />
           </button>
         )}
         {profile && (
