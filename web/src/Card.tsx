@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { safeHref, waitsForSlot, type Ticket } from "./api";
-import type { CardHuddleBadge } from "./huddleText";
+import { safeHref, waitsForSlot, type SessionMessage, type Ticket } from "./api";
+import { type CardHuddleBadge, digestPreview } from "./huddleText";
 import { ClockIcon } from "./icons";
 import { KeyHint } from "./KeyHint";
 import { ResourceChip, resourceWait } from "./Needs";
@@ -37,6 +37,13 @@ export function outcomeBadge(t: Ticket) {
     case "done": return t.status === "review" ? <span className="badge ok">Ready for review</span> : null;
     default: return null;
   }
+}
+
+/** Who wrote the card's last message: huddle digests and other tickets' messages aren't the user's. */
+function lastWho(m: SessionMessage): string {
+  if (m.from === "huddle") return "Huddle";
+  if (m.from === "ticket") return "Another ticket";
+  return m.role === "user" ? "You" : "Claude";
 }
 
 /** The card's huddle chip; clicking it opens that ticket's Huddle tab instead of the card. */
@@ -91,8 +98,8 @@ export function Card({ ticket, onClick, dragging, queued, held, huddle, onOpenHu
         <div className="card-activity" title={ticket.lastActivity!}>{ticket.lastActivity}</div>
       ) : last && (
         <div className="card-last" title={last.text}>
-          <span className={`who ${last.role}`}>{last.role === "user" ? "You" : "Claude"}:</span>{" "}
-          {plainPreview(last.text)}
+          <span className={`who ${last.role}`}>{lastWho(last)}:</span>{" "}
+          {plainPreview(last.from === "huddle" ? digestPreview(last.text) : last.text)}
         </div>
       )}
       {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session || ticket.scheduleId || ticket.plan || ticket.needs?.length || huddle) && (

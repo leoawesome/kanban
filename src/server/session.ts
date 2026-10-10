@@ -70,6 +70,8 @@ export interface SessionEntry {
   unreadable?: BlockKind;
   /** A ticket-to-ticket message (ask_ticket / reply_ticket): in = from that ticket's Claude, out = to it. */
   peer?: { dir: "in" | "out"; ticketId: string | null };
+  /** Huddle messages delivered to this ticket's session (also a peer entry, ticketId null): the huddle's id. */
+  huddleId?: string;
   /** The board prepared a new worktree before this prompt (copied files, setup command): shown as a row before it. */
   setup?: SetupResult;
   /** A user message that ran a slash command (its name, without the slash); text is `/name args`. */
@@ -231,6 +233,10 @@ export interface SessionMessage {
   role: "user" | "assistant";
   text: string;
   at: string;
+  /** A user-role message that didn't come from the user: a huddle digest or another ticket's Claude. */
+  from?: "huddle" | "ticket";
+  /** An assistant message answering such a message (a quiet reply, not one for the user). */
+  peerReply?: boolean;
 }
 
 export interface ParsedSession {
@@ -297,7 +303,7 @@ function terminalOnly(cmd: string | null): boolean {
   return !!cmd && TERMINAL_COMMANDS.has(cmd.slice(1).split(" ")[0]);
 }
 
-function userText(content: unknown): { kind: "text" | "board"; text: string; from?: string; question?: string; setup?: SetupResult; command?: string } | null {
+function userText(content: unknown): { kind: "text" | "board"; text: string; from?: string; question?: string; huddle?: string; setup?: SetupResult; command?: string } | null {
   if (Array.isArray(content)) {
     if (content.some((c: any) => c?.type === "tool_result")) return null;
     content = content.map((c: any) => (c?.type === "text" ? c.text : "")).join("\n");
@@ -312,6 +318,9 @@ function userText(content: unknown): { kind: "text" | "board"; text: string; fro
     const from = tag.match(/ from="([^"]*)"/)?.[1];
     const setup = parseSetupBlock(content.slice(ctx));
     const extra = setup ? { setup } : {};
+    // Huddle messages for this ticket's session: huddle="<huddle id>".
+    const huddle = tag.match(/ huddle="([^"]*)"/)?.[1];
+    if (typed && huddle) return { kind: "text", text: typed, huddle, ...extra };
     if (typed && from) return { kind: "text", text: typed, from, question: tag.match(/ question="([^"]*)"/)?.[1], ...extra };
     if (typed) return { kind: "text", text: typed, ...extra };
     const note = content.slice(ctx).match(/note="([^"]*)"/)?.[1];
@@ -398,7 +407,8 @@ export function parseSession(raw: string): ParsedSession {
     if (u.from && u.question) askers.set(u.question, u.from);
     return {
       uuid, at, role: "user", kind: u.kind, text: u.text, ...(u.command ? { command: u.command } : {}),
-      ...(u.from ? { peer: { dir: "in" as const, ticketId: u.from } } : {}), ...(u.setup ? { setup: u.setup } : {}),
+      ...(u.from ? { peer: { dir: "in" as const, ticketId: u.from } } : {}), ...(u.huddle ? { peer: { dir: "in" as const, ticketId: null }, huddleId: u.huddle } : {}),
+      ...(u.setup ? { setup: u.setup } : {}),
     };
   };
 
@@ -518,11 +528,18 @@ export function parseSession(raw: string): ParsedSession {
     || (last.questions ? `Asked ${last.questions.length} question${last.questions.length > 1 ? "s" : ""}`
       : last.newTickets ? `Proposed ${last.newTickets.length} new ticket${last.newTickets.length > 1 ? "s" : ""}`
       : last.branch ? "Offered to branch this ticket" : "Proposed an updated ticket");
+  const asked = last?.role === "assistant" ? entries.findLast((e, i) => i < entries.indexOf(last) && e.role === "user" && e.kind === "text") : undefined;
   return {
     title: customTitle ?? aiTitle,
     entries,
     artifacts: [...artifacts.values()],
-    lastMessage: last ? { role: last.role, text: lastText, at: last.at } : null,
+    lastMessage: last
+      ? {
+        role: last.role, text: lastText, at: last.at,
+        ...(last.role === "user" && last.peer ? { from: last.huddleId ? "huddle" as const : "ticket" as const } : {}),
+        ...(asked?.peer?.dir === "in" ? { peerReply: true } : {}),
+      }
+      : null,
     ...pendingSince(entries),
   };
 }

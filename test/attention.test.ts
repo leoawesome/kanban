@@ -40,6 +40,8 @@ test("review column and Claude replies in planning", () => {
   expect(attentionFor(T({ interrupted: { at: "", mode: "refine", partial: "Half" } }), replied, false)).toBeNull();
   expect(attentionFor(T({ status: "backlog" }), replied, false)).toBeNull();
   expect(attentionFor(T({ status: "done" }), replied, false)).toBeNull();
+  // A quiet reply to a huddle digest or another ticket isn't one for the user.
+  expect(attentionFor(T({}), S({ lastMessage: { role: "assistant", text: "hi", at: "", peerReply: true } }), false)).toBeNull();
   expect(attentionFor(T({}), S({ lastMessage: { role: "user", text: "hi", at: "" } }), false)).toBeNull();
 });
 

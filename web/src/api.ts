@@ -208,6 +208,10 @@ export interface SessionMessage {
   role: "user" | "assistant";
   text: string;
   at: string;
+  /** A user-role message the user didn't write: a huddle digest or another ticket's Claude. */
+  from?: "huddle" | "ticket";
+  /** Claude's quiet reply to such a message. */
+  peerReply?: boolean;
 }
 
 export interface SessionSummary {
@@ -279,6 +283,8 @@ export interface SessionEntry {
   unreadable?: "questions" | "proposal" | "tickets";
   /** A ticket-to-ticket message: in = from that ticket's Claude, out = Claude to it. */
   peer?: { dir: "in" | "out"; ticketId: string | null };
+  /** Huddle messages delivered to this ticket's session (a peer entry too): the huddle's id. text is the digest. */
+  huddleId?: string;
   /** Worktree setup that ran before this prompt (shown as a row before it). */
   setup?: SetupResult;
   /** A user message that ran this slash command (name without the slash). */

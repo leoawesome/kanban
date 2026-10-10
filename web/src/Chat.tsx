@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, subscribe, type Huddle, type NewTicketDraft, type OutputFile, type SessionEntry, type Ticket } from "./api";
 import { HuddleCard } from "./HuddleCard";
+import { HuddleDigest } from "./HuddleDigest";
 import { autoGrow } from "./autoGrow";
 import { branchTicket } from "./branch";
 import { BranchCard } from "./BranchCard";
@@ -129,6 +130,9 @@ export function useStop(slug: string, ticket: Ticket, working: boolean, onError:
   };
   return { stopping, stop };
 }
+
+/** A queued peer message that carries huddle messages (see the server's huddleMainPrompt). */
+const HUDDLE_TAG = /<ckanban-context[^>]* huddle="/;
 
 export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onError, onPendingProposal, huddle = null, onOpenHuddle }: {
   slug: string;
@@ -398,6 +402,12 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
           if (e.kind === "board") {
             return <div key={e.uuid} className={`chat-note${old ? " inherited" : ""}`}>{e.text}{e.at && <span title={fullTime(e.at)}> · {timeAgo(e.at)}</span>}</div>;
           }
+          if (e.huddleId) {
+            return (
+              <HuddleDigest key={e.uuid} text={e.text} old={old} onOpen={onOpenHuddle}
+                meta={e.at && <time className="muted small" dateTime={e.at} title={fullTime(e.at)}>{timeAgo(e.at)}</time>} />
+            );
+          }
           if (e.peer) {
             return (
               <div key={e.uuid} className={`conv-msg peer ${e.peer.dir}${old ? " inherited" : ""}`}>
@@ -577,7 +587,20 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
             <UserText text={p.text} commands={commands} />
           </div>
         ))}
-        {queued.filter((q) => q.peer).map((q) => (
+        {queued.filter((q) => q.peer && HUDDLE_TAG.test(q.text)).map((q) => (
+          <HuddleDigest key={q.id} text={q.text.split("<ckanban-context")[0].trim()} pending onOpen={onOpenHuddle}
+            meta={<span className="muted small">{q.state === "queued" ? "queued · Claude reads this at its next step" : "not sent · Claude was stopped before reading it"}</span>}>
+            {q.state === "unsent" && (
+              <div className="queued-actions">
+                <button className="btn primary small" disabled={stopping}
+                  onClick={() => api.sendQueued(slug, ticket.id, q.id).catch((e) => onError(e.message))}>Send</button>
+                <button className="btn ghost small"
+                  onClick={() => api.discardQueued(slug, ticket.id, q.id).catch((e) => onError(e.message))}>Discard</button>
+              </div>
+            )}
+          </HuddleDigest>
+        ))}
+        {queued.filter((q) => q.peer && !HUDDLE_TAG.test(q.text)).map((q) => (
           <div key={q.id} className="conv-msg peer in pending">
             <div className="conv-head">
               <b>{peerLabel("in", q.text.match(/<ckanban-context[^>]* from="([^"]*)"/)?.[1] ?? null)}</b>

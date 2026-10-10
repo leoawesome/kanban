@@ -761,6 +761,21 @@ textarea { resize: vertical; font-size: 13.5px; }
 .conv-msg.peer.out { align-self: flex-end; border-right: 3px solid var(--accent); }
 .conv-msg.peer .conv-head { display: flex; color: var(--muted); }
 .conv-msg.peer .conv-head b { font-weight: 560; color: var(--text); }
+/* huddle messages delivered to a ticket's session: a collapsible huddle entry, not a user bubble */
+.conv-msg.huddle-digest > summary { cursor: pointer; list-style: none; margin-bottom: 0; }
+.conv-msg.huddle-digest > summary::-webkit-details-marker { display: none; }
+.conv-msg.huddle-digest > summary::before { content: "▸"; font-size: 9px; color: var(--muted); align-self: center; transition: transform 0.15s; }
+.conv-msg.huddle-digest[open] > summary::before { transform: rotate(90deg); }
+.conv-msg.huddle-digest[open] > summary { margin-bottom: 6px; }
+.conv-msg.huddle-digest .hdg-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hdg-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.hdg-list li { border-top: 1px solid var(--border); padding-top: 6px; }
+.hdg-list li:first-child { border-top: 0; padding-top: 0; }
+.hdg-list li.system { color: var(--muted); font-size: 12.5px; }
+.hdg-who { font-size: 12px; font-weight: 600; color: var(--accent); }
+.hdg-list li.system .hdg-who { color: var(--muted); font-weight: 500; }
+.hdg-wrap { align-self: flex-start; max-width: 86%; display: flex; flex-direction: column; gap: 6px; }
+.hdg-wrap > .conv-msg { max-width: none; }
 .conv-tools { font-size: 12px; opacity: 0.85; }
 .conv-tools summary::marker { color: var(--muted); }
 /* subagent rows (Agent tool calls): status, timer, live current step; expand for steps + result */

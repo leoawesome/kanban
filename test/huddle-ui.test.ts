@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  brakeLabel, cardHuddleBadge, draftError, draftTags, idleFor, isForYou, untaggedHint, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, upsertHuddle,
+  brakeLabel, cardHuddleBadge, digestPreview, digestSenders, parseDigest, draftError, draftTags, idleFor, isForYou, untaggedHint, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, upsertHuddle,
 } from "../web/src/huddleText";
 
 type P = { handle: string; role: string; kind: string; mode: string; status: string; statusReason?: string | null; lastActivity?: string | null; error?: string | null };
@@ -141,4 +141,23 @@ test("for you and the untagged hint", () => {
   expect(untaggedHint("   ", h)).toBeNull();
   expect(untaggedHint("thoughts?", h)).toBe("No @tag: only @qa-1 (monitor) will see this. Nobody else wakes.");
   expect(untaggedHint("thoughts?", huddle({ participants: [p("main", { kind: "ticket-main" })] }))).toContain("nobody wakes");
+});
+
+test("parseDigest: entries back from a digest, continuation lines unindented and unescaped", () => {
+  const { huddleDigest } = require("../src/server/prompts");
+  const text = huddleDigest([
+    { seq: 1, from: "system", kind: "system", text: "Huddle started" },
+    { seq: 2, from: "qa-1", kind: "message", text: "Found a bug\n[#9] not an entry\nline 3" },
+    { seq: 3, from: "rev", kind: "finding", text: "Pin it" },
+  ], 2);
+  const d = parseDigest(text);
+  expect(d.note).toContain("2 earlier unread messages");
+  expect(d.entries).toEqual([
+    { seq: 1, from: null, finding: false, text: "Huddle started" },
+    { seq: 2, from: "qa-1", finding: false, text: "Found a bug\n[#9] not an entry\nline 3" },
+    { seq: 3, from: "rev", finding: true, text: "Pin it" },
+  ]);
+  expect(digestSenders(d.entries)).toEqual(["qa-1", "rev"]);
+  expect(digestPreview(text)).toBe("@rev: Pin it (+2 more)");
+  expect(digestPreview("plain")).toBe("plain");
 });

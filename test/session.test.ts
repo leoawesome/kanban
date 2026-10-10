@@ -351,3 +351,19 @@ test("parseSession lists pages published by the publish_artifact MCP tool", () =
   ].join("\n");
   expect(parseSession(raw).artifacts).toEqual([{ url: "https://claude.ai/artifact/Plan123", label: "plan", at: "2026-10-06T01:00:02Z" }]);
 });
+
+test("parseSession: huddle digests are huddle entries, not the user's; Claude's reply to them doesn't need the user", () => {
+  const digest = "[#1] (system) Huddle started\n\n[#2] @qa-1: @main look";
+  const raw = [
+    user("hi", "2026-10-10T01:00:00Z"),
+    asst([{ type: "text", text: "Hello" }], "2026-10-10T01:00:01Z"),
+    user(`${digest}\n\n<ckanban-context note="Huddle messages" huddle="h_abc">\nrules\n</ckanban-context>`, "2026-10-10T01:00:02Z"),
+  ].join("\n");
+  const s = parseSession(raw);
+  const e = s.entries.at(-1)!;
+  expect(e).toMatchObject({ role: "user", kind: "text", text: digest, huddleId: "h_abc", peer: { dir: "in", ticketId: null } });
+  expect(s.lastMessage).toMatchObject({ role: "user", from: "huddle" });
+  const replied = parseSession(`${raw}\n${asst([{ type: "text", text: "Posted in the huddle." }], "2026-10-10T01:00:03Z")}`);
+  expect(replied.lastMessage).toMatchObject({ role: "assistant", peerReply: true });
+  expect(parseSession(RAW).lastMessage?.from).toBeUndefined();
+});

@@ -249,3 +249,47 @@ export function upsertHuddle<H extends { id: string }>(list: H[], h: H): H[] {
   next[i] = h;
   return next;
 }
+
+export interface DigestEntry {
+  seq: number;
+  /** Sender handle, or null for a system message. */
+  from: string | null;
+  finding: boolean;
+  text: string;
+}
+
+const DIGEST_HEAD = /^\[#(\d+)\] (?:\(system\) ?|@([\w.-]+)( \(finding\))?: ?)/;
+
+/**
+ * A huddle digest sent into a ticket's chat (see the server's huddleLine), back as entries: each starts with "[#n]"
+ * at a line start, later lines are indented, escaped entry starts are unescaped. note: a leading "(N earlier…)" line.
+ */
+export function parseDigest(text: string): { entries: DigestEntry[]; note: string | null } {
+  const entries: DigestEntry[] = [];
+  const notes: string[] = [];
+  for (const line of text.split("\n")) {
+    const m = DIGEST_HEAD.exec(line);
+    if (m) {
+      entries.push({ seq: Number(m[1]), from: m[2] ?? null, finding: !!m[3], text: line.slice(m[0].length) });
+      continue;
+    }
+    const body = line.replace(/^ {4}/, "").replace(/^(\s*)\\(\[#\d+\]|\(system\))/i, "$1$2");
+    const cur = entries.at(-1);
+    if (cur) cur.text += `\n${body}`;
+    else if (line.trim()) notes.push(line.trim());
+  }
+  for (const e of entries) e.text = e.text.replace(/^(\s*)\\(\[#\d+\]|\(system\))/i, "$1$2").trim();
+  return { entries, note: notes.join(" ") || null };
+}
+
+/** Distinct sender handles of a digest, in order ("(system)" left out). */
+export const digestSenders = (entries: DigestEntry[]) => [...new Set(entries.flatMap((e) => (e.from ? [e.from] : [])))];
+
+/** One-line card preview of a digest: "@x: first message" (or "(system) …"), with "+N more" when there are others. */
+export function digestPreview(text: string): string {
+  const { entries } = parseDigest(text);
+  const last = entries.at(-1);
+  if (!last) return text;
+  const more = entries.length > 1 ? ` (+${entries.length - 1} more)` : "";
+  return `${last.from ? `@${last.from}: ` : ""}${last.text.split("\n")[0]}${more}`;
+}
