@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { attentionFor, userWaitReason } from "../src/server/attention";
+import { attentionFor, byWaitingAge, type HostHuddle, huddleBusy, lastChange, userWaitReason } from "../src/server/attention";
 import type { SessionSummary } from "../src/server/session";
 import type { Ticket } from "../src/server/types";
 
@@ -16,26 +16,26 @@ test("running tickets never need the user", () => {
 });
 
 test("failures and blocks come first", () => {
-  expect(attentionFor(T({ outcome: "failed" }), null, false)).toEqual({ kind: "failed", label: "Run failed" });
+  expect(attentionFor(T({ outcome: "failed" }), null, false)).toMatchObject({ kind: "failed", label: "Run failed" });
   expect(attentionFor(T({ outcome: "blocked" }), S({ openQuestions: 2 }), false)!.kind).toBe("blocked");
 });
 
 test("open questions", () => {
-  expect(attentionFor(T({}), S({ openQuestions: 5 }), false)).toEqual({ kind: "questions", label: "Answer 5 questions" });
+  expect(attentionFor(T({}), S({ openQuestions: 5 }), false)).toMatchObject({ kind: "questions", label: "Answer 5 questions" });
   expect(attentionFor(T({}), S({ openQuestions: 1 }), false)!.label).toBe("Answer 1 question");
   expect(attentionFor(T({ outcome: "needs_input" }), null, false)!.kind).toBe("questions");
 });
 
 test("unapplied proposal, but not once applied", () => {
   const prop = { title: "New", description: "D" };
-  expect(attentionFor(T({}), S({ pendingProposal: prop }), false)).toEqual({ kind: "proposal", label: "Review proposal" });
+  expect(attentionFor(T({}), S({ pendingProposal: prop }), false)).toMatchObject({ kind: "proposal", label: "Review proposal" });
   expect(attentionFor(T({ title: "New", body: "D" }), S({ pendingProposal: prop }), false)).toBeNull();
 });
 
 test("review column and Claude replies in planning", () => {
-  expect(attentionFor(T({ status: "review", outcome: "done" }), null, false)).toEqual({ kind: "review", label: "Ready for review" });
+  expect(attentionFor(T({ status: "review", outcome: "done" }), null, false)).toMatchObject({ kind: "review", label: "Ready for review" });
   const replied = S({ lastMessage: { role: "assistant", text: "hi", at: "" } });
-  expect(attentionFor(T({}), replied, false)).toEqual({ kind: "reply", label: "Claude replied" });
+  expect(attentionFor(T({}), replied, false)).toMatchObject({ kind: "reply", label: "Claude replied" });
   // Cut off by a restart: not a reply yet.
   expect(attentionFor(T({ interrupted: { at: "", mode: "refine", partial: "Half" } }), replied, false)).toBeNull();
   expect(attentionFor(T({ status: "backlog" }), replied, false)).toBeNull();
@@ -59,16 +59,16 @@ test("done and backlog tickets never need the user", () => {
 
 test("proposed new tickets need attention until each one exists", () => {
   const s = S({ pendingNewTickets: [{ title: "A", description: "" }, { title: "B", description: "" }] });
-  expect(attentionFor(T({}), s, false)).toEqual({ kind: "proposal", label: "Review proposed tickets" });
+  expect(attentionFor(T({}), s, false)).toMatchObject({ kind: "proposal", label: "Review proposed tickets" });
   expect(attentionFor(T({}), s, false, { createdTitles: new Set(["A"]) })!.kind).toBe("proposal");
   expect(attentionFor(T({}), s, false, { createdTitles: new Set(["A", "B"]) })).toBeNull();
 });
 
 test("a stuck plan needs the user, unless the ticket is done or every child is finished", () => {
   const plan = { state: "stuck" as const, maxConcurrent: 2, wakeups: 1, startedAt: "", originalCount: 2, reason: "x" };
-  expect(attentionFor(T({ status: "review", plan }), null, false)).toEqual({ kind: "blocked", label: "Plan stuck" });
+  expect(attentionFor(T({ status: "review", plan }), null, false)).toMatchObject({ kind: "blocked", label: "Plan stuck" });
   expect(attentionFor(T({ status: "done", plan }), null, false)).toBeNull();
-  expect(attentionFor(T({ status: "review", outcome: "done", plan }), null, false, { planComplete: true })).toEqual({ kind: "review", label: "Ready for review" });
+  expect(attentionFor(T({ status: "review", outcome: "done", plan }), null, false, { planComplete: true })).toMatchObject({ kind: "review", label: "Ready for review" });
 });
 
 test("userWaitReason: plan children waiting on the user", () => {
@@ -84,9 +84,50 @@ test("userWaitReason: plan children waiting on the user", () => {
 
 test("an unanswered teammate card asks for a review; saved or dismissed ones don't", () => {
   const s = S({ pendingTeammates: ["toolu_a", "toolu_b"] });
-  expect(attentionFor(T({}), s, false)).toEqual({ kind: "proposal", label: "Review proposed teammate" });
+  expect(attentionFor(T({}), s, false)).toMatchObject({ kind: "proposal", label: "Review proposed teammate" });
   expect(attentionFor(T({ teammateCards: { toolu_a: { state: "saved", at: "" } } }), s, false)?.kind).toBe("proposal");
   expect(attentionFor(T({ teammateCards: { toolu_a: { state: "saved", at: "" }, toolu_b: { state: "dismissed", at: "" } } }), s, false)).toBeNull();
   expect(attentionFor(T({ status: "review" }), S({ pendingTeammates: ["toolu_a"] }), false)?.kind).toBe("proposal");
   expect(attentionFor(T({}), s, true)).toBeNull();
+});
+
+const H = (p: Partial<HostHuddle>): HostHuddle => ({ working: 0, queued: false, tagged: 0, learnings: 0, closeRequest: false, since: null, ...p });
+
+test("a working huddle on the ticket: not blocked, failed or your turn, and it doesn't need the user", () => {
+  const busy = H({ working: 3 });
+  expect(huddleBusy(busy)).toBe(true);
+  expect(attentionFor(T({ status: "review", outcome: "blocked" }), null, false, { huddle: busy })).toBeNull();
+  expect(attentionFor(T({ status: "review", outcome: "failed" }), null, false, { huddle: busy })).toBeNull();
+  expect(attentionFor(T({ status: "review", outcome: "done" }), null, false, { huddle: busy })).toBeNull();
+  // A wake on its way counts as working too.
+  expect(attentionFor(T({ status: "review", outcome: "blocked" }), null, false, { huddle: H({ queued: true }) })).toBeNull();
+  // An idle huddle doesn't hide the ticket's own state.
+  expect(attentionFor(T({ status: "review", outcome: "blocked" }), null, false, { huddle: H({}) })!.kind).toBe("blocked");
+});
+
+test("the huddle needs the user when it tags @you, asks to close or has learnings to review", () => {
+  const t = T({ status: "review", outcome: "blocked" });
+  expect(attentionFor(t, null, false, { huddle: H({ working: 2, tagged: 1, since: "2026-10-10T08:00:00Z" }) }))
+    .toEqual({ kind: "huddle", label: "Huddle: 1 for you", since: "2026-10-10T08:00:00Z" });
+  expect(attentionFor(t, null, false, { huddle: H({ working: 2, closeRequest: true, tagged: 1 }) })!.label).toBe("Huddle asks to close");
+  expect(attentionFor(t, null, false, { huddle: H({ learnings: 2 }) })!.label).toBe("Review 2 learnings");
+  // Still nothing while the ticket's own session is replying, and never on Done.
+  expect(attentionFor(t, null, true, { huddle: H({ tagged: 1 }) })).toBeNull();
+  expect(attentionFor(T({ status: "done" }), null, false, { huddle: H({ tagged: 1 }) })).toBeNull();
+});
+
+test("since: when the ticket started waiting", () => {
+  const t = T({ status: "review", outcome: "done", lastRunAt: "2026-10-10T01:00:00Z", updatedAt: "2026-10-10T05:00:00Z" });
+  const s = S({ updatedAt: "2026-10-10T03:00:00Z", lastMessage: { role: "assistant", text: "done", at: "2026-10-10T02:00:00Z" } });
+  expect(attentionFor(t, s, false)!.since).toBe("2026-10-10T02:00:00Z");
+  expect(lastChange(t, S({ updatedAt: "2026-10-10T03:00:00Z" }))).toBe("2026-10-10T03:00:00Z");
+  expect(lastChange(t, null)).toBe("2026-10-10T01:00:00Z");
+  expect(lastChange(T({ updatedAt: "2026-10-10T05:00:00Z" }), null)).toBe("2026-10-10T05:00:00Z");
+  // A huddle ask waits since its oldest tag, else since the ticket's last change.
+  expect(attentionFor(t, s, false, { huddle: H({ tagged: 1 }) })!.since).toBe("2026-10-10T02:00:00Z");
+});
+
+test("the Inbox lists the oldest wait first", () => {
+  const rows = [{ attention: { since: "2026-10-10T09:00:00Z" } }, { attention: { since: "2026-10-09T05:00:00Z" } }, { attention: { since: "2026-10-10T08:48:00Z" } }];
+  expect(rows.sort(byWaitingAge).map((r) => r.attention.since)).toEqual(["2026-10-09T05:00:00Z", "2026-10-10T08:48:00Z", "2026-10-10T09:00:00Z"]);
 });

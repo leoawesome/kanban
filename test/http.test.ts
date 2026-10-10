@@ -204,7 +204,7 @@ test("chat endpoint validates and conflicts", async () => {
   expect([202, 409]).toContain(r.status);
 });
 
-test("inbox lists tickets across boards where Claude needs the user, not Review", async () => {
+test("inbox lists tickets across boards that need the user, Review included, oldest first", async () => {
   const a = tempDir("ck-plain-");
   const b = tempDir("ck-plain-");
   await fetch(`${base}/api/profiles`, json("POST", { name: "Inbox A", path: a }));
@@ -213,9 +213,17 @@ test("inbox lists tickets across boards where Claude needs the user, not Review"
   store.updateTicket("inbox-a", failed.id, { status: "planning", outcome: "failed", error: "boom" });
   const review = (await (await fetch(`${base}/api/profiles/inbox-b/tickets`, json("POST", { title: "check me", status: "backlog" }))).json()) as any;
   store.updateTicket("inbox-b", review.id, { status: "review", outcome: "done" });
+  // The failed run waits longer, so it comes first.
+  store.updateTicket("inbox-a", failed.id, { lastRunAt: "2026-10-01T00:00:00.000Z" });
+  store.updateTicket("inbox-b", review.id, { lastRunAt: "2026-10-02T00:00:00.000Z" });
   const inbox = (await (await fetch(`${base}/api/inbox`)).json()) as any[];
   const mine = inbox.filter((i) => i.profile.startsWith("inbox-"));
-  expect(mine).toEqual([{ profile: "inbox-a", profileName: "Inbox A", id: failed.id, title: "broken", attention: { kind: "failed", label: "Run failed" } }]);
+  expect(mine.map((i) => [i.title, i.attention.kind])).toEqual([["broken", "failed"], ["check me", "review"]]);
+  // The same tickets say "Your turn" on their cards.
+  for (const i of mine) {
+    const t = (await (await fetch(`${base}/api/profiles/${i.profile}/tickets/${i.id}`)).json()) as any;
+    expect(t.attention).toEqual(i.attention);
+  }
 });
 
 test("tickets lists a light row for every ticket on every board", async () => {

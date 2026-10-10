@@ -995,6 +995,11 @@ textarea { resize: vertical; font-size: 13.5px; }
 .inbox-title { font-weight: 560; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inbox-why { font-size: 12px; color: var(--warn); }
 .inbox-why.att-failed, .inbox-why.att-blocked { color: var(--err); }
+.inbox-why.att-review { color: var(--ok); }
+.inbox-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.inbox-board-name { color: var(--muted); }
+.inbox-age { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.inbox-age.old { color: var(--warn); font-weight: 600; }
 .search { position: relative; display: flex; align-items: center; }
 .search input { width: 240px; padding: 5px 28px 5px 30px; font-size: 13px; border-radius: 99px; background: var(--surface); border-color: var(--border); }
 .search input:focus { background: var(--bg); }

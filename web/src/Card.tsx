@@ -30,6 +30,8 @@ export function outcomeBadge(t: Ticket) {
   if (t.status === "in_progress") return workingBadge("Running", t.runStartedAt);
   if (t.running) return workingBadge("Replying", t.runStartedAt);
   if (t.error?.startsWith("corrupt")) return <span className="badge failed">Corrupt file</span>;
+  // Done means accepted: an old outcome there doesn't ask anything of the user.
+  if (t.status === "done") return null;
   switch (t.outcome) {
     case "blocked": return <span className="badge blocked">Blocked</span>;
     case "needs_input": return <span className="badge blocked">Needs your input</span>;
@@ -70,9 +72,10 @@ export function Card({ ticket, onClick, dragging, queued, held, huddle, onOpenHu
   huddle?: CardHuddleBadge | null; onOpenHuddle?: (ticketId: string) => void;
 }) {
   const working = (ticket.status === "in_progress" && !waitsForSlot(ticket)) || !!ticket.running;
-  const att = working ? null : ticket.attention ?? null;
+  const att = ticket.attention ?? null;
   const waitFor = resourceWait(ticket);
-  const badge = att ? null
+  // Its own huddle works on it: the huddle badge says so, not a stale Blocked or Failed.
+  const badge = att || (ticket.huddleBusy && huddle) ? null
     : waitFor.length ? <span className="badge wait" title={`Waiting for ${waitFor.join(", ")}: another ticket is using it`}>waiting</span>
     : queued && !working ? (held
       ? <span className="badge queued" title="A daemon restart is pending; queued tickets start right after it">Waits for restart</span>

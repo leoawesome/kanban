@@ -78,7 +78,7 @@ function focusCard(pos: CardPos | null, grid = cardGrid()) {
 
 /** Board filter chips; several on = tickets matching any of them. */
 const FILTERS = [
-  { id: "you", label: "Needs you", test: (t: Ticket) => !!t.attention && t.status !== "in_progress" && !t.running },
+  { id: "you", label: "Needs you", test: (t: Ticket) => !!t.attention },
   { id: "running", label: "Running", test: (t: Ticket) => t.status === "in_progress" || !!t.running },
   { id: "pr", label: "Has PR", test: (t: Ticket) => !!t.prUrl },
 ] as const;
@@ -419,7 +419,7 @@ export function App() {
           refreshInboxSoon();
           return;
         }
-        if (e.type === "ticket.updated" || e.type === "ticket.deleted" || e.type === "session.updated") refreshInboxSoon();
+        if (e.type === "ticket.updated" || e.type === "ticket.deleted" || e.type === "session.updated" || e.type === "huddle.updated") refreshInboxSoon();
         if (e.type === "schedule.updated" && e.profile === slug) refreshSchedulesSoon(slug);
         if (e.type === "ticket.updated" && e.profile === slug && e.ticket.scheduleId) refreshSchedulesSoon(slug);
         if (e.type === "ticket.updated" && e.profile === slug) {

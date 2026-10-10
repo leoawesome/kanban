@@ -9,7 +9,7 @@ import { addWorktree, branchesWithPrefix, branchExists, isGitRepo, listWorktrees
 import { MOVE_TO_PLANNING_RE, STAY_RE } from "./session";
 import { forkSessionFile } from "./fork";
 import { saveMockups } from "./mockups";
-import { ticketAttention, userWaitReason } from "./attention";
+import { type HostHuddle, ticketAttention, userWaitReason } from "./attention";
 import type { SessionSummary } from "./session";
 import { chatPrompt, firstRunPrompt, interruptedPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
 import {
@@ -164,6 +164,8 @@ export class Board {
   private restartPending = false;
   /** Other work a restart waits for besides board runs (huddle agents mid-turn), see onRestartBusy. */
   private restartBusy: (() => number)[] = [];
+  /** Each board's open huddles by host ticket (see onHostHuddles); none until Huddles registers. */
+  private hostHuddleStates: (slug: string) => Map<string, HostHuddle> = () => new Map();
   private sessionExists: (id: string) => boolean;
   private isSessionLive: (id: string, title: string | null) => Promise<boolean>;
   private notify: (title: string, body: string) => void;
@@ -264,7 +266,8 @@ export class Board {
   waitsOnUser(slug: string, id: string): boolean {
     const t = this.store.getTicket(slug, id);
     if (!t) return false;
-    const a = ticketAttention(this.store, slug, t, t.sessionId ? this.sessionSummary(t.sessionId) : null, this.isRunning(slug, id));
+    const a = ticketAttention(this.store, slug, t, t.sessionId ? this.sessionSummary(t.sessionId) : null, this.isRunning(slug, id),
+      this.hostHuddles(slug).get(id));
     return !!a && a.kind !== "review";
   }
 
@@ -1453,6 +1456,16 @@ export class Board {
   }
 
   /** Count more active work a restart waits for (e.g. huddle agents mid-turn). */
+  /** Huddles tells the board about its host tickets' huddles, which change whether those tickets need the user. */
+  onHostHuddles(f: (slug: string) => Map<string, HostHuddle>): void {
+    this.hostHuddleStates = f;
+  }
+
+  /** Open huddles by host ticket on a board. */
+  hostHuddles(slug: string): Map<string, HostHuddle> {
+    return this.hostHuddleStates(slug);
+  }
+
   onRestartBusy(busy: () => number): void {
     this.restartBusy.push(busy);
   }

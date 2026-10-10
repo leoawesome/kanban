@@ -17,7 +17,7 @@ import { HuddleError, Huddles, type Caller } from "./huddle";
 import { HuddleSessionCache, participantSession, participantTool } from "./huddle-session";
 import { HUDDLE_HEADER, SOURCE_HEADER } from "./huddle-roster";
 import { NOTES_CAP } from "./huddle-notes";
-import { ticketAttention, userWaitReason } from "./attention";
+import { byWaitingAge, huddleAsk, huddleBusy, ticketAttention, userWaitReason } from "./attention";
 import { isComplete, MAX_RETRIES, planActive } from "./plan";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
 import { AttachmentError, attachmentFile, attachmentType, IMAGE_TYPES, saveAttachment } from "./attachments";
@@ -96,7 +96,6 @@ class HttpError extends Error {
 
 const LOCAL_HOSTS = ["localhost", "127.0.0.1"];
 const DEFAULT_MAX_PARALLEL = 5;
-const INBOX_KINDS = new Set(["questions", "proposal", "reply", "blocked", "failed"]);
 /** Output extensions served with their image type (raster only) so the Outputs tab can preview them. */
 const OUTPUT_IMAGE_TYPES: Record<string, string> = {
   ...Object.fromEntries(Object.entries(IMAGE_TYPES).map(([t, e]) => [e, t])),
@@ -204,9 +203,11 @@ export function createServer(deps: ServerDeps) {
   };
   const strings = (v: unknown): string[] | undefined =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : undefined;
-  const view = (p: Profile, t: Ticket) => {
+  /** hosts: the board's open huddles by host ticket, when the caller already has them (one read per board). */
+  const view = (p: Profile, t: Ticket, hosts = board.hostHuddles(p.slug)) => {
     const running = board.isRunning(p.slug, t.id);
     const session = t.sessionId ? sessions.summary(t.sessionId) : null;
+    const huddle = hosts.get(t.id);
     return {
       ...t,
       running,
@@ -224,7 +225,9 @@ export function createServer(deps: ServerDeps) {
       resources: board.resourceState(p.slug, t),
       /** A plan child waiting on the user (never started by the plan until then). */
       userWait: t.parentId && !isComplete(t) ? userWaitReason(t, session) : null,
-      attention: ticketAttention(store, p.slug, t, session, running),
+      attention: ticketAttention(store, p.slug, t, session, running, huddle),
+      /** Its own huddle is working on it: the card shows "Huddle · n working" instead of an outcome badge. */
+      huddleBusy: !running && t.status !== "in_progress" && huddleBusy(huddle) && !huddleAsk(huddle),
     };
   };
 
@@ -333,15 +336,16 @@ export function createServer(deps: ServerDeps) {
     // How every teammate (huddle preset) and template was used, from the huddles on every board.
     if (parts[0] === "team-usage" && m === "GET") return json(huddles.usage());
     if (parts[0] === "inbox" && m === "GET") {
-      // Every board: tickets where Claude is waiting on the user (Review is left out on purpose).
+      // Every board: tickets that need the user (the same rule as the cards' "Your turn"), oldest first.
       const out = [];
       for (const p of store.listProfiles()) {
+        const hosts = board.hostHuddles(p.slug);
         for (const t of store.listTickets(p.slug)) {
-          const att = view(p, t).attention;
-          if (att && INBOX_KINDS.has(att.kind)) out.push({ profile: p.slug, profileName: p.name, id: t.id, title: t.title, attention: att });
+          const att = view(p, t, hosts).attention;
+          if (att) out.push({ profile: p.slug, profileName: p.name, id: t.id, title: t.title, attention: att });
         }
       }
-      return json(out);
+      return json(out.sort(byWaitingAge));
     }
 
     if (parts[0] === "tickets" && parts.length === 1 && m === "GET") {
@@ -691,7 +695,10 @@ export function createServer(deps: ServerDeps) {
     // /profiles/:p/tickets
     if (parts[2] !== "tickets") throw new HttpError(404, "not found");
     if (parts.length === 3) {
-      if (m === "GET") return json(store.listTickets(slug).map((t) => view(profile, t)));
+      if (m === "GET") {
+        const hosts = board.hostHuddles(slug);
+        return json(store.listTickets(slug).map((t) => view(profile, t, hosts)));
+      }
       if (m === "POST") {
         const b = await body(req);
         const title = String(b.title ?? "").trim();
@@ -1219,11 +1226,13 @@ export function createServer(deps: ServerDeps) {
             if (p) out = { ...e, ticket: view(p, e.ticket) };
           }
           send(`data: ${JSON.stringify(out)}\n\n`);
-          // Session changes (terminal chat, new questions) change the ticket's "your turn" state too.
-          if (e.type === "session.updated") {
-            const p = store.getProfile(e.profile);
-            const t = p && store.getTicket(e.profile, e.id);
-            if (p && t) send(`data: ${JSON.stringify({ type: "ticket.updated", profile: e.profile, ticket: view(p, t) })}\n\n`);
+          // Session changes (terminal chat, new questions) and the host's huddle change the ticket's "your turn" state too.
+          const changed = e.type === "session.updated" ? { profile: e.profile, id: e.id }
+            : e.type === "huddle.updated" ? { profile: e.profile, id: e.huddle.hostTicket } : null;
+          if (changed) {
+            const p = store.getProfile(changed.profile);
+            const t = p && store.getTicket(changed.profile, changed.id);
+            if (p && t) send(`data: ${JSON.stringify({ type: "ticket.updated", profile: changed.profile, ticket: view(p, t) })}\n\n`);
           }
         });
         ping = setInterval(() => send(": ping\n\n"), 15_000);

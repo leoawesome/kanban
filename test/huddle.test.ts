@@ -1113,6 +1113,33 @@ test("for you: tags of @you since the user's last post or action, brake messages
   expect(view()).toMatchObject({ forYou: 0, forYouSince: store.getHuddle("p", h.id)!.seq });
 }, 20000);
 
+test("needs you: a working huddle hides its host from the Inbox until it tags @you", async () => {
+  const t = await host();
+  store.updateTicket("p", t.id, { outcome: "blocked" });
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  const inbox = async () => (await (await fetch(`${client.url}/api/inbox`)).json()) as { id: string; attention: { kind: string; label: string; since: string } }[];
+  const card = async () => (await (await fetch(`${client.url}/api/profiles/p/tickets/${t.id}`)).json()) as { attention: { kind: string } | null; huddleBusy: boolean };
+  // Idle huddle: the ticket's own state shows.
+  expect(huddles.hostStates("p").get(t.id)).toMatchObject({ working: 0, queued: false, tagged: 0 });
+  expect((await inbox()).find((i) => i.id === t.id)?.attention.kind).toBe("blocked");
+  // Waking the reviewer: the huddle works, the host doesn't need the user and isn't Blocked.
+  process.env.FAKE_STEP_MS = "400";
+  huddles.post("p", h.id, you(h), "@reviewer look again");
+  const busy = huddles.hostStates("p").get(t.id)!;
+  expect(busy.working > 0 || busy.queued).toBe(true);
+  expect((await inbox()).some((i) => i.id === t.id)).toBe(false);
+  expect(await card()).toMatchObject({ attention: null, huddleBusy: true });
+  expect(board.waitsOnUser("p", t.id)).toBe(false);
+  await idle();
+  delete process.env.FAKE_STEP_MS;
+  // Tagging @you puts it back, waiting since that message.
+  huddles.post("p", h.id, participant(h, "reviewer"), "@you which provider?");
+  const row = (await inbox()).find((i) => i.id === t.id)!;
+  expect(row.attention).toMatchObject({ kind: "huddle", label: "Huddle: 1 for you", since: messages(h).at(-1)!.ts });
+  expect(await card()).toMatchObject({ attention: { kind: "huddle" }, huddleBusy: false });
+}, 20000);
+
 test("restart: a failed or stopped agent is idle again and wakes now on a live huddle", async () => {
   const t = await host();
   const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);

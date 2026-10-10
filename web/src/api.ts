@@ -80,7 +80,13 @@ export interface QuickChat {
   title: string | null;
 }
 
-export type AttentionKind = "failed" | "blocked" | "questions" | "proposal" | "review" | "reply";
+export type AttentionKind = "failed" | "blocked" | "questions" | "proposal" | "review" | "reply" | "huddle";
+/** Why a ticket needs you (one server rule for cards, counts and the Inbox); since: when it started waiting. */
+export interface Attention {
+  kind: AttentionKind;
+  label: string;
+  since: string;
+}
 
 export interface Profile {
   name: string;
@@ -168,7 +174,9 @@ export interface Ticket {
   resumeCommand?: string | null;
   session?: SessionSummary | null;
   /** Why the ticket is waiting on you ("Your turn"), computed by the server. */
-  attention?: { kind: AttentionKind; label: string } | null;
+  attention?: Attention | null;
+  /** Its own huddle is working: the card shows the huddle badge instead of an outcome badge. */
+  huddleBusy?: boolean;
   /** Output files published as claude.ai pages from the Share menu, one link per file. */
   shareLinks?: ShareLink[];
   /** Teammate cards in the chat the user answered, by entry uuid (src/server/types.ts). */
@@ -741,7 +749,7 @@ export interface InboxItem {
   profileName: string;
   id: string;
   title: string;
-  attention: { kind: AttentionKind; label: string };
+  attention: Attention;
 }
 
 /** A ticket on any board, as the ⌘K command bar lists it. */

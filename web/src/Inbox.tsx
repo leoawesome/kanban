@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { InboxItem } from "./api";
 import { useLayer } from "./layers";
+import { fullTime, OLD_WAIT_MS, useNow, waitedFor } from "./time";
 
-/** Top-bar "N need you" across every board; the list jumps straight to a ticket. ↑↓ move, Esc closes. */
+/**
+ * Top-bar "N need you" across every board, oldest wait first, each with how long it has waited (marked after 8h);
+ * the list jumps straight to a ticket. ↑↓ move, Esc closes.
+ */
 export function Inbox({ items, onPick, openRequest }: { items: InboxItem[]; onPick: (i: InboxItem) => void; openRequest?: number }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -44,8 +48,10 @@ export function Inbox({ items, onPick, openRequest }: { items: InboxItem[]; onPi
     else if (e.key === "Tab") setOpen(false);
   };
 
+  const now = useNow();
   if (!items.length) return null;
-  const boards = [...new Set(items.map((i) => i.profile))];
+  const several = new Set(items.map((i) => i.profile)).size > 1;
+  const sorted = [...items].sort((a, b) => a.attention.since.localeCompare(b.attention.since));
 
   return (
     <div className="inbox" ref={root}>
@@ -62,18 +68,20 @@ export function Inbox({ items, onPick, openRequest }: { items: InboxItem[]; onPi
       </button>
       {open && (
         <div className="inbox-menu" role="menu" ref={menu} onKeyDown={onMenuKey}>
-          {boards.map((b) => {
-            const group = items.filter((i) => i.profile === b);
+          {sorted.map((i) => {
+            const old = now - new Date(i.attention.since).getTime() > OLD_WAIT_MS;
             return (
-              <div key={b} className="inbox-group" role="group" aria-label={group[0].profileName}>
-                <div className="inbox-board" aria-hidden>{group[0].profileName}</div>
-                {group.map((i) => (
-                  <button key={i.id} role="menuitem" className="inbox-item" onClick={() => { setOpen(false); onPick(i); }}>
-                    <span className="inbox-title">{i.title}</span>
-                    <span className={`inbox-why att-${i.attention.kind}`}>{i.attention.label}</span>
-                  </button>
-                ))}
-              </div>
+              <button key={`${i.profile}/${i.id}`} role="menuitem" className="inbox-item" onClick={() => { setOpen(false); onPick(i); }}>
+                <span className="inbox-title">{i.title}</span>
+                <span className="inbox-row">
+                  <span className={`inbox-why att-${i.attention.kind}`}>
+                    {i.attention.label}{several && <span className="inbox-board-name"> · {i.profileName}</span>}
+                  </span>
+                  <time className={`inbox-age${old ? " old" : ""}`} dateTime={i.attention.since} title={`Waiting since ${fullTime(i.attention.since)}`}>
+                    waiting {waitedFor(i.attention.since, now)}
+                  </time>
+                </span>
+              </button>
             );
           })}
         </div>

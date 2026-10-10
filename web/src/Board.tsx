@@ -95,7 +95,7 @@ function Column({ id, label, hint, claude, tickets, queue = [], held = false, on
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${id}`, data: { status: id } });
   const all = [...tickets, ...queue];
-  const needYou = all.filter((t) => t.attention && !t.running && t.status !== "in_progress").length;
+  const needYou = all.filter((t) => t.attention).length;
   const total = `${all.length} ${all.length === 1 ? "ticket" : "tickets"}${queue.length ? `, ${queue.length} queued` : ""}`;
   const countLabel = needYou > 0 ? `${total}, ${needYou} ${needYou === 1 ? "needs" : "need"} you` : total;
   const canAdd = id !== "in_progress" && id !== "done";

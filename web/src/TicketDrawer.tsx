@@ -457,7 +457,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               <span className="yt-dot" aria-hidden /><span className="yt-label">Your turn</span><span className="yt-why">{att.label}</span>
             </span>
           )}
-          {!att && outcomeBadge(ticket)}
+          {!att && !ticket.huddleBusy && outcomeBadge(ticket)}
           {nav && (
             <span className="ticket-nav">
               <button className="icon-btn" disabled={!nav.prev || editing} onClick={() => step(nav.prev)} aria-label="Previous ticket"

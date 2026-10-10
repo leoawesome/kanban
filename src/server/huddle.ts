@@ -52,6 +52,7 @@ import {
 import {
   BUILTIN_TEMPLATES, deleteTemplate, type HuddleTemplate, type HuddleTemplateView, mergeTemplates, saveTemplate, templateBrief,
 } from "./huddle-templates";
+import type { HostHuddle } from "./attention";
 import { huddleUsage, type Usage } from "./huddle-usage";
 import { isLevel, type Level, lowerLevels } from "./layers";
 import { huddleAgentPrompt, huddleAgentSystemPrompt, huddleDigest, huddleMainPrompt } from "./prompts";
@@ -185,6 +186,8 @@ export class Huddles {
     this.sessionExists = opts.sessionExists ?? claudeSessionExists;
     // A pending restart waits for huddle agents mid-turn too.
     board.onRestartBusy(() => this.busy());
+    // "Needs you" on a host ticket depends on its huddle (attention.ts).
+    board.onHostHuddles((slug) => this.hostStates(slug));
     // A monitor-mode ticket session gets what came in while it worked once its run is over.
     bus.on((e) => {
       if (e.type === "activity") return this.mainResult(e.profile, e.id, e.event);
@@ -334,6 +337,38 @@ export class Huddles {
       forYouSince: since,
       learningsPending,
     };
+  }
+
+  /**
+   * Each open huddle by host ticket, as "needs you" sees it (attention.ts): who is working, whether a wake is on its
+   * way, and what waits for the user (tags since they last looked, pending learnings, a close request) since when.
+   */
+  hostStates(slug: string): Map<string, HostHuddle> {
+    const out = new Map<string, HostHuddle>();
+    for (const h of this.store.listHuddles(slug)) {
+      if (h.status === "closed") continue;
+      const msgs = this.store.readHuddleMessages(slug, h.id);
+      const seen = userSeenSeq(h, msgs);
+      const tagged = msgs.filter((m) => isForYou(m, seen));
+      const learnings = pendingLearnings(h);
+      const live = h.status === "live";
+      const agents = h.participants.filter((p) => p.kind !== "human");
+      const queued = live && agents.some((p) => {
+        if (this.mainPending.has(this.key(slug, h.id, p.handle))) return true;
+        const run = this.runs.get(this.key(slug, h.id, p.handle));
+        return !!run && !run.stopRequested && (!run.handle || run.pending || run.again);
+      });
+      const times = [...tagged.map((m) => m.ts), ...learnings.map((l) => l.at), h.closeRequest?.at].filter((t): t is string => !!t);
+      out.set(h.hostTicket, {
+        working: live ? agents.filter((p) => this.working(slug, h, p)).length : 0,
+        queued,
+        tagged: tagged.length,
+        learnings: learnings.length,
+        closeRequest: !!h.closeRequest,
+        since: times.length ? times.reduce((a, b) => (a < b ? a : b)) : null,
+      });
+    }
+    return out;
   }
 
   /** Live, nobody working, nobody with an unanswered tag and no open findings; idleSince: the last message or turn. */
