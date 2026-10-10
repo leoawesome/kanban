@@ -1,4 +1,5 @@
-// Huddle rosters, presets and @mentions: plain helpers shared by the daemon (huddle.ts) and the MCP server.
+// Huddle rosters and @mentions: plain helpers shared by the daemon (huddle.ts) and the MCP server.
+import { MAIN_PRESET } from "./huddle-presets";
 import type { HuddleMode, HuddleWorkspace } from "./types";
 
 export const DEFAULT_MAX_PARTICIPANTS = 8;
@@ -16,43 +17,9 @@ export const RESERVED_HANDLES = new Set([MAIN_HANDLE, USER_HANDLE, "all", "syste
 export const NO_EDIT_TOOLS = "Edit,Write,NotebookEdit";
 const MAX_COUNT = 8;
 
-export interface HuddlePreset {
-  role: string;
-  prompt: string;
-  mode: HuddleMode;
-  lead: boolean;
-  workspace: HuddleWorkspace;
-}
-
-/** Built-in presets (editing presets is a separate feature). */
-export const HUDDLE_PRESETS: Record<string, HuddlePreset> = {
-  reviewer: {
-    role: "Code reviewer", mode: "tagged", lead: false, workspace: "shared",
-    prompt: "Review the host ticket's changes (git diff against its base branch) for correctness bugs, risky edge cases, security problems and missing tests. " +
-      "Report concrete findings with file:line and why each one matters; skip style nits.",
-  },
-  qa: {
-    role: "QA tester", mode: "monitor", lead: false, workspace: "shared",
-    prompt: "Test the work like a careful QA engineer: run the app and the tests, try edge cases and unhappy paths, and reproduce every bug with exact steps. " +
-      "Put test scripts and reports in your outputs folder. Post each confirmed bug with steps to reproduce, expected and actual.",
-  },
-  "qa-lead": {
-    role: "QA lead", mode: "monitor", lead: true, workspace: "shared",
-    prompt: "Lead the QA testers: split the areas to test between them, check and de-duplicate what they find, and keep the pinned findings list current " +
-      "with huddle_findings. When testing is done, send @main one consolidated list of what needs fixing, most severe first.",
-  },
-  engineer: {
-    role: "Engineer", mode: "tagged", lead: false, workspace: "own",
-    prompt: "Implement the part of the work you are given in your own worktree and branch, with tests. Commit there and tell @main the branch and what changed.",
-  },
-  security: {
-    role: "Security reviewer", mode: "tagged", lead: false, workspace: "shared",
-    prompt: "Review the host ticket's changes for security problems: injection, auth and permission gaps, secrets, unsafe file or shell use. Report each with file:line and impact.",
-  },
-};
-
-/** One line of a roster: `count` participants made from a preset (or a free-form role). */
+/** One line of a roster: `count` participants made from a preset (or a free-form role with its own prompt). */
 export interface RosterEntry {
+  /** Preset name (built-in or the board's, see huddle-presets.ts). */
   preset?: string;
   role?: string;
   count?: number;
@@ -61,6 +28,8 @@ export interface RosterEntry {
   mode?: HuddleMode;
   workspace?: HuddleWorkspace;
   lead?: boolean;
+  /** May edit tracked files (only applies in its own worktree). Default: the preset's, else true for an own worktree. */
+  canEdit?: boolean;
   /** Handle (or handle prefix when count > 1). Default: the preset or role name. */
   handle?: string;
   /** Extra instructions on top of the preset's. */
@@ -73,11 +42,16 @@ export function handleBase(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "agent";
 }
 
-/** What's wrong with one roster entry, or null. */
-export function rosterEntryError(e: any, at = ""): string | null {
+/**
+ * What's wrong with one roster entry, or null. `presets`: the board's preset names (built-ins included);
+ * without it only the shape is checked (the daemon checks the name).
+ */
+export function rosterEntryError(e: any, at = "", presets?: string[]): string | null {
   if (!e || typeof e !== "object") return `${at}each entry must be an object`;
-  if (e.preset !== undefined && (!isText(e.preset) || !HUDDLE_PRESETS[e.preset.trim()])) {
-    return `${at}unknown preset "${e.preset}" (presets: ${Object.keys(HUDDLE_PRESETS).join(", ")}; or give a role instead)`;
+  if (e.preset !== undefined && !isText(e.preset)) return `${at}preset must be a preset name`;
+  if (isText(e.preset) && e.preset.trim() === MAIN_PRESET) return `${at}"${MAIN_PRESET}" is the coordinator's preset (the host ticket's session joins as @main by itself)`;
+  if (isText(e.preset) && presets && !presets.includes(e.preset.trim())) {
+    return `${at}unknown preset "${e.preset}" (presets: ${presets.filter((n) => n !== MAIN_PRESET).join(", ")}; or give a role and a prompt instead)`;
   }
   if (e.preset === undefined && !isText(e.role)) return `${at}give a preset or a role`;
   if (e.role !== undefined && !isText(e.role)) return `${at}role must be text`;
@@ -87,16 +61,18 @@ export function rosterEntryError(e: any, at = ""): string | null {
   for (const k of ["focus", "model", "handle", "prompt"]) {
     if (e[k] !== undefined && e[k] !== null && typeof e[k] !== "string") return `${at}${k} must be text`;
   }
-  if (e.lead !== undefined && typeof e.lead !== "boolean") return `${at}lead must be true or false`;
+  for (const k of ["lead", "canEdit"]) {
+    if (e[k] !== undefined && typeof e[k] !== "boolean") return `${at}${k} must be true or false`;
+  }
   if (isText(e.handle) && RESERVED_HANDLES.has(handleBase(e.handle))) return `${at}handle "${e.handle}" is reserved`;
   return null;
 }
 
 /** What's wrong with a roster (propose_huddle, starting a huddle), or null. */
-export function rosterError(roster: unknown, max = DEFAULT_MAX_PARTICIPANTS): string | null {
+export function rosterError(roster: unknown, max = DEFAULT_MAX_PARTICIPANTS, presets?: string[]): string | null {
   if (!Array.isArray(roster) || !roster.length) return "roster must be a non-empty list";
   for (const [i, e] of roster.entries()) {
-    const err = rosterEntryError(e, `entry ${i + 1}: `);
+    const err = rosterEntryError(e, `entry ${i + 1}: `, presets);
     if (err) return err;
   }
   // The coordinator (@main) counts too.

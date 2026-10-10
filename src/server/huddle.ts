@@ -14,9 +14,12 @@ import { claudeSessionExists, type Board } from "./board";
 import type { Bus } from "./events";
 import { addWorktree, isGitRepo, worktreeDir } from "./git";
 import {
-  DEFAULT_MAX_PARTICIPANTS, handleBase, HUDDLE_AGENT_ENV, HUDDLE_PRESETS, MAIN_HANDLE, NO_EDIT_TOOLS, parseMentions, RESERVED_HANDLES, rosterEntryError,
+  DEFAULT_MAX_PARTICIPANTS, handleBase, HUDDLE_AGENT_ENV, MAIN_HANDLE, NO_EDIT_TOOLS, parseMentions, RESERVED_HANDLES, rosterEntryError,
   rosterError, USER_HANDLE, type RosterEntry,
 } from "./huddle-roster";
+import {
+  deletePreset, type HuddlePreset, type HuddlePresetView, MAIN_PRESET, mergePresets, savePreset,
+} from "./huddle-presets";
 import { huddleAgentPrompt, huddleAgentSystemPrompt, huddleDigest, huddleMainPrompt } from "./prompts";
 import { buildArgs, MONITOR_IDLE_MS, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
@@ -173,6 +176,41 @@ export class Huddles {
     return { h, me: h.participants.find((p) => p.kind === "human")! };
   }
 
+  // ---- Role presets (built-ins + the board's huddle-presets.json) ----
+
+  presets(slug: string): HuddlePresetView[] {
+    return mergePresets(this.store.listHuddlePresets(slug));
+  }
+
+  private presetMap(slug: string): Map<string, HuddlePreset> {
+    return new Map(this.presets(slug).map((p) => [p.name, p]));
+  }
+
+  /** Add or change a board preset (a built-in's name overrides it). */
+  savePreset(slug: string, input: unknown): HuddlePresetView {
+    if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
+    let r: ReturnType<typeof savePreset>;
+    try {
+      r = savePreset(this.store.listHuddlePresets(slug), input);
+    } catch (e) {
+      throw new HuddleError(400, (e as Error).message);
+    }
+    this.store.saveHuddlePresets(slug, r.board);
+    return this.presets(slug).find((p) => p.name === r.preset.name)!;
+  }
+
+  /** Delete a board preset, or reset an overridden built-in. Built-ins themselves can't be deleted. */
+  deletePreset(slug: string, name: string): { reset: boolean; presets: HuddlePresetView[] } {
+    let r: ReturnType<typeof deletePreset>;
+    try {
+      r = deletePreset(this.store.listHuddlePresets(slug), name);
+    } catch (e) {
+      throw new HuddleError(/built-in/.test((e as Error).message) ? 409 : 404, (e as Error).message);
+    }
+    this.store.saveHuddlePresets(slug, r.board);
+    return { reset: r.reset, presets: this.presets(slug) };
+  }
+
   // ---- Changing ----
 
   /** Read, change and save a huddle in one step (nothing else runs in between), then tell the UI. */
@@ -220,20 +258,25 @@ export class Huddles {
     const max = Math.max(2, Math.min(32, Math.round(opts.maxParticipants ?? DEFAULT_MAX_PARTICIPANTS)));
     const open = this.store.listHuddles(slug).find((h) => h.hostTicket === hostId && h.status !== "closed");
     if (open) throw new HuddleError(409, `ticket ${hostId} already has an open huddle (${open.id}); close it first`);
-    const err = rosterError(roster, max);
+    const presets = this.presetMap(slug);
+    const err = rosterError(roster, max, [...presets.keys()]);
     if (err) throw new HuddleError(400, err);
     const at = nowIso();
+    const main = presets.get(MAIN_PRESET)!;
     const base = { prompt: "", focus: undefined, sessionId: null, status: "idle" as const, cursor: 0, joinedAt: at, workspace: "shared" as const, preset: null };
     const h: Huddle = {
       id: `h_${newId()}`, hostTicket: hostId, status: "live", maxParticipants: max, findings: [], invited: [], seq: 0, createdAt: at, updatedAt: at,
       participants: [
         { ...base, handle: USER_HANDLE, role: "User", model: null, mode: "monitor", lead: true, canEdit: false, kind: "human" },
-        { ...base, handle: MAIN_HANDLE, role: "Coordinator", model: null, mode: "tagged", lead: true, canEdit: true, kind: "ticket-main", ticketId: hostId },
+        {
+          ...base, handle: MAIN_HANDLE, role: main.role, preset: MAIN_PRESET, prompt: main.prompt, model: null, mode: main.mode, lead: true, canEdit: true,
+          kind: "ticket-main", ticketId: hostId,
+        },
       ],
     };
     const agents: HuddleParticipant[] = [];
     for (const e of roster) {
-      const ps = this.expand(e, h.participants.map((p) => p.handle));
+      const ps = this.expand(e, h.participants.map((p) => p.handle), presets);
       h.participants.push(...ps);
       agents.push(...ps);
     }
@@ -245,8 +288,8 @@ export class Huddles {
   }
 
   /** Participants made from one roster entry, with handles not in `taken`. */
-  private expand(e: RosterEntry, taken: string[]): HuddleParticipant[] {
-    const preset = e.preset ? HUDDLE_PRESETS[e.preset.trim()] : undefined;
+  private expand(e: RosterEntry, taken: string[], presets: Map<string, HuddlePreset>): HuddleParticipant[] {
+    const preset = e.preset ? presets.get(e.preset.trim()) : undefined;
     const count = e.count ?? 1;
     const base = handleBase(e.handle?.trim() || e.preset?.trim() || e.role!);
     const used = new Set([...taken, ...RESERVED_HANDLES]);
@@ -263,9 +306,9 @@ export class Huddles {
         handle, role: e.role?.trim() || preset?.role || base, preset: e.preset?.trim() ?? null,
         prompt: [preset?.prompt, e.prompt?.trim()].filter(Boolean).join("\n\n") || `Help with the ticket as ${e.role}.`,
         ...(e.focus?.trim() ? { focus: e.focus.trim() } : {}),
-        model: e.model?.trim() || null, mode: e.mode ?? preset?.mode ?? "tagged", lead: e.lead ?? preset?.lead ?? false,
+        model: e.model?.trim() || preset?.model || null, mode: e.mode ?? preset?.mode ?? "tagged", lead: e.lead ?? preset?.lead ?? false,
         // Only an agent in its own worktree may edit: the shared worktree is the coordinator's.
-        canEdit: workspace === "own", workspace, sessionId: null, status: "idle", kind: "agent", cursor: 0, joinedAt: nowIso(), token: newId() + newId(),
+        canEdit: workspace === "own" && (e.canEdit ?? preset?.canEdit ?? true), workspace, sessionId: null, status: "idle", kind: "agent", cursor: 0, joinedAt: nowIso(), token: newId() + newId(),
       });
     }
     return out;
@@ -284,7 +327,8 @@ export class Huddles {
     const h = this.get(slug, hid);
     this.assertOpen(h);
     if (!canManage(h, by)) throw new HuddleError(403, `only a lead or @main can add participants; ask them (or the user) in the huddle`);
-    const err = rosterEntryError(e);
+    const presets = this.presetMap(slug);
+    const err = rosterEntryError(e, "", [...presets.keys()]);
     if (err) throw new HuddleError(400, err);
     const want = e.count ?? 1;
     const room = h.maxParticipants - this.nonHuman(h);
@@ -292,7 +336,7 @@ export class Huddles {
       throw new HuddleError(409, `the huddle is full: ${this.nonHuman(h)} of ${h.maxParticipants} participants${room > 0 ? `, room for ${room} more` : ""}. ` +
         "Don't work around the limit: ask the user (tag @you) to raise it or stop someone.");
     }
-    const added = this.expand(e, h.participants.map((p) => p.handle));
+    const added = this.expand(e, h.participants.map((p) => p.handle), presets);
     this.update(slug, hid, (x) => {
       x.participants.push(...added);
     });

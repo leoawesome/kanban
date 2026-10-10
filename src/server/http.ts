@@ -615,6 +615,15 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
 
+    // /profiles/:p/huddle-presets[/:name] — huddle role presets: built-ins merged with the board's own (any caller, runs included)
+    if (parts[2] === "huddle-presets") {
+      if (parts.length === 3 && m === "GET") return json(huddles.presets(slug));
+      if (parts.length === 3 && m === "POST") return json(huddles.savePreset(slug, await body(req)), 201);
+      if (parts.length === 4 && m === "PUT") return json(huddles.savePreset(slug, { ...(await body(req)), name: parts[3] }));
+      if (parts.length === 4 && m === "DELETE") return json(huddles.deletePreset(slug, parts[3]));
+      throw new HttpError(404, "not found");
+    }
+
     // /profiles/:p/huddles — shared rooms where several Claude sessions work on a ticket (see huddle.ts)
     if (parts[2] === "huddles") return huddleApi(req, url, slug, parts.slice(3));
 

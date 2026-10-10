@@ -7,6 +7,7 @@ import YAML from "yaml";
 import type {
   ActivityEntry, Comment, Config, Huddle, HuddleMessage, OutputFile, Profile, Schedule, ScheduleHistoryEntry, Status, Ticket, TicketMode, TicketQuestion,
 } from "./types";
+import { cleanPresets, type HuddlePreset } from "./huddle-presets";
 import { newId, newTicketId, nowIso } from "./util";
 
 const DEFAULT_CONFIG: Config = { port: 7777, prPollMinutes: 5 };
@@ -305,6 +306,21 @@ export class Store {
 
   saveQuestions(slug: string, qs: TicketQuestion[]): void {
     atomicWrite(join(this.profileDir(slug), "questions.json"), JSON.stringify(qs, null, 2) + "\n");
+  }
+
+  /** The board's own huddle presets and overrides of the built-ins (merge with mergePresets). */
+  listHuddlePresets(slug: string): HuddlePreset[] {
+    const file = join(this.profileDir(slug), "huddle-presets.json");
+    if (!existsSync(file)) return [];
+    try {
+      return cleanPresets(JSON.parse(readFileSync(file, "utf8")));
+    } catch {
+      return [];
+    }
+  }
+
+  saveHuddlePresets(slug: string, ps: HuddlePreset[]): void {
+    atomicWrite(join(this.profileDir(slug), "huddle-presets.json"), JSON.stringify(ps, null, 2) + "\n");
   }
 
   private huddlesDir(slug: string) {

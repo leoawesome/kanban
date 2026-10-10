@@ -412,6 +412,19 @@ export interface McpConfig extends McpAddInput {
   commandLine: string | null;
 }
 
+/** A huddle role preset (src/server/huddle-presets.ts): built-in, a board override of one, or the board's own. */
+export interface HuddlePreset {
+  name: string;
+  role: string;
+  prompt: string;
+  model: string | null;
+  mode: "tagged" | "monitor";
+  lead: boolean;
+  canEdit: boolean;
+  workspace: "shared" | "own";
+  source: "builtin" | "override" | "board";
+}
+
 export interface Schedule {
   id: string;
   name: string;
@@ -553,6 +566,12 @@ export const api = {
   deleteProfile: (slug: string) => req<void>("DELETE", `/api/profiles/${slug}`),
   detectSetup: (slug: string) => req<SetupDetection>("POST", `/api/profiles/${slug}/detect-setup`),
   tickets: (slug: string) => req<Ticket[]>("GET", t(slug)),
+  huddlePresets: (slug: string) => req<HuddlePreset[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets`),
+  saveHuddlePreset: (slug: string, p: Omit<HuddlePreset, "source">) =>
+    req<HuddlePreset>("POST", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets`, p),
+  /** Deletes a board preset, or resets an overridden built-in. */
+  deleteHuddlePreset: (slug: string, name: string) =>
+    req<{ reset: boolean; presets: HuddlePreset[] }>("DELETE", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets/${encodeURIComponent(name)}`),
   files: (slug: string, path: string) =>
     req<{ path: string; entries: FileEntry[] }>("GET", `/api/profiles/${encodeURIComponent(slug)}/files?path=${encodeURIComponent(path)}`),
   file: (slug: string, path: string) =>

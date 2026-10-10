@@ -4,7 +4,8 @@ import {
   assertCanChange, BoardClient, bugReportText, ClientError, huddleCaller, parseMode, parseStatus, profileList, resolveProfile, RUN_ENV, runProfile,
   ticketLine, ticketText, type HuddlePage, type ScheduleHistoryInfo, type ScheduleInfo, type ScheduleInput, type TicketPatch,
 } from "./client";
-import { HUDDLE_PRESETS, rosterEntryError, rosterError } from "./server/huddle-roster";
+import { BUILTIN_PRESETS, MAIN_PRESET, presetLine } from "./server/huddle-presets";
+import { rosterEntryError, rosterError } from "./server/huddle-roster";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -105,7 +106,8 @@ export interface ToolContext {
   client: Pick<BoardClient,
     | "listProfiles" | "listTickets" | "getTicket" | "createTicket" | "updateTicket" | "deleteTicket" | "chat" | "stop" | "listComments"
     | "comment" | "ask" | "pollQuestion" | "replyQuestion" | "reportBug" | "listSchedules" | "createSchedule" | "updateSchedule" | "deleteSchedule" | "runSchedule"
-    | "scheduleHistory" | "cronPreview" | "adopt" | "planAction" | "huddleRead" | "huddlePost" | "huddleMode" | "huddleAdd" | "huddleFindings">;
+    | "scheduleHistory" | "cronPreview" | "adopt" | "planAction" | "huddleRead" | "huddlePost" | "huddleMode" | "huddleAdd" | "huddleFindings"
+    | "listHuddlePresets" | "saveHuddlePreset" | "deleteHuddlePreset">;
   cwd: string;
   env: Record<string, string | undefined>;
   main?: (dir: string) => string | null;
@@ -561,12 +563,16 @@ const HUDDLE = {
   type: "string",
   description: "Huddle id (h_...). Omit inside a board run to use your own huddle; required outside one.",
 };
-const PRESET_NAMES = Object.keys(HUDDLE_PRESETS);
+const BUILTIN_NAMES = BUILTIN_PRESETS.filter((p) => p.name !== MAIN_PRESET).map((p) => p.name);
 const ROSTER_ENTRY = {
   type: "object",
   properties: {
-    preset: { type: "string", enum: PRESET_NAMES, description: `Built-in role: ${PRESET_NAMES.map((n) => `${n} (${HUDDLE_PRESETS[n].role}, ${HUDDLE_PRESETS[n].mode})`).join(", ")}.` },
-    role: { type: "string", description: "Free-form role when no preset fits, e.g. \"Accessibility tester\"." },
+    preset: {
+      type: "string",
+      description: `Role preset name: built-ins ${BUILTIN_NAMES.join(", ")}, plus the board's own (list_huddle_presets shows them all with their prompts). ` +
+        "It sets the role, prompt, model, mode, lead, canEdit and workspace defaults; the fields below override them.",
+    },
+    role: { type: "string", description: "Free-text role when no preset fits, e.g. \"Accessibility tester\" (give its prompt too). With a preset: overrides its label." },
     count: { type: "integer", minimum: 1, maximum: 8, description: "How many of this role (handles get -1, -2, ...). Default 1." },
     focus: { type: "string", description: "What exactly this participant should look at." },
     model: { type: "string", description: "Model, e.g. sonnet. Default: the board's." },
@@ -576,6 +582,8 @@ const ROSTER_ENTRY = {
       description: "shared: works in the host ticket's worktree, read-only (review, QA). own: a new git worktree off the host's branch where it may edit (several agents writing code in parallel).",
     },
     lead: { type: "boolean", description: "May add participants and manage the findings list." },
+    canEdit: { type: "boolean", description: "May edit tracked files; only applies with workspace own. Default: the preset's (true for a free-text role in its own worktree)." },
+    prompt: { type: "string", description: "Instructions: with a preset, added to its prompt; with a free-text role, its whole job." },
     handle: { type: "string", description: "Handle for @mentions. Default: the preset or role." },
   },
 };
@@ -664,7 +672,7 @@ const HUDDLE_TOOLS: Tool[] = [
   {
     name: "huddle_add_participant",
     description:
-      "Add participants to your huddle (leads and @main only). Give a preset or a role, how many, and their focus. " +
+      "Add participants to your huddle (leads and @main only). Give a preset (list_huddle_presets) or a free-text role with a prompt, how many, and their focus. " +
       "The huddle has a participant limit; when it is full the call fails: then ask the user (tag @you) instead of working around it.",
     inputSchema: { type: "object", properties: { ...ROSTER_ENTRY.properties, huddle: HUDDLE, profile: PROFILE }, required: ["focus"] },
     changes: true,
@@ -722,10 +730,66 @@ const HUDDLE_TOOLS: Tool[] = [
     },
     annotations: { readOnlyHint: true },
     changes: false,
-    async run(args) {
-      const e = rosterError(args?.roster);
+    async run(args, ctx) {
+      // The board's presets, when the daemon is reachable; otherwise only the shape is checked here and the daemon checks names at Start.
+      const names = await slugFor(args, ctx).then((slug) => ctx.client.listHuddlePresets(slug)).then((ps) => ps.map((p) => p.name), () => undefined);
+      const e = rosterError(args?.roster, undefined, names);
       if (e) throw new ClientError(`${e}. Fix it and call propose_huddle again.`);
       return SHOWN;
+    },
+  },
+  {
+    name: "list_huddle_presets",
+    description: "List the board's huddle role presets (built-ins and the board's own) with their prompt, default model, mode, lead, canEdit and workspace. Use the names in propose_huddle and huddle_add_participant.",
+    inputSchema: { type: "object", properties: { profile: PROFILE } },
+    annotations: { readOnlyHint: true },
+    changes: false,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const ps = await ctx.client.listHuddlePresets(slug);
+      return `Huddle presets on board ${slug}:\n${ps.map(presetLine).join("\n")}`;
+    },
+  },
+  {
+    name: "save_huddle_preset",
+    description:
+      "Create or change a huddle role preset on this board, e.g. when a role you need keeps coming up. Saving a built-in's name (reviewer, qa, qa-lead, engineer, security, main) " +
+      "overrides it on this board; delete_huddle_preset resets it. Fields you leave out keep the existing preset's values.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Preset name, also the default @handle, e.g. \"a11y\" (lowercase letters, digits, dashes)." },
+        prompt: { type: "string", description: "What this role does in a huddle: its job, what to look at, how to report." },
+        role: { type: "string", description: "Label shown in the huddle, e.g. \"Accessibility tester\". Default: from the name." },
+        model: { type: "string", description: "Default model, e.g. sonnet. Empty: the board's." },
+        mode: { type: "string", enum: ["tagged", "monitor"], description: "tagged: sleeps until @mentioned. monitor: gets every new message. Default tagged." },
+        lead: { type: "boolean", description: "May add participants and manage the findings list. Default false." },
+        canEdit: { type: "boolean", description: "May edit tracked files (only in its own worktree). Default: true for workspace own." },
+        workspace: { type: "string", enum: ["shared", "own"], description: "shared: read-only in the host ticket's worktree. own: its own worktree and branch. Default shared." },
+        profile: PROFILE,
+      },
+      required: ["name", "prompt"],
+    },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const { profile: _p, ...input } = args ?? {};
+      const slug = await slugFor(args, ctx);
+      const p = await ctx.client.saveHuddlePreset(slug, input);
+      return `Saved preset "${p.name}" on board ${slug}${p.source === "override" ? " (overrides the built-in)" : ""}:\n${presetLine(p)}`;
+    },
+  },
+  {
+    name: "delete_huddle_preset",
+    description: "Delete one of the board's own huddle presets, or reset a changed built-in to its default. Built-in presets themselves can't be deleted.",
+    inputSchema: { type: "object", properties: { name: { type: "string", description: "Preset name." }, profile: PROFILE }, required: ["name"] },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      const slug = await slugFor(args, ctx);
+      const name = str(args, "name")!.trim();
+      const r = await ctx.client.deleteHuddlePreset(slug, name);
+      return r.reset ? `Reset "${name}" to the built-in preset on board ${slug}.` : `Deleted preset "${name}" from board ${slug}.`;
     },
   },
 ];

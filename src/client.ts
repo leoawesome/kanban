@@ -1,6 +1,7 @@
 // Talks to the local daemon's HTTP API for the `ckanban ticket` CLI and the `ckanban mcp` server.
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
+import type { HuddlePresetView } from "./server/huddle-presets";
 import { HUDDLE_AGENT_ENV, HUDDLE_HEADER, type RosterEntry } from "./server/huddle-roster";
 import { RUN_HEADER } from "./server/scheduler";
 import { defaultRoot, Store } from "./server/store";
@@ -279,6 +280,13 @@ export class BoardClient {
     this.req<{ entry: ScheduleHistoryInfo; schedule: ScheduleInfo }>("POST", `${this.s(slug, id)}/run`, {});
   scheduleHistory = (slug: string, id: string) => this.req<ScheduleHistoryInfo[]>("GET", `${this.s(slug, id)}/history`);
   cronPreview = (expr: string) => this.req<CronPreviewInfo>("GET", `/api/cron/preview?expr=${encodeURIComponent(expr)}`);
+
+  // Huddle role presets: built-ins merged with the board's own.
+  private hp = (slug: string, name?: string) =>
+    `/api/profiles/${encodeURIComponent(slug)}/huddle-presets${name ? `/${encodeURIComponent(name)}` : ""}`;
+  listHuddlePresets = (slug: string) => this.req<HuddlePresetView[]>("GET", this.hp(slug));
+  saveHuddlePreset = (slug: string, preset: Record<string, unknown>) => this.req<HuddlePresetView>("POST", this.hp(slug), preset);
+  deleteHuddlePreset = (slug: string, name: string) => this.req<{ reset: boolean; presets: HuddlePresetView[] }>("DELETE", this.hp(slug, name));
 
   // Huddles. The daemon decides who the caller is from these headers, never from the request body.
   private h(slug: string, hid: string): string {

@@ -225,13 +225,14 @@ test("every tool advertises a profile argument; change tools are flagged", () =>
   const PLANNING = ["ask_questions", "propose_branch", "propose_huddle", "propose_ticket", "propose_tickets", "publish_artifact", "read_artifact"];
   for (const t of TOOLS.filter((t) => t.name !== "list_profiles" && !PLANNING.includes(t.name))) expect(t.inputSchema.properties.profile).toBeDefined();
   expect(TOOLS.filter((t) => !t.changes).map((t) => t.name).sort()).toEqual([
-    "ask_questions", "get_ticket", "huddle_read", "list_profiles", "list_schedules", "list_tickets", "propose_branch", "propose_huddle", "propose_ticket",
+    "ask_questions", "get_ticket", "huddle_read", "list_huddle_presets", "list_profiles", "list_schedules", "list_tickets", "propose_branch", "propose_huddle", "propose_ticket",
     "propose_tickets", "publish_artifact", "read_artifact", "report_bug", "schedule_history",
   ]);
-  expect(TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name).sort()).toEqual(["huddle_read", ...PLANNING].sort());
+  expect(TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name).sort()).toEqual(["huddle_read", "list_huddle_presets", ...PLANNING].sort());
   // Huddle tools work inside runs: the daemon checks who the run is (lead, coordinator, the participant itself).
   expect(TOOLS.filter((t) => t.allowInRun).map((t) => t.name).sort()).toEqual([
-    "ask_ticket", "create_schedule", "delete_schedule", "huddle_add_participant", "huddle_findings", "huddle_mode", "huddle_post", "reply_ticket", "update_schedule",
+    "ask_ticket", "create_schedule", "delete_huddle_preset", "delete_schedule", "huddle_add_participant", "huddle_findings", "huddle_mode", "huddle_post", "reply_ticket",
+    "save_huddle_preset", "update_schedule",
   ]);
 });
 

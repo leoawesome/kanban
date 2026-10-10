@@ -276,7 +276,7 @@ export interface HuddleParticipant {
   /** Unique in the huddle, used in @mentions: main, reviewer, qa-1, api-main, you. */
   handle: string;
   role: string;
-  /** Preset it was made from (see HUDDLE_PRESETS) and that preset's prompt. */
+  /** Preset it was made from (see huddle-presets.ts) and that preset's prompt. */
   preset: string | null;
   prompt: string;
   /** What this participant should look at (from the roster). */

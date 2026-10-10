@@ -7,6 +7,7 @@ import { Board } from "../src/server/board";
 import { Bus, type BusEvent } from "../src/server/events";
 import { createServer } from "../src/server/http";
 import { Huddles } from "../src/server/huddle";
+import { BUILTIN_PRESETS, deletePreset, mergePresets, savePreset } from "../src/server/huddle-presets";
 import { parseMentions, rosterError } from "../src/server/huddle-roster";
 import { Store } from "../src/server/store";
 import type { Huddle, Profile, Ticket } from "../src/server/types";
@@ -95,7 +96,12 @@ const messages = (h: Huddle) => store.readHuddleMessages("p", h.id);
 test("parseMentions and roster checks", () => {
   expect(parseMentions("@qa-1 and @Reviewer, cc @all. mail a@b.com, path src/@x")).toEqual(["qa-1", "reviewer", "all"]);
   expect(rosterError([{ preset: "qa", count: 3 }, { preset: "reviewer" }])).toBeNull();
-  expect(rosterError([{ preset: "nope" }])).toContain("unknown preset");
+  const names = BUILTIN_PRESETS.map((p) => p.name);
+  expect(rosterError([{ preset: "nope" }], 8, names)).toContain("unknown preset");
+  // Without the board's names only the shape is checked (the daemon checks names).
+  expect(rosterError([{ preset: "nope" }])).toBeNull();
+  expect(rosterError([{ preset: "main" }], 8, names)).toContain("coordinator");
+  expect(rosterError([{ role: "Accessibility tester", prompt: "Check a11y" }], 8, names)).toBeNull();
   expect(rosterError([{ preset: "qa", count: 8 }])).toContain("over the limit of 8");
   expect(rosterError([{ role: "x", handle: "main" }])).toContain("reserved");
 });
@@ -379,3 +385,61 @@ test("propose_huddle validates the roster and starts nothing", async () => {
   expect(bad.isError).toBe(true);
   expect(store.listHuddles("p")).toEqual([]);
 });
+
+test("presets: board presets merge with built-ins; overriding and resetting a built-in", () => {
+  const added = savePreset([], { name: "A11y Tester", prompt: "Check accessibility.", mode: "monitor" });
+  expect(added.preset).toMatchObject({ name: "a11y-tester", role: "A11y tester", mode: "monitor", workspace: "shared", canEdit: false, lead: false, model: null });
+  // Overriding keeps the built-in's other fields.
+  const over = savePreset(added.board, { name: "qa", prompt: "Only test the API.", model: "sonnet" });
+  expect(over.preset).toMatchObject({ name: "qa", role: "QA tester", mode: "monitor", model: "sonnet", prompt: "Only test the API." });
+  const merged = mergePresets(over.board);
+  expect(merged.map((p) => p.name)).toEqual([...BUILTIN_PRESETS.map((p) => p.name), "a11y-tester"]);
+  expect(merged.find((p) => p.name === "qa")!.source).toBe("override");
+  expect(merged.find((p) => p.name === "reviewer")!.source).toBe("builtin");
+  expect(merged.find((p) => p.name === "a11y-tester")!.source).toBe("board");
+  // Deleting an override resets the built-in; a built-in itself can't be deleted.
+  const reset = deletePreset(over.board, "qa");
+  expect(reset.reset).toBe(true);
+  expect(mergePresets(reset.board).find((p) => p.name === "qa")).toMatchObject({ source: "builtin", model: null });
+  expect(() => deletePreset(reset.board, "qa")).toThrow("built-in");
+  expect(deletePreset(reset.board, "a11y-tester")).toEqual({ board: [], reset: false });
+  expect(() => savePreset([], { name: "you", prompt: "x" })).toThrow("reserved");
+  expect(() => savePreset([], { name: "x" })).toThrow("prompt is required");
+  expect(() => savePreset([], { name: "x", prompt: "p", mode: "loud" })).toThrow("mode");
+});
+
+test("presets: saved through the MCP tool from a run, used by rosters, deleted over HTTP", async () => {
+  const t = await host();
+  const ctx: ToolContext = { client, cwd: "/", env: { CKANBAN_TICKET: `p/${t.id}` } };
+  const saved = await callTool("save_huddle_preset", { name: "a11y", role: "Accessibility tester", prompt: "Check keyboard and screen reader use.", model: "haiku", workspace: "own", canEdit: false }, ctx);
+  expect(saved.isError).toBeUndefined();
+  expect(text(saved)).toContain('Saved preset "a11y"');
+  expect(store.listHuddlePresets("p")).toEqual([
+    { name: "a11y", role: "Accessibility tester", prompt: "Check keyboard and screen reader use.", model: "haiku", mode: "tagged", lead: false, canEdit: false, workspace: "own" },
+  ]);
+  await callTool("save_huddle_preset", { name: "main", prompt: "Coordinate tersely." }, ctx);
+  const list = text(await callTool("list_huddle_presets", {}, ctx));
+  expect(list).toContain("- a11y: Accessibility tester (tagged, own worktree, model haiku; board)");
+  expect(list).toContain("- main: Coordinator (tagged, shared worktree, lead; built-in, changed on this board)");
+
+  // propose_huddle knows the board's presets.
+  expect((await callTool("propose_huddle", { roster: [{ preset: "a11y" }] }, ctx)).isError).toBeUndefined();
+  const bad = await callTool("propose_huddle", { roster: [{ preset: "nope" }] }, ctx);
+  expect(bad.isError).toBe(true);
+  expect(text(bad)).toContain("a11y");
+
+  process.env.FAKE_STEP_MS = "50";
+  const h = huddles.create("p", t.id, [{ preset: "a11y" }, { role: "Copy editor", prompt: "Fix the wording." }]);
+  expect(participant(h, "a11y")).toMatchObject({ role: "Accessibility tester", preset: "a11y", model: "haiku", workspace: "own", canEdit: false });
+  expect(participant(h, "copy-editor")).toMatchObject({ role: "Copy editor", preset: null, prompt: "Fix the wording." });
+  expect(participant(h, "main")).toMatchObject({ role: "Coordinator", preset: "main", prompt: "Coordinate tersely." });
+  await huddles.stopAll("p", h.id);
+
+  const del = await callTool("delete_huddle_preset", { name: "main" }, ctx);
+  expect(text(del)).toContain("Reset");
+  const r = await fetch(`http://127.0.0.1:${server.port}/api/profiles/p/huddle-presets/a11y`, { method: "DELETE" });
+  expect(r.status).toBe(200);
+  const builtin = await fetch(`http://127.0.0.1:${server.port}/api/profiles/p/huddle-presets/reviewer`, { method: "DELETE" });
+  expect(builtin.status).toBe(409);
+  expect(store.listHuddlePresets("p")).toEqual([]);
+}, 20000);
