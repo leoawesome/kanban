@@ -27,7 +27,7 @@ export function usePresets(slug: string): HuddlePreset[] | null {
 /** Start the huddle a draft describes: create it, invite the tickets, set @main's mode. */
 export async function startFromDraft(slug: string, ticketId: string, d: RosterDraft): Promise<Huddle> {
   const roster = d.rows.map(({ key: _k, ...e }) => ({ ...e, ...(e.focus?.trim() ? { focus: e.focus.trim() } : { focus: undefined }) }));
-  let h = await api.startHuddle(slug, ticketId, roster);
+  let h = await api.startHuddle(slug, ticketId, roster, undefined, d.maxCostUsd);
   for (const t of d.invites) await api.inviteToHuddle(slug, h.id, t);
   const main = h.participants.find((p) => p.handle === "main");
   if (d.mainMode && main && main.mode !== d.mainMode) h = await api.setHuddleMode(slug, h.id, "main", d.mainMode);
@@ -156,6 +156,12 @@ export function RosterEditor({ presets, draft, setDraft, tickets, hostId, max = 
       </table>
       <div className="roster-foot">
         {!hideMain && <span className={size > max ? "roster-over" : undefined}>{size} participant{size === 1 ? "" : "s"} · max {max}</span>}
+        {!hideMain && (
+          <label className="roster-budget" title="The huddle stops when its runs have spent this much; the leads are warned at 80%">
+            · budget $<input type="number" min={1} step={1} value={draft.maxCostUsd} disabled={disabled} aria-label="Budget in USD"
+              onChange={(e) => setDraft({ ...draft, maxCostUsd: Number(e.target.value) })} onKeyDown={enter} />
+          </label>
+        )}
         <Select ariaLabel="Add a role" className="roster-add" value={"" as string} renderValue={() => "+ Role"}
           options={[...(presets ?? []).filter((p) => p.name !== "main").map((p) => ({ value: p.name, label: p.role, hint: p.name })),
             { value: "__custom", label: "Custom role…" }]}

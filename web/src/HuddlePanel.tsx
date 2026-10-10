@@ -20,6 +20,13 @@ const clock = (iso: string) => {
 };
 const money = (n: number) => `$${n.toFixed(2)}`;
 const STATE_LABEL = { live: "● Live", stopped: "■ Stopped", closed: "Closed" } as const;
+const STOP_REASON = {
+  budget: "budget spent",
+  messages: "message limit reached",
+  loop: "paused: many messages without you",
+} as const;
+/** What Resume adds when the budget is spent. */
+const BUDGET_STEP = 10;
 
 function Avatar({ handle, small }: { handle: string; small?: boolean }) {
   return <span className={`hd-av${small ? " small" : ""}`} style={{ background: handleColor(handle) }} aria-hidden>{handleInitials(handle)}</span>;
@@ -120,16 +127,19 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
   const closed = h.status === "closed";
   const run = (p: Promise<unknown>) => p.catch((e) => onError((e as Error).message));
   const count = members(h).length;
+  const overBudget = h.maxCostUsd !== undefined && huddleCost(h) >= h.maxCostUsd;
   const invitable = tickets.filter((t) => !h.participants.some((p) => p.ticketId === t.id));
   const handles = h.participants.map((p) => p.handle).concat("all");
 
   return (
     <div className="huddle">
       <div className="huddle-bar">
-        <span className={`huddle-state ${h.status}`}>{STATE_LABEL[h.status]}</span>
+        <span className={`huddle-state ${h.status}`}>{STATE_LABEL[h.status]}{h.status === "stopped" && h.stopReason ? ` · ${STOP_REASON[h.stopReason]}` : ""}</span>
         <span title={fullTime(h.createdAt)}>started {clock(h.createdAt)}</span>
         <span>· {h.seq} message{h.seq === 1 ? "" : "s"}</span>
-        <span title="What the huddle's agents spent so far (@main's runs count toward the ticket's usage)">· {money(huddleCost(h))}</span>
+        <span title="What the huddle spent so far: its agents' runs and @main's huddle replies. It stops at the budget.">
+          · {money(huddleCost(h))}{h.maxCostUsd ? ` of ${money(h.maxCostUsd)}` : ""}
+        </span>
         <span className="spacer" />
         {closed ? (
           <>
@@ -146,7 +156,13 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
                 onChange={(id) => run(api.inviteToHuddle(slug, h.id, id))} />
             )}
             {h.status === "stopped" ? (
-              <button className="btn small" onClick={() => run(api.huddleAction(slug, h.id, "resume"))}>▶ Resume</button>
+              <>
+                {!overBudget && <button className="btn small" onClick={() => run(api.huddleAction(slug, h.id, "resume"))}>▶ Resume</button>}
+                {h.maxCostUsd !== undefined && (
+                  <button className="btn small" title={`Resume and raise the budget to ${money(h.maxCostUsd + BUDGET_STEP)}`}
+                    onClick={() => run(api.huddleAction(slug, h.id, "resume", BUDGET_STEP))}>▶ Resume +{money(BUDGET_STEP)}</button>
+                )}
+              </>
             ) : (
               <button className="btn small hd-danger" onClick={() => setConfirm("stop")}>■ Stop all</button>
             )}

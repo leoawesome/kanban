@@ -81,9 +81,28 @@ export function rosterError(roster: unknown, max = DEFAULT_MAX_PARTICIPANTS, pre
   return null;
 }
 
-/** @handles in a message, lowercased; "all" for @all. An email address or path is not a mention. */
+/** Text where a @handle is quoted rather than addressed: code spans and blocks, block quotes and "quoted" text. */
+const QUOTED_RE = /```[\s\S]*?(?:```|(?![\s\S]))|`[^`\n]*`|^[ \t]*>.*$|"[^"\n]*"|\u201c[^\u201d\n]*\u201d/gm;
+
+/**
+ * @handles in a message, lowercased; "all" for @all. An email address or path is not a mention, and neither is a
+ * handle inside code or quotes (someone quoting a message doesn't wake the people it tags).
+ */
 export function parseMentions(text: string): string[] {
   const out = new Set<string>();
-  for (const m of text.matchAll(/(^|[^\w@./-])@([a-z0-9][a-z0-9_-]*)/gi)) out.add(m[2].toLowerCase().replace(/[-_]+$/, ""));
+  const plain = text.replace(QUOTED_RE, " ");
+  for (const m of plain.matchAll(/(^|[^\w@./-])@([a-z0-9][a-z0-9_-]*)/gi)) out.add(m[2].toLowerCase().replace(/[-_]+$/, ""));
   return [...out];
+}
+
+/**
+ * One message as a line of a digest or huddle_read. The text can't pass for another entry: lines after the first are
+ * indented, and a line starting like an entry ("[#12]", "(system)") is escaped.
+ */
+export function huddleLine(m: { seq: number; from: string; text: string; kind: string }): string {
+  const text = m.text
+    .split("\n")
+    .map((l, i) => (i ? "    " : "") + l.replace(/^(\s*)(\[#\d+\]|\(system\))/i, "$1\\$2"))
+    .join("\n");
+  return m.kind === "system" ? `[#${m.seq}] (system) ${text}` : `[#${m.seq}] @${m.from}${m.kind === "finding" ? " (finding)" : ""}: ${text}`;
 }

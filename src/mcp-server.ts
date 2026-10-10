@@ -5,7 +5,7 @@ import {
   ticketLine, ticketText, type HuddlePage, type ScheduleHistoryInfo, type ScheduleInfo, type ScheduleInput, type TicketPatch,
 } from "./client";
 import { BUILTIN_PRESETS, MAIN_PRESET, presetLine } from "./server/huddle-presets";
-import { rosterEntryError, rosterError } from "./server/huddle-roster";
+import { huddleLine, rosterEntryError, rosterError } from "./server/huddle-roster";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -609,7 +609,7 @@ export function huddlePageText(p: HuddlePage): string {
     lines.push("", `Findings (${open.length} open of ${h.findings.length}):`, ...h.findings.map((f) => `- ${f.id} [${f.status}${f.resolvedBy ? ` by @${f.resolvedBy}` : ""}] ${f.text} (by @${f.by})`));
   }
   lines.push("", p.messages.length ? "Messages:" : "No messages.");
-  for (const m of p.messages) lines.push(m.kind === "system" ? `[#${m.seq}] (system) ${m.text}` : `[#${m.seq}] @${m.from}${m.kind === "finding" ? " (finding)" : ""}: ${m.text}`);
+  for (const m of p.messages) lines.push(huddleLine(m));
   if (p.hasMore) lines.push("", `More messages: call huddle_read with since=${p.messages.at(-1)?.seq ?? 0}.`);
   return lines.join("\n");
 }
@@ -618,8 +618,10 @@ const HUDDLE_TOOLS: Tool[] = [
   {
     name: "huddle_post",
     description:
-      "Post a message in your huddle. Tag who should act with @handle (@all for everyone): tagged participants sleep until someone tags them, " +
-      "monitor-mode ones see every message. The board stamps you as the sender. kind finding marks a bug or problem you found.",
+      "Post a message in your huddle. Tag who should act with @handle (@all for everyone; only leads, @main and the user can wake everyone): " +
+      "tagged participants sleep until someone tags them, monitor-mode ones see every message. Every @handle in the text wakes that participant " +
+      "(except inside code or quotes), so write a handle without @ when you only refer to someone. The board stamps you as the sender. " +
+      "kind finding marks a bug or problem you found.",
     inputSchema: {
       type: "object",
       properties: {
@@ -754,7 +756,8 @@ const HUDDLE_TOOLS: Tool[] = [
     name: "save_huddle_preset",
     description:
       "Create or change a huddle role preset on this board, e.g. when a role you need keeps coming up. Saving a built-in's name (reviewer, qa, qa-lead, engineer, security, main) " +
-      "overrides it on this board; delete_huddle_preset resets it. Fields you leave out keep the existing preset's values.",
+      "overrides it on this board; delete_huddle_preset resets it. Fields you leave out keep the existing preset's values. " +
+      "From a huddle agent's run you can only add new names, not change built-ins or the board's presets.",
     inputSchema: {
       type: "object",
       properties: {
@@ -775,7 +778,7 @@ const HUDDLE_TOOLS: Tool[] = [
     async run(args, ctx) {
       const { profile: _p, ...input } = args ?? {};
       const slug = await slugFor(args, ctx);
-      const p = await ctx.client.saveHuddlePreset(slug, input);
+      const p = await ctx.client.saveHuddlePreset(slug, input, huddleCaller(ctx.env));
       return `Saved preset "${p.name}" on board ${slug}${p.source === "override" ? " (overrides the built-in)" : ""}:\n${presetLine(p)}`;
     },
   },
@@ -788,7 +791,7 @@ const HUDDLE_TOOLS: Tool[] = [
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
       const name = str(args, "name")!.trim();
-      const r = await ctx.client.deleteHuddlePreset(slug, name);
+      const r = await ctx.client.deleteHuddlePreset(slug, name, huddleCaller(ctx.env));
       return r.reset ? `Reset "${name}" to the built-in preset on board ${slug}.` : `Deleted preset "${name}" from board ${slug}.`;
     },
   },

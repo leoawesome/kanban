@@ -58,19 +58,23 @@ export function mentionQuery(text: string, caret: number): { start: number; quer
 }
 
 export const DEFAULT_MAX = 8;
+/** A huddle's default spending limit (the daemon's DEFAULT_MAX_COST_USD). */
+export const DEFAULT_BUDGET = 20;
 
 /** A roster being edited before Start: agent rows, tickets to invite and the coordinator's mode. */
 export interface Draft<E extends EntryLike = EntryLike, Mode extends string = string> {
   rows: (E & { key: string })[];
   invites: string[];
   mainMode: Mode | null;
+  /** Spending limit in USD; the huddle stops when it is spent. */
+  maxCostUsd: number;
 }
 
 let nextKey = 0;
 export const rowKey = () => `r${++nextKey}`;
 
 export function rosterDraft<E extends EntryLike, Mode extends string = string>(roster: E[]): Draft<E, Mode> {
-  return { rows: roster.map((e) => ({ ...e, key: rowKey() })), invites: [], mainMode: null };
+  return { rows: roster.map((e) => ({ ...e, key: rowKey() })), invites: [], mainMode: null, maxCostUsd: DEFAULT_BUDGET };
 }
 
 /** Everyone who would join, @main included (the user doesn't count). */
@@ -84,6 +88,7 @@ export function draftError(d: Draft<any, any>, max = DEFAULT_MAX): string | null
   if (!d.rows.length) return "Add at least one role.";
   if (d.rows.some((r) => !r.preset && !r.role?.trim())) return "Name each custom role.";
   if (draftSize(d) > max) return `That's ${draftSize(d)} participants with @main, over the limit of ${max}.`;
+  if (!(d.maxCostUsd > 0)) return "Set a budget above $0.";
   return null;
 }
 

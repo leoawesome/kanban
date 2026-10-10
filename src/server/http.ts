@@ -615,12 +615,17 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
 
-    // /profiles/:p/huddle-presets[/:name] — huddle role presets: built-ins merged with the board's own (any caller, runs included)
+    // /profiles/:p/huddle-presets[/:name] — huddle role presets: built-ins merged with the board's own (any caller, runs included).
+    // A huddle agent's run may only add new presets: it can't change what the user or a built-in defined.
     if (parts[2] === "huddle-presets") {
+      const addOnly = !!req.headers.get(HUDDLE_HEADER);
       if (parts.length === 3 && m === "GET") return json(huddles.presets(slug));
-      if (parts.length === 3 && m === "POST") return json(huddles.savePreset(slug, await body(req)), 201);
-      if (parts.length === 4 && m === "PUT") return json(huddles.savePreset(slug, { ...(await body(req)), name: parts[3] }));
-      if (parts.length === 4 && m === "DELETE") return json(huddles.deletePreset(slug, parts[3]));
+      if (parts.length === 3 && m === "POST") return json(huddles.savePreset(slug, await body(req), addOnly), 201);
+      if (parts.length === 4 && m === "PUT") return json(huddles.savePreset(slug, { ...(await body(req)), name: parts[3] }, addOnly));
+      if (parts.length === 4 && m === "DELETE") {
+        if (addOnly) throw new HttpError(403, "a huddle run can't delete or reset presets; ask the user");
+        return json(huddles.deletePreset(slug, parts[3]));
+      }
       throw new HttpError(404, "not found");
     }
 
@@ -966,7 +971,10 @@ export function createServer(deps: ServerDeps) {
         const b = await body(req);
         const ticketId = String(b.ticketId ?? "");
         if (!ticketId) throw new HttpError(400, "ticketId is required");
-        const h = huddles.create(slug, ticketId, Array.isArray(b.roster) ? b.roster : [], { maxParticipants: Number(b.maxParticipants) || undefined });
+        const h = huddles.create(slug, ticketId, Array.isArray(b.roster) ? b.roster : [], {
+          maxParticipants: Number(b.maxParticipants) || undefined,
+          maxCostUsd: b.maxCostUsd === undefined || b.maxCostUsd === null ? undefined : Number(b.maxCostUsd),
+        });
         return json(huddles.view(slug, h), 201);
       }
       throw new HttpError(404, "not found");
@@ -1001,7 +1009,9 @@ export function createServer(deps: ServerDeps) {
     }
     if (m === "POST" && !handle && (action === "stop" || action === "resume" || action === "close")) {
       userOnly(`${action} the huddle`);
-      const out = action === "stop" ? huddles.stopAll(slug, h.id) : action === "resume" ? huddles.resume(slug, h.id) : huddles.close(slug, h.id);
+      const b = action === "resume" ? await body(req) : {};
+      const add = b?.addBudgetUsd === undefined || b?.addBudgetUsd === null ? 0 : Number(b.addBudgetUsd);
+      const out = action === "stop" ? huddles.stopAll(slug, h.id) : action === "resume" ? huddles.resume(slug, h.id, add) : huddles.close(slug, h.id);
       return json(huddles.view(slug, out));
     }
     if (m === "POST" && action === "invite" && !handle) {

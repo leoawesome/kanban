@@ -62,11 +62,16 @@ export function buildArgs(
 }
 
 const CHROME_TOOL = "mcp__claude-in-chrome__";
+/**
+ * The board's huddle tools: they only touch the huddle, never files, so a Planning chat (plan mode, which asks
+ * before every MCP tool that isn't read-only) can coordinate its huddle too.
+ */
+const HUDDLE_TOOLS = new Set(["huddle_post", "huddle_read", "huddle_mode", "huddle_findings", "huddle_add_participant"].map((t) => `mcp__ckanban__${t}`));
 
 /**
  * The board's answer to a control request from claude (stream-json). Permission asks for Claude in Chrome
- * tools are allowed; every other ask is denied, as it was before prompts reached the board (headless
- * runs had nobody to answer them). Anything else gets an error so claude never waits on the board.
+ * tools and the huddle tools are allowed; every other ask is denied, as it was before prompts reached the board
+ * (headless runs had nobody to answer them). Anything else gets an error so claude never waits on the board.
  */
 export function controlResponse(ev: any): unknown {
   const req = ev?.request;
@@ -74,7 +79,7 @@ export function controlResponse(ev: any): unknown {
   if (req?.subtype !== "can_use_tool") {
     return { type: "control_response", response: { subtype: "error", request_id: id, error: `unsupported control request: ${req?.subtype}` } };
   }
-  const allow = typeof req.tool_name === "string" && req.tool_name.startsWith(CHROME_TOOL);
+  const allow = typeof req.tool_name === "string" && (req.tool_name.startsWith(CHROME_TOOL) || HUDDLE_TOOLS.has(req.tool_name));
   return {
     type: "control_response",
     response: {

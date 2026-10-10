@@ -282,6 +282,11 @@ export class Board {
     return this.runs.has(this.key(slug, id));
   }
 
+  /** The ticket's current run is a quiet reply to another session's message (a peer run, e.g. a huddle's). */
+  isPeerRun(slug: string, id: string): boolean {
+    return !!this.runs.get(this.key(slug, id))?.chat?.quiet;
+  }
+
   dispatch(slug: string): void {
     if (this.restartPending || this.shuttingDown) return; // Ready tickets start after the restart
     const profile = this.store.getProfile(slug);

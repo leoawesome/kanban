@@ -485,6 +485,10 @@ export interface Huddle {
   invited: string[];
   /** Highest message seq so far (the message count). */
   seq: number;
+  /** Spending limit; the huddle stops when it is spent (default 20). */
+  maxCostUsd?: number;
+  /** Why it stopped by itself: budget spent, message limit, or too long without the user (routing paused). */
+  stopReason?: "budget" | "messages" | "loop" | null;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
@@ -659,8 +663,8 @@ export const api = {
   huddle: (slug: string, id: string, q: { before?: number; since?: number; limit?: number } = {}) =>
     req<{ huddle: Huddle; you: string; messages: HuddleMessage[]; hasMore: boolean }>("GET",
       `${hud(slug, id)}?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]))}`),
-  startHuddle: (slug: string, ticketId: string, roster: RosterEntry[], maxParticipants?: number) =>
-    req<Huddle>("POST", hud(slug), { ticketId, roster, maxParticipants }),
+  startHuddle: (slug: string, ticketId: string, roster: RosterEntry[], maxParticipants?: number, maxCostUsd?: number) =>
+    req<Huddle>("POST", hud(slug), { ticketId, roster, maxParticipants, maxCostUsd }),
   postHuddle: (slug: string, id: string, text: string) => req<HuddleMessage>("POST", `${hud(slug, id)}/messages`, { text }),
   addHuddleParticipants: (slug: string, id: string, entry: RosterEntry) =>
     req<{ added: HuddleParticipant[]; huddle: Huddle }>("POST", `${hud(slug, id)}/participants`, entry),
@@ -668,7 +672,9 @@ export const api = {
     req<Huddle>("PATCH", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}`, { mode }),
   stopHuddleParticipant: (slug: string, id: string, handle: string) =>
     req<Huddle>("POST", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}/stop`),
-  huddleAction: (slug: string, id: string, action: "stop" | "resume" | "close") => req<Huddle>("POST", `${hud(slug, id)}/${action}`),
+  /** resume: addBudgetUsd raises the budget (needed once it is spent). */
+  huddleAction: (slug: string, id: string, action: "stop" | "resume" | "close", addBudgetUsd?: number) =>
+    req<Huddle>("POST", `${hud(slug, id)}/${action}`, addBudgetUsd ? { addBudgetUsd } : undefined),
   inviteToHuddle: (slug: string, id: string, ticketId: string) => req<HuddleParticipant>("POST", `${hud(slug, id)}/invite`, { ticketId }),
   huddleFindings: (slug: string, id: string, action: "add" | "resolve", arg: { text?: string; id?: string }) =>
     req<HuddleFinding[]>("POST", `${hud(slug, id)}/findings`, { action, ...arg }),

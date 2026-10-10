@@ -1512,6 +1512,8 @@ button.pill:hover { color: var(--text); }
 .roster-role { width: 100%; min-width: 140px; }
 .roster-select .select-trigger { padding: 3px 6px; font-size: 12px; border-radius: 6px; gap: 4px; min-width: 76px; }
 .roster-foot { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.roster-budget { display: inline-flex; align-items: center; gap: 2px; }
+.roster-budget input { width: 52px; padding: 2px 4px; font-size: 12px; }
 .roster-over { color: var(--err); font-weight: 560; }
 .roster-add .select-trigger { padding: 3px 8px; font-size: 12px; font-weight: 520; background: var(--surface); color: var(--text); border-radius: 8px; }
 .roster-add .select-trigger:hover { background: var(--surface-2); }

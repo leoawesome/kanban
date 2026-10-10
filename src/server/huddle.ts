@@ -5,7 +5,12 @@
 //
 // Routing: an @mentioned participant is woken (steered if it is running, else its session resumes with what it
 // hasn't read). Monitor-mode participants get every new message at their next turn boundary; tagged ones sleep until
-// mentioned. Nobody gets their own messages. System messages are context only and wake nobody.
+// mentioned. Nobody gets their own messages. System messages are context only and wake nobody, except the brakes'
+// warnings to the leads. Only leads, @main and the user can wake everyone with @all.
+//
+// Brakes, so a huddle can't loop or overspend: it stops at maxCostUsd (agents' runs and @main's huddle replies; the
+// leads are warned at 80%) and at maxMessages; routing pauses after AGENT_ONLY_MAX messages without the user; two
+// participants answering each other PING_PONG times in a row stop waking each other and their lead is tagged.
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { summarizeEvent } from "./activity";
@@ -18,12 +23,12 @@ import {
   rosterError, USER_HANDLE, type RosterEntry,
 } from "./huddle-roster";
 import {
-  deletePreset, type HuddlePreset, type HuddlePresetView, MAIN_PRESET, mergePresets, savePreset,
+  deletePreset, type HuddlePreset, type HuddlePresetView, MAIN_PRESET, mergePresets, presetName, savePreset,
 } from "./huddle-presets";
 import { huddleAgentPrompt, huddleAgentSystemPrompt, huddleDigest, huddleMainPrompt } from "./prompts";
 import { buildArgs, MONITOR_IDLE_MS, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
-import type { Huddle, HuddleFinding, HuddleMessage, HuddleMessageKind, HuddleMode, HuddleParticipant, Ticket } from "./types";
+import type { Huddle, HuddleFinding, HuddleMessage, HuddleMessageKind, HuddleMode, HuddleParticipant, HuddleStopReason, Ticket } from "./types";
 import { newId, nowIso } from "./util";
 
 export class HuddleError extends Error {
@@ -35,6 +40,24 @@ export class HuddleError extends Error {
 /** Unread messages handed to a session at once; older ones are left to huddle_read. */
 const DIGEST_MAX = 40;
 const ACTIVITY_THROTTLE_MS = 1000;
+export const DEFAULT_MAX_COST_USD = 20;
+export const DEFAULT_MAX_MESSAGES = 150;
+/** Messages (not system ones) since the user last posted or resumed before routing pauses. */
+export const AGENT_ONLY_MAX = 30;
+/** Messages in a row going back and forth between the same two participants. */
+export const PING_PONG = 6;
+const BUDGET_WARN = 0.8;
+
+/** What the huddle spent so far: every participant's runs (agents) and huddle replies (@main and invited tickets). */
+export const huddleCost = (h: Huddle) => h.participants.reduce((s, p) => s + (p.costUsd ?? 0), 0);
+
+/** A participant's cost after a result line reporting its session's running total. */
+function costAfter(p: HuddleParticipant | undefined, total: number): Pick<HuddleParticipant, "costUsd" | "sessionCostUsd"> {
+  const prev = p?.sessionCostUsd ?? 0;
+  return { costUsd: (p?.costUsd ?? 0) + (total >= prev ? total - prev : total), sessionCostUsd: total };
+}
+
+const money = (n: number) => `$${n.toFixed(2)}`;
 
 export type ParticipantView = Omit<HuddleParticipant, "token"> & { running: boolean };
 export type HuddleView = Omit<Huddle, "participants"> & { participants: ParticipantView[]; hostTitle: string | null };
@@ -71,6 +94,8 @@ export class Huddles {
   private runs = new Map<string, AgentRun>();
   /** Ticket sessions (monitor mode) with messages waiting until their current run ends, "<slug>/<huddle>/<handle>". */
   private mainPending = new Set<string>();
+  /** Ticket sessions by "<slug>/<ticket>": the huddle participant that last woke them (its peer runs' cost is that huddle's). */
+  private mainWoken = new Map<string, { hid: string; handle: string }>();
   private shuttingDown = false;
   private sessionExists: (id: string) => boolean;
 
@@ -78,6 +103,7 @@ export class Huddles {
     this.sessionExists = opts.sessionExists ?? claudeSessionExists;
     // A monitor-mode ticket session gets what came in while it worked once its run is over.
     bus.on((e) => {
+      if (e.type === "activity") return this.mainResult(e.profile, e.id, e.event);
       if (e.type !== "ticket.updated" || !this.mainPending.size) return;
       for (const key of [...this.mainPending]) {
         const [slug, hid, handle] = key.split("/");
@@ -93,6 +119,18 @@ export class Huddles {
 
   private key(slug: string, hid: string, handle: string) {
     return `${slug}/${hid}/${handle}`;
+  }
+
+  /** A ticket session's result line: a huddle reply run's cost counts toward the huddle that woke it. */
+  private mainResult(slug: string, ticketId: string, ev: any) {
+    if (ev?.type !== "result" || this.shuttingDown) return;
+    const woken = this.mainWoken.get(`${slug}/${ticketId}`);
+    if (!woken || !this.board.isPeerRun(slug, ticketId)) return;
+    const h = this.store.getHuddle(slug, woken.hid);
+    const p = h?.participants.find((x) => x.handle === woken.handle && x.ticketId === ticketId);
+    if (!h || !p || h.status === "closed") return;
+    this.updateP(slug, h.id, p.handle, costAfter(p, Number(ev.total_cost_usd) || 0));
+    this.checkBudget(slug, h.id);
   }
 
   // ---- Reading ----
@@ -186,9 +224,13 @@ export class Huddles {
     return new Map(this.presets(slug).map((p) => [p.name, p]));
   }
 
-  /** Add or change a board preset (a built-in's name overrides it). */
-  savePreset(slug: string, input: unknown): HuddlePresetView {
+  /** Add or change a board preset (a built-in's name overrides it). addOnly (a huddle run): only a new name. */
+  savePreset(slug: string, input: unknown, addOnly = false): HuddlePresetView {
     if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
+    const name = presetName(String((input as any)?.name ?? ""));
+    if (addOnly && this.presets(slug).some((p) => p.name === name)) {
+      throw new HuddleError(403, `preset "${name}" already exists; a huddle run may only add new presets (pick another name, or ask the user to change it)`);
+    }
     let r: ReturnType<typeof savePreset>;
     try {
       r = savePreset(this.store.listHuddlePresets(slug), input);
@@ -231,7 +273,8 @@ export class Huddles {
     });
   }
 
-  private append(slug: string, hid: string, from: string, text: string, kind: HuddleMessageKind, known: string[]): HuddleMessage {
+  /** known: handles that can be mentioned (plus "all" when allowAll). System messages mention only `known`, given as is. */
+  private append(slug: string, hid: string, from: string, text: string, kind: HuddleMessageKind, known: string[], allowAll = false): HuddleMessage {
     let seq = 0;
     this.update(slug, hid, (h) => {
       seq = h.seq = h.seq + 1;
@@ -239,23 +282,31 @@ export class Huddles {
       const p = h.participants.find((x) => x.handle === from);
       if (p && p.cursor === seq - 1) p.cursor = seq;
     });
-    const mentions = kind === "system" ? [] : parseMentions(text).filter((m) => m === "all" || known.includes(m));
+    const mentions = kind === "system" ? known : parseMentions(text).filter((m) => (m === "all" ? allowAll : known.includes(m)));
     const m: HuddleMessage = { id: `m_${newId()}`, seq, ts: nowIso(), from, text, mentions, kind };
     this.store.appendHuddleMessage(slug, hid, m);
     this.bus.emit({ type: "huddle.message", profile: slug, huddleId: hid, message: m });
     return m;
   }
 
-  private system(slug: string, hid: string, text: string): HuddleMessage {
-    return this.append(slug, hid, "system", text, "system", []);
+  /** A system message: context only, except that `wake` (the brakes' warnings) are woken by it. */
+  private system(slug: string, hid: string, text: string, wake: string[] = []): HuddleMessage {
+    const m = this.append(slug, hid, "system", text, "system", wake);
+    const h = this.get(slug, hid);
+    if (h.status === "live") {
+      for (const p of h.participants) if (wake.includes(p.handle) && p.kind !== "human" && p.status !== "stopped") this.deliver(slug, h, p, true);
+    }
+    return m;
   }
 
   /** Start a huddle on a ticket from a roster (the user pressed Start on a proposed roster, or made one). */
-  create(slug: string, hostId: string, roster: RosterEntry[], opts: { maxParticipants?: number } = {}): Huddle {
+  create(slug: string, hostId: string, roster: RosterEntry[], opts: { maxParticipants?: number; maxCostUsd?: number } = {}): Huddle {
     const host = this.store.getTicket(slug, hostId);
     if (!host) throw new HuddleError(404, `ticket ${hostId} not found`);
     if (host.error?.startsWith("corrupt")) throw new HuddleError(409, `ticket ${hostId} file is corrupt`);
     const max = Math.max(2, Math.min(32, Math.round(opts.maxParticipants ?? DEFAULT_MAX_PARTICIPANTS)));
+    if (opts.maxCostUsd !== undefined && !(Number.isFinite(opts.maxCostUsd) && opts.maxCostUsd > 0)) throw new HuddleError(400, "maxCostUsd must be a positive amount");
+    const maxCostUsd = opts.maxCostUsd ?? DEFAULT_MAX_COST_USD;
     const open = this.store.listHuddles(slug).find((h) => h.hostTicket === hostId && h.status !== "closed");
     if (open) throw new HuddleError(409, `ticket ${hostId} already has an open huddle (${open.id}); close it first`);
     const presets = this.presetMap(slug);
@@ -265,7 +316,8 @@ export class Huddles {
     const main = presets.get(MAIN_PRESET)!;
     const base = { prompt: "", focus: undefined, sessionId: null, status: "idle" as const, cursor: 0, joinedAt: at, workspace: "shared" as const, preset: null };
     const h: Huddle = {
-      id: `h_${newId()}`, hostTicket: hostId, status: "live", maxParticipants: max, findings: [], invited: [], seq: 0, createdAt: at, updatedAt: at,
+      id: `h_${newId()}`, hostTicket: hostId, status: "live", maxParticipants: max, findings: [], invited: [], seq: 0,
+      maxCostUsd, maxMessages: DEFAULT_MAX_MESSAGES, posts: 0, sinceUser: 0, stopReason: null, createdAt: at, updatedAt: at,
       participants: [
         { ...base, handle: USER_HANDLE, role: "User", model: null, mode: "monitor", lead: true, canEdit: false, kind: "human" },
         {
@@ -282,7 +334,7 @@ export class Huddles {
     }
     this.store.saveHuddle(slug, h);
     this.bus.emit({ type: "huddle.updated", profile: slug, huddle: this.view(slug, h) });
-    this.system(slug, h.id, `Huddle started on ticket ${hostId} "${host.title}" with ${agents.map((p) => `@${p.handle} (${p.role})`).join(", ")}. @main coordinates.`);
+    this.system(slug, h.id, `Huddle started on ticket ${hostId} "${host.title}" with ${agents.map((p) => `@${p.handle} (${p.role})`).join(", ")}. @main coordinates. Budget ${money(maxCostUsd)}.`);
     for (const p of agents) this.kickoff(slug, h.id, p.handle);
     return this.get(slug, h.id);
   }
@@ -337,6 +389,8 @@ export class Huddles {
         "Don't work around the limit: ask the user (tag @you) to raise it or stop someone.");
     }
     const added = this.expand(e, h.participants.map((p) => p.handle), presets);
+    // Only the user hands out rights: participants an agent or @main adds can't manage the huddle or edit files.
+    if (by.kind !== "human") for (const p of added) Object.assign(p, { lead: false, canEdit: false });
     this.update(slug, hid, (x) => {
       x.participants.push(...added);
     });
@@ -417,16 +471,99 @@ export class Huddles {
     if (!text.trim()) throw new HuddleError(400, "text is required");
     if (kind !== "message" && kind !== "finding") throw new HuddleError(400, "kind must be message or finding");
     if (by.status === "stopped" && by.kind !== "human") throw new HuddleError(409, `@${by.handle} was stopped by the user`);
-    const m = this.append(slug, hid, by.handle, text.trim(), kind, h.participants.map((p) => p.handle));
+    const m = this.append(slug, hid, by.handle, text.trim(), kind, h.participants.map((p) => p.handle), canManage(h, by));
     // Stopped: the log keeps it; nothing is woken until the user resumes.
-    if (h.status === "live") this.route(slug, hid, m);
+    if (h.status === "live" && this.brakes(slug, hid, by, m)) this.route(slug, hid, m);
     return m;
+  }
+
+  /** Counts a new message against the huddle's limits; false when routing just stopped or paused. */
+  private brakes(slug: string, hid: string, by: HuddleParticipant, m: HuddleMessage): boolean {
+    const h = this.update(slug, hid, (x) => {
+      x.posts = (x.posts ?? 0) + 1;
+      x.sinceUser = by.kind === "human" ? 0 : (x.sinceUser ?? 0) + 1;
+      // A lead, @main or the user tagging a held pair settles it.
+      if (x.held?.length && !x.held.includes(by.handle) && canManage(x, by) && x.held.some((p) => m.mentions.includes(p) || m.mentions.includes("all"))) x.held = null;
+    });
+    const max = h.maxMessages ?? DEFAULT_MAX_MESSAGES;
+    if ((h.posts ?? 0) >= max) {
+      this.halt(slug, hid, "messages", `The huddle reached its limit of ${max} messages and stopped; every run was stopped. @you: read what came out and resume if more is needed.`);
+      return false;
+    }
+    if ((h.sinceUser ?? 0) >= AGENT_ONLY_MAX) {
+      this.halt(slug, hid, "loop", `${AGENT_ONLY_MAX} messages went by without you, so routing is paused (runs finish what they are doing). @you: check the huddle is on track and resume it.`);
+      return false;
+    }
+    this.pingPong(slug, hid);
+    return true;
+  }
+
+  /** The last PING_PONG messages went back and forth between the same two participants: they stop waking each other. */
+  private pingPong(slug: string, hid: string) {
+    const h = this.get(slug, hid);
+    const last = this.store.readHuddleMessages(slug, hid).filter((m) => m.kind !== "system").slice(-PING_PONG);
+    if (last.length < PING_PONG) return;
+    const pair = [...new Set(last.map((m) => m.from))];
+    if (pair.length !== 2 || pair.includes(USER_HANDLE) || last.some((m, i) => i && m.from === last[i - 1].from)) return;
+    if (h.held && pair.every((x) => h.held!.includes(x))) return;
+    const leads = h.participants.filter((p) => p.lead && p.kind !== "human" && p.status !== "stopped" && !pair.includes(p.handle)).map((p) => p.handle);
+    const tag = leads.length ? leads : [USER_HANDLE];
+    this.update(slug, hid, (x) => void (x.held = pair));
+    this.system(slug, hid,
+      `@${pair[0]} and @${pair[1]} answered each other ${PING_PONG} times in a row, so they no longer wake each other. ` +
+      `${tag.map((x) => `@${x}`).join(" ")}: settle it, or tag them with what to do next.`, tag);
+  }
+
+  /** The huddle stops by itself (see HuddleStopReason). budget and messages stop every huddle run too; loop only pauses routing. */
+  private halt(slug: string, hid: string, reason: HuddleStopReason, text: string) {
+    const h = this.get(slug, hid);
+    // The budget also stops a huddle whose routing was only paused.
+    if (h.status === "closed" || (h.status !== "live" && reason !== "budget") || h.stopReason === reason) return;
+    const hard = reason !== "loop";
+    if (hard) {
+      for (const p of h.participants) {
+        if (p.kind === "agent") this.stopParticipantRun(slug, h, p);
+        // A ticket's session: only the reply run the huddle woke it for (its own work goes on).
+        else if (p.kind === "ticket-main" && p.ticketId) {
+          this.mainPending.delete(this.key(slug, hid, p.handle));
+          if (this.board.isPeerRun(slug, p.ticketId) && this.mainWoken.get(`${slug}/${p.ticketId}`)?.hid === hid) this.board.stop(slug, p.ticketId);
+        }
+      }
+    }
+    this.update(slug, hid, (x) => {
+      x.status = "stopped";
+      x.stopReason = reason;
+      if (hard) for (const p of x.participants) if (p.kind === "agent") p.status = "stopped";
+    });
+    this.system(slug, hid, text, [USER_HANDLE]);
+  }
+
+  /** After a cost update: warn the leads at 80% of the budget, stop at 100%. */
+  private checkBudget(slug: string, hid: string) {
+    const h = this.store.getHuddle(slug, hid);
+    if (!h || h.status === "closed") return;
+    const max = h.maxCostUsd ?? DEFAULT_MAX_COST_USD;
+    const spent = huddleCost(h);
+    if (spent >= max) {
+      this.halt(slug, hid, "budget", `The huddle spent ${money(spent)} of its ${money(max)} budget and stopped; every run was stopped. @you: resume it with more budget if it should go on.`);
+      return;
+    }
+    if (spent >= max * BUDGET_WARN && !h.budgetWarned) {
+      this.update(slug, hid, (x) => void (x.budgetWarned = true));
+      const leads = h.participants.filter((p) => p.lead && p.kind !== "human" && p.status !== "stopped").map((p) => p.handle);
+      this.system(slug, hid,
+        `${leads.map((x) => `@${x}`).join(" ")}${leads.length ? ": t" : "T"}he huddle has spent ${money(spent)} of its ${money(max)} budget (${Math.round((spent / max) * 100)}%). ` +
+        "Wrap up: send the consolidated findings now and only start what is needed; at 100% every run stops.", leads);
+    }
   }
 
   private route(slug: string, hid: string, m: HuddleMessage) {
     const h = this.get(slug, hid);
+    const held = h.held ?? [];
     for (const p of h.participants) {
       if (p.kind === "human" || p.handle === m.from || p.status === "stopped") continue;
+      // A held pair doesn't wake each other.
+      if (held.includes(p.handle) && held.includes(m.from)) continue;
       const mentioned = m.mentions.includes(p.handle) || m.mentions.includes("all");
       if (mentioned || p.mode === "monitor") this.deliver(slug, h, p, mentioned);
     }
@@ -436,16 +573,18 @@ export class Huddles {
    * Unread messages for a participant as one digest, and moves its cursor past them. Null when there is nothing
    * to act on (only system messages, unless withSystem). undo: put the cursor back (the digest never arrived).
    */
-  private takeUnread(slug: string, hid: string, handle: string, withSystem = false): { digest: string; undo: () => void } | null {
+  private takeUnread(slug: string, hid: string, handle: string, withSystem = false): { digest: string; tagged: boolean; undo: () => void } | null {
     const h = this.get(slug, hid);
     const p = h.participants.find((x) => x.handle === handle);
     if (!p) return null;
     const unread = this.store.readHuddleMessages(slug, hid).filter((m) => m.seq > p.cursor && m.from !== handle);
     const prev = p.cursor;
     if (p.cursor !== h.seq) this.updateP(slug, hid, handle, { cursor: h.seq });
-    if (!unread.length || (!withSystem && !unread.some((m) => m.kind !== "system"))) return null;
+    // A system message only counts when it tags this participant (the brakes' warnings).
+    const tags = (m: HuddleMessage) => m.mentions.includes(handle) || m.mentions.includes("all");
+    if (!unread.length || (!withSystem && !unread.some((m) => m.kind !== "system" || tags(m)))) return null;
     const shown = unread.slice(-DIGEST_MAX);
-    return { digest: huddleDigest(shown, unread.length - shown.length), undo: () => this.updateP(slug, hid, handle, { cursor: prev }) };
+    return { digest: huddleDigest(shown, unread.length - shown.length), tagged: unread.some(tags), undo: () => this.updateP(slug, hid, handle, { cursor: prev }) };
   }
 
   private deliver(slug: string, h: Huddle, p: HuddleParticipant, mentioned: boolean) {
@@ -477,6 +616,7 @@ export class Huddles {
     if (p.kind === "ticket-main") {
       const u = p.ticketId ? this.takeUnread(slug, hid, handle) : null;
       if (!u) return;
+      this.mainWoken.set(`${slug}/${p.ticketId}`, { hid, handle });
       this.board.chat(slug, p.ticketId!, huddleMainPrompt(h, p, u.digest), { peer: true }).catch((e) => {
         u.undo();
         this.system(slug, hid, `Couldn't reach @${handle}: ${(e as Error).message}`);
@@ -494,7 +634,7 @@ export class Huddles {
       run.pending = false;
       const u = this.takeUnread(slug, hid, handle);
       if (!u) return;
-      if (run.handle?.send(huddleAgentPrompt("wake", p, u.digest))) {
+      if (run.handle?.send(huddleAgentPrompt("wake", p, u.digest, u.tagged))) {
         if (run.idle) this.updateP(slug, hid, handle, { status: "working" });
         run.idle = false;
       } else {
@@ -505,7 +645,7 @@ export class Huddles {
       return;
     }
     const u = this.takeUnread(slug, hid, handle);
-    if (u) this.runAgent(slug, hid, handle, huddleAgentPrompt("wake", p, u.digest));
+    if (u) this.runAgent(slug, hid, handle, huddleAgentPrompt("wake", p, u.digest, u.tagged));
   }
 
   /** An agent's first run: start on its job with what was said so far. */
@@ -581,10 +721,8 @@ export class Huddles {
         if (ev?.type === "result") {
           run.idle = true;
           const cur = this.get(slug, hid).participants.find((x) => x.handle === handle);
-          const total = Number(ev.total_cost_usd) || 0;
-          const prev = cur?.sessionCostUsd ?? 0;
-          const costUsd = (cur?.costUsd ?? 0) + (total >= prev ? total - prev : total);
-          this.updateP(slug, hid, handle, { status: "idle", costUsd, sessionCostUsd: total });
+          this.updateP(slug, hid, handle, { status: "idle", ...costAfter(cur, Number(ev.total_cost_usd) || 0) });
+          this.checkBudget(slug, hid);
           // Turn boundary: a monitor gets what came in while it worked.
           if (run.pending) queueMicrotask(() => this.deliverNow(slug, hid, handle));
           return;
@@ -648,21 +786,36 @@ export class Huddles {
     for (const p of h.participants) if (p.kind !== "human") this.stopParticipantRun(slug, h, p);
     this.update(slug, hid, (x) => {
       x.status = "stopped";
+      x.stopReason = null;
       for (const p of x.participants) if (p.kind !== "human") p.status = "stopped";
     });
     this.system(slug, hid, "Huddle stopped by @you: every run was stopped.");
     return this.get(slug, hid);
   }
 
-  /** Resume routing; stopped participants wake again when tagged (or, in monitor mode, on new messages). */
-  resume(slug: string, hid: string): Huddle {
+  /**
+   * Resume routing; stopped participants wake again when tagged (or, in monitor mode, on new messages).
+   * addBudgetUsd raises the budget (needed when it was spent); the message limit and the agent-only count start over.
+   */
+  resume(slug: string, hid: string, addBudgetUsd = 0): Huddle {
     const h = this.get(slug, hid);
     this.assertOpen(h);
+    if (!Number.isFinite(addBudgetUsd) || addBudgetUsd < 0) throw new HuddleError(400, "addBudgetUsd must be a positive amount");
+    const max = (h.maxCostUsd ?? DEFAULT_MAX_COST_USD) + addBudgetUsd;
+    const spent = huddleCost(h);
+    if (spent >= max) throw new HuddleError(409, `the huddle spent ${money(spent)} of its ${money(max)} budget: add budget to resume it`);
     this.update(slug, hid, (x) => {
       x.status = "live";
+      x.stopReason = null;
+      x.maxCostUsd = max;
+      x.sinceUser = 0;
+      x.held = null;
+      if (spent < max * BUDGET_WARN) x.budgetWarned = false;
+      // Another round of messages before the limit stops it again.
+      if (h.stopReason === "messages") x.maxMessages = (x.posts ?? 0) + DEFAULT_MAX_MESSAGES;
       for (const p of x.participants) if (p.status === "stopped") p.status = "idle";
     });
-    if (h.status !== "live") this.system(slug, hid, "Huddle resumed by @you.");
+    if (h.status !== "live" || addBudgetUsd) this.system(slug, hid, `Huddle resumed by @you${addBudgetUsd ? ` with ${money(addBudgetUsd)} more budget (now ${money(max)})` : ""}.`);
     return this.get(slug, hid);
   }
 

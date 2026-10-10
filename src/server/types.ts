@@ -264,6 +264,11 @@ export interface Plan {
 // ---- Huddles: several Claude sessions working on one ticket in a shared message room (see huddle.ts) ----
 
 export type HuddleStatus = "live" | "stopped" | "closed";
+/**
+ * Why a huddle stopped by itself (none: the user stopped it). budget: maxCostUsd spent. messages: maxMessages posted.
+ * loop: too many messages without the user (routing paused, runs keep going).
+ */
+export type HuddleStopReason = "budget" | "messages" | "loop";
 /** tagged: sleeps until @mentioned. monitor: every new message reaches its live session at its next turn boundary. */
 export type HuddleMode = "tagged" | "monitor";
 /** shared: the host ticket's worktree. own: a new git worktree branched off the host ticket's branch. */
@@ -302,7 +307,10 @@ export interface HuddleParticipant {
   cursor: number;
   joinedAt: string;
   lastActivity?: string | null;
-  /** Agents: what their runs cost so far, and the session's running total at its last result (results carry running totals). */
+  /**
+   * What its runs cost so far, and the session's running total at its last result (results carry running totals).
+   * Agents: every run. The coordinator (@main): the runs the huddle woke it for.
+   */
   costUsd?: number;
   sessionCostUsd?: number;
   error?: string | null;
@@ -333,6 +341,18 @@ export interface Huddle {
   invited: string[];
   /** Highest message seq so far. */
   seq: number;
+  /** Spending limit (all participants' costUsd): at 80% the leads are warned, at 100% the huddle stops (default 20). */
+  maxCostUsd?: number;
+  /** Non-system messages before the huddle stops (default 150). */
+  maxMessages?: number;
+  /** Non-system messages so far, and since the user last posted or resumed (agent-only stretch). */
+  posts?: number;
+  sinceUser?: number;
+  /** The 80% budget warning went out. */
+  budgetWarned?: boolean;
+  /** Two participants who kept answering each other: they no longer wake each other until a lead, @main or the user tags them, or Resume. */
+  held?: string[] | null;
+  stopReason?: HuddleStopReason | null;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
