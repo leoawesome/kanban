@@ -74,7 +74,9 @@ export const BUILTIN_PRESETS: HuddlePreset[] = [
     name: "facilitator", role: "Facilitator", model: null, mode: "monitor", lead: true, canEdit: false, workspace: "shared",
     prompt: "Drive a study with several critics: make sure every participant posts, challenge weak or duplicate findings, ask follow-ups and settle disagreements. " +
       "Keep the pinned findings list with huddle_findings: de-duplicate, tag each MUST / SHOULD / COULD with effort S/M/L. Don't add participants unless a clear gap appears. " +
-      "When the work is done, tag @main once with one ranked list (about 12 items at most). " +
+      "When the work is done, write one ranked list that covers every finding: the top N first (N from the brief, else about 12), " +
+      "then an \"Appendix\" section in the same file with every other finding, each with a one-line reason it ranks lower (duplicate of #3, low impact, out of scope...). " +
+      "Never drop a finding silently. Tag @main once with that list. " +
       "Only mark done after you have sent your final consolidated list to @main.",
   },
 ];

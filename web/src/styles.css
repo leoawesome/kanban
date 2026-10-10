@@ -1053,6 +1053,7 @@ textarea.drop-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--
 .huddle-row.stopped .hr-dot { background: var(--warn); }
 .huddle-row .hr-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .huddle-row.closed .hr-title { font-weight: 500; }
+.huddle-row .hr-round { color: var(--muted); font-weight: 500; }
 .huddle-row.brake .hr-dot { background: var(--err); }
 .huddle-row.quiet .hr-dot { background: var(--ok); }
 .huddle-row .hr-flags { display: flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
@@ -1801,8 +1802,12 @@ button.hd-mode:disabled { cursor: default; }
 .hd-p { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
 .hd-p-main { min-width: 0; flex: 1; }
 .hd-p-name { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
-.hd-p-st { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; }
-.hd-p-st-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Long handles ellipsize (full handle and role in the tooltip); the pills give way first. */
+.hd-p-name b { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.hd-p-name .pill { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hd-p-st { font-size: 11.5px; color: var(--muted); display: flex; align-items: flex-start; gap: 5px; min-width: 0; }
+.hd-p-st-text { overflow: hidden; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: anywhere; line-height: 1.35; }
+.hd-p-st .hd-dot { margin-top: 4px; }
 .hd-p-st .hd-dot { flex: none; margin-right: 0; }
 .hd-redo { font-size: 11px; color: var(--info); flex: none; }
 .hd-p-cost { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; width: 44px; text-align: right; flex: none; }

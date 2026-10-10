@@ -8,19 +8,21 @@ import { useFocusTrap, useLayer } from "./layers";
  * Dialog with focus trap and Esc (topmost layer only). `guard` = there is typed work to lose:
  * Esc, the × and clicking outside ask before closing.
  */
-export function Modal({ title, onClose, children, wide, guard }: {
+export function Modal({ title, onClose, children, wide, guard, focusDialog }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
   guard?: boolean;
+  /** Focus the dialog itself, not its first field (so a stray key can't edit a saved value). */
+  focusDialog?: boolean;
 }) {
   const id = useId();
   const box = useRef<HTMLDivElement>(null);
   const [asking, setAsking] = useState(false);
   const tryClose = () => (guard ? setAsking(true) : onClose());
   useLayer(tryClose);
-  useFocusTrap(box);
+  useFocusTrap(box, focusDialog);
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && tryClose()}>
       <div ref={box} className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby={id} tabIndex={-1}>

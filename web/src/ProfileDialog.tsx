@@ -128,7 +128,7 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted, onOpenTeam
   const customModel = model && !MODELS.includes(model) ? model : null;
 
   return (
-    <Modal title={profile ? `Profile: ${profile.name}` : "New profile"} onClose={onClose} wide={isNew}>
+    <Modal title={profile ? `Board settings · ${profile.name}` : "New board"} onClose={onClose} wide={isNew} focusDialog={!isNew}>
       <form className="form" onSubmit={submit}>
         <div className="field">
           <div className="field-label">Folder</div>
@@ -256,7 +256,7 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted, onOpenTeam
         {err && <div className="form-error">{err}</div>}
         <div className="form-actions">
           {profile && (
-            <button type="button" className="btn ghost danger" onClick={() => setConfirmDelete(true)}>Delete profile</button>
+            <button type="button" className="btn ghost danger" onClick={() => setConfirmDelete(true)}>Delete board</button>
           )}
           <div className="spacer" />
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>

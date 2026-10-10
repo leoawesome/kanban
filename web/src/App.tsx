@@ -25,6 +25,7 @@ import { toast, Toaster } from "./toast";
 import type { DockTab } from "./Dock";
 import type { HuddleSeed, TeamRequest } from "./Team";
 import { useBoardHuddles } from "./huddle";
+import { hasOpenPr, runCounts } from "./boardStats";
 
 // xterm.js and highlight.js only load once the panel is opened. After an upgrade the old chunk is gone:
 // reload once to get the new build instead of blanking the whole page.
@@ -80,7 +81,7 @@ function focusCard(pos: CardPos | null, grid = cardGrid()) {
 const FILTERS = [
   { id: "you", label: "Needs you", test: (t: Ticket) => !!t.attention },
   { id: "running", label: "Running", test: (t: Ticket) => t.status === "in_progress" || !!t.running },
-  { id: "pr", label: "Has PR", test: (t: Ticket) => !!t.prUrl },
+  { id: "pr", label: "Has PR", test: hasOpenPr },
 ] as const;
 type FilterId = (typeof FILTERS)[number]["id"];
 
@@ -524,8 +525,8 @@ export function App() {
   const mcpAttention = mcp?.servers.filter((s) => s.attention).length ?? 0;
   const scheduleErrors = schedules?.filter((s) => s.lastError).length ?? 0;
   const missing = health ? (["claude", "git", "gh"] as const).filter((k) => !health[k]) : [];
-  // Runs holding a slot, as the server counts them (Planning and replies to other tickets don't take one).
-  const running = tickets.filter((t) => t.holdsSlot).length;
+  // Every active ticket run (chat replies and Planning too); slots: the ones holding a maxParallel slot, as the server counts them.
+  const running = runCounts(tickets, huddles);
   const queued = tickets.filter((t) => t.status === "ready" || waitsForSlot(t)).length;
 
   const updateKey = `update:${version?.latest}`;
@@ -599,13 +600,13 @@ export function App() {
                 icon: <CopyIcon size={12} />,
                 onSelect: () => { copy(profile.path).then(() => toast(<>Copied <code>{tildePath(profile.path)}</code></>, { tone: "ok" })); },
               }] : []),
-              { label: "New profile…", onSelect: () => setProfileDialog("new") },
+              { label: "New board…", onSelect: () => setProfileDialog("new") },
             ]}
           />
         )}
         {profile && (
-          <span className="pill" title={`At most ${profile.maxParallel} tickets run at the same time on this board`}>
-            {running}/{profile.maxParallel} running{queued > 0 && <> · {queued} queued</>}
+          <span className="pill" title={`${running.runs} ticket ${running.runs === 1 ? "run" : "runs"} active, ${running.slots} of ${profile.maxParallel} slots in use. Slots apply to ticket runs: at most ${profile.maxParallel} work at the same time on this board. Planning chats and replies to other tickets don't take a slot.${running.agents ? ` Huddle agents (${running.agents} working) run outside the slots.` : ""}`}>
+            {running.runs}/{profile.maxParallel} running{running.agents > 0 && <> · {running.agents} huddle {running.agents === 1 ? "agent" : "agents"}</>}{queued > 0 && <> · {queued} queued</>}
           </span>
         )}
         <UsagePill openRequest={usageRequest} />

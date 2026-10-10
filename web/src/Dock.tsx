@@ -3,7 +3,7 @@ import { api, type Huddle, type Profile, type QuickChat } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { FilesView } from "./FilesView";
 import { TeamTab, type HuddleSeed, type TeamRequest } from "./Team";
-import { brakeLabel, guestTickets, huddleCost, members, quietLabel, sortHuddles } from "./huddle";
+import { brakeLabel, guestTickets, huddleCost, huddleTitle, members, quietLabel, roundTag, sortHuddles } from "./huddle";
 import { CloseIcon, RefreshIcon } from "./icons";
 import { TerminalView } from "./TerminalView";
 import { fullTime, timeAgo, useNow } from "./time";
@@ -239,11 +239,13 @@ function HuddleList({ huddles, onOpen }: { huddles: Huddle[]; onOpen?: (ticketId
         const quiet = quietLabel(h, now);
         const failed = members(h).filter((p) => p.status === "failed").length;
         const forYou = h.status === "closed" ? 0 : h.forYou ?? 0;
+        const host = h.hostTitle ?? h.hostTicket;
+        const round = roundTag(huddles, h);
         return (
           <button key={h.id} role="listitem" className={`huddle-row ${h.status}${brake ? " brake" : quiet ? " quiet" : ""}`} onClick={() => onOpen?.(h.hostTicket, h.id)}
-            title={`Open the huddle of ${h.hostTitle ?? h.hostTicket}`}>
+            title={`Open ${round ? `${round.toLowerCase()} of ` : ""}the huddle of ${host}: ${huddleTitle(h)} · started ${fullTime(h.createdAt)}`}>
             <span className="hr-dot" aria-label={brake ?? (quiet ? "quiet" : h.status)} />
-            <span className="hr-title">{h.hostTitle ?? h.hostTicket}</span>
+            <span className="hr-title">{host}{round && <span className="hr-round"> · {round}</span>}</span>
             <span className="hr-flags">
               {brake && <span className="hr-brake">Huddle · {brake}</span>}
               {quiet && <span className="hr-quiet">all quiet · {quiet}</span>}

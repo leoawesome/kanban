@@ -63,7 +63,7 @@ export function TeamTab({ slug, boardName, active, openTicket, request, onStartH
   request?: (TeamRequest & { n: number }) | null;
   onStartHuddle: (seed: HuddleSeed) => void;
   /** Open a ticket's Huddle tab (a huddle on this board). */
-  onOpenHuddle?: (ticketId: string) => void;
+  onOpenHuddle?: (ticketId: string, huddleId?: string) => void;
 }) {
   const [view, setView] = useState<View>(() => {
     try {
@@ -262,7 +262,7 @@ function TeammateDetail({ slug, p, usage, notes, startHint, onEdit, onDelete, on
   onDelete: () => void;
   onStart: () => void;
   onSaveNotes: (scope: "general" | "repo", list: HuddleNote[]) => Promise<boolean>;
-  onOpenHuddle?: (ticketId: string) => void;
+  onOpenHuddle?: (ticketId: string, huddleId?: string) => void;
 }) {
   const main = p.name === MAIN;
   const own = notes?.notes[p.name] ?? { general: [], repo: [] };
@@ -309,7 +309,7 @@ function TeammateDetail({ slug, p, usage, notes, startHint, onEdit, onDelete, on
               const label = r.title ?? r.ticket;
               return (
                 <li key={`${r.board}/${r.huddle}`}>
-                  {here && onOpenHuddle ? <button className="link-btn" onClick={() => onOpenHuddle(r.ticket)} title="Open the huddle">{label}</button> : <span>{label}</span>}
+                  {here && onOpenHuddle ? <button className="link-btn" onClick={() => onOpenHuddle(r.ticket, r.huddle)} title="Open this huddle">{label}</button> : <span>{label}</span>}
                   {!here && <span className="tm-hint"> · {r.board}</span>}
                   <span className="tm-hint"> · <time dateTime={r.at} title={fullTime(r.at)}>{timeAgo(r.at)}</time> · {costText(r.costUsd)}</span>
                 </li>

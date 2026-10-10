@@ -838,6 +838,9 @@ function Roster({ slug, huddle: h, onError, viewing, onView }: {
         const human = p.kind === "human";
         const st = ["working", "failed", "stopped", "done", "blocked"].includes(p.status) ? p.status : "idle";
         const restartable = !closed && !human && (p.status === "failed" || p.status === "stopped");
+        const activity = human ? "human" : p.status === "failed" ? "failed" : participantActivity(p, closed);
+        // Long statuses wrap to two lines; the tooltip has all of it.
+        const detail = [...new Set([participantActivity(p, closed), p.error, p.statusReason, p.lastActivity].filter((x): x is string => !!x))].join("\n");
         return (
           <div key={p.handle} className={`hd-p${human ? "" : " viewable"}${viewing === p.handle ? " sel" : ""}`}>
             <Avatar handle={p.handle} small />
@@ -846,14 +849,14 @@ function Roster({ slug, huddle: h, onError, viewing, onView }: {
                 <button className="hd-p-open" onClick={() => onView(p.handle)} aria-pressed={viewing === p.handle}
                   aria-label={`${viewing === p.handle ? "Close" : "Open"} @${p.handle}'s session`} title={`@${p.handle}'s session (read-only)`} />
               )}
-              <div className="hd-p-name">
+              <div className="hd-p-name" title={p.role && p.role !== p.handle ? `@${p.handle} · ${p.role}` : `@${p.handle}`}>
                 <b>@{p.handle}</b>
                 {p.handle === "main" && <span className="pill lead">coordinator</span>}
                 {p.lead && p.handle !== "main" && !human && <span className="pill lead">lead</span>}
               </div>
               <div className={`hd-p-st ${st}`}>
                 {!human && <span className={`hd-dot ${st}`} />}
-                <span className="hd-p-st-text" title={p.error ?? p.statusReason ?? p.lastActivity ?? undefined}>{human ? "human" : p.status === "failed" ? "failed" : participantActivity(p, closed)}</span>
+                <span className="hd-p-st-text" title={human ? undefined : detail}>{activity}</span>
                 {restartable && (
                   <button className="link-btn hd-redo" title={h.status === "live" ? `Restart @${p.handle}: it wakes now with what it hasn't read` : `Restart @${p.handle} when the huddle resumes`}
                     onClick={() => api.restartHuddleParticipant(slug, h.id, p.handle).catch(fail)}>restart</button>

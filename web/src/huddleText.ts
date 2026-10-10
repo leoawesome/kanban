@@ -29,6 +29,11 @@ export function ticketHuddles<H extends HuddleLike>(list: H[], ticketId: string)
 export const huddleRound = <H extends HuddleLike & { id: string }>(list: H[], h: H) =>
   list.filter((x) => x.hostTicket === h.hostTicket && x.createdAt <= h.createdAt).length;
 
+/** "Round 2" when the huddle's ticket hosted more than one (lists by host title would show the same title twice), else null. */
+export function roundTag<H extends HuddleLike & { id: string }>(list: H[], h: H): string | null {
+  return list.some((x) => x.hostTicket === h.hostTicket && x.id !== h.id) ? `Round ${huddleRound(list, h)}` : null;
+}
+
 const TITLE_MAX = 48;
 
 /** What the switcher calls a huddle: the brief's goal (or first line), else its template, else the day it started. */

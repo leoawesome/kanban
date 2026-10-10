@@ -1640,6 +1640,8 @@ test("teammates: built-in -> global -> board merge; deleting falls back one leve
   for (const n of ["researcher", "ux-critic", "facilitator"]) expect(BUILTIN_PRESETS.some((p) => p.name === n)).toBe(true);
   expect(BUILTIN_PRESETS.find((p) => p.name === "researcher")).toMatchObject({ model: "sonnet", mode: "tagged", workspace: "shared", canEdit: false });
   expect(BUILTIN_PRESETS.find((p) => p.name === "facilitator")!.lead).toBe(true);
+  // It ranks every finding: top N first, the rest in an Appendix with a reason, none dropped.
+  expect(BUILTIN_PRESETS.find((p) => p.name === "facilitator")!.prompt).toMatch(/every finding[\s\S]*Appendix[\s\S]*one-line reason[\s\S]*Never drop a finding silently/);
   const roster = BUILTIN_TEMPLATES[0].roster;
   expect(Object.fromEntries(roster.map((e) => [e.handle, e.preset ?? null]))).toMatchObject({ research: "researcher", ux: "ux-critic", facilitator: "facilitator" });
   expect(rosterError(roster, 32, BUILTIN_PRESETS.map((p) => p.name))).toBeNull();

@@ -3,7 +3,7 @@ import { api, onReconnect, subscribe, type Huddle, type HuddleMessage } from "./
 import { AVATAR_COLORS } from "./avatar";
 import { mergeMessages, pickHuddle, ticketHuddles, upsertHuddle, withActivity } from "./huddleText";
 
-export { brakeLabel, cardHuddleBadge, dollars, guestTickets, huddleRound, huddleTitle, idleFor, quietLabel, sortHuddles, type CardHuddleBadge } from "./huddleText";
+export { brakeLabel, cardHuddleBadge, dollars, guestTickets, huddleRound, huddleTitle, idleFor, quietLabel, roundTag, sortHuddles, type CardHuddleBadge } from "./huddleText";
 export { handleInitials, isForYou, mentionCandidates, mentionQuery, participantActivity, sourceLabel, untaggedHint } from "./huddleText";
 
 /** Participants that count toward the cap (everyone but the user). */
