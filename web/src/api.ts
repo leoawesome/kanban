@@ -276,6 +276,8 @@ export interface SessionEntry {
   branch?: { reason: string };
   /** Claude proposed a huddle (propose_huddle): the roster card with Start. */
   huddle?: { roster: RosterEntry[]; reason: string; template?: string };
+  /** Claude asked to delete tickets (propose_delete): the card with Cancel / Delete. */
+  deletion?: { ids: string[]; reason: string };
   /** Mockups Claude sent in this reply, saved as outputs/mockups/<name>. */
   mockups?: string[];
   moved?: "planning";

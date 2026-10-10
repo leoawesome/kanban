@@ -67,19 +67,27 @@ const CHROME_TOOL = "mcp__claude-in-chrome__";
  * before every MCP tool that isn't read-only) can coordinate its huddle too.
  */
 const HUDDLE_TOOLS = new Set(["huddle_post", "huddle_read", "huddle_mode", "huddle_findings", "huddle_add_participant", "huddle_status", "huddle_close", "huddle_brief"].map((t) => `mcp__ckanban__${t}`));
+/**
+ * Board tools a Planning chat may use when the user asks for it in their message. They never touch files; the
+ * daemon still decides per call (Board.userRequestRights), so a Planning run without the user's message gets nothing.
+ */
+const PLANNING_BOARD_TOOLS = new Set(["move_ticket", "update_ticket", "comment_ticket", "create_ticket", "chat_ticket", "stop_ticket", "plan_control", "adopt_tickets"]
+  .map((t) => `mcp__ckanban__${t}`));
 
 /**
  * The board's answer to a control request from claude (stream-json). Permission asks for Claude in Chrome
- * tools and the huddle tools are allowed; every other ask is denied, as it was before prompts reached the board
- * (headless runs had nobody to answer them). Anything else gets an error so claude never waits on the board.
+ * tools and the huddle tools are allowed, and in a Planning run (plan mode) the board tools too; every other ask
+ * is denied, as it was before prompts reached the board (headless runs had nobody to answer them). Anything else
+ * gets an error so claude never waits on the board.
  */
-export function controlResponse(ev: any): unknown {
+export function controlResponse(ev: any, planning = false): unknown {
   const req = ev?.request;
   const id = ev?.request_id;
   if (req?.subtype !== "can_use_tool") {
     return { type: "control_response", response: { subtype: "error", request_id: id, error: `unsupported control request: ${req?.subtype}` } };
   }
-  const allow = typeof req.tool_name === "string" && (req.tool_name.startsWith(CHROME_TOOL) || HUDDLE_TOOLS.has(req.tool_name));
+  const tool = typeof req.tool_name === "string" ? req.tool_name : "";
+  const allow = tool.startsWith(CHROME_TOOL) || HUDDLE_TOOLS.has(tool) || (planning && PLANNING_BOARD_TOOLS.has(tool));
   return {
     type: "control_response",
     response: {
@@ -104,6 +112,8 @@ export function startRun(opts: {
   input?: string;
   /** The first message is a local slash command (see RunHandle.send). */
   inputLocal?: boolean;
+  /** A Planning chat (plan mode): its permission asks for the board tools are allowed (see controlResponse). */
+  planning?: boolean;
   onEvent: (ev: any) => void;
   /**
    * Claude ended its turn but background tasks it waits on are still running (the run stays
@@ -229,7 +239,7 @@ export function startRun(opts: {
         }
         // Permission asks and other requests to the host: answer them, they aren't part of the conversation.
         if (ev?.type === "control_request") {
-          writeLine(JSON.stringify(controlResponse(ev)) + "\n");
+          writeLine(JSON.stringify(controlResponse(ev, opts.planning)) + "\n");
           return;
         }
         // Partial-message deltas are only for the live view; don't keep thousands of them in memory.

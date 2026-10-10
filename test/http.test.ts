@@ -526,3 +526,71 @@ test("the user's chat gives a ticket planner rights over its own children: adopt
     board.userChatRun = real;
   }
 });
+
+test("a Planning chat answering the user's message may change any other ticket on its board, logged as a user request", async () => {
+  const mk = async (name: string) => (await (await fetch(`${base}/api/profiles`, json("POST", { name, path: tempDir("ck-req-") }))).json()) as any;
+  const p = await mk("Request Proj");
+  const q = await mk("Other Proj");
+  const tickets = `${base}/api/profiles/${p.slug}/tickets`;
+  const send = async (u: string, b: unknown, headers: Record<string, string> = {}, method = "POST") =>
+    fetch(u, { method, headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(b) });
+  const chatT = (await (await send(tickets, { title: "Planning chat", status: "backlog" })).json()) as any;
+  const x = (await (await send(tickets, { title: "X" })).json()) as any;
+  const y = (await (await send(tickets, { title: "Y" })).json()) as any;
+  const run = { "x-ckanban-run": `${p.slug}/${chatT.id}` };
+  const errorOf = async (r: Response) => ((await r.json()) as any).error as string;
+
+  // Without the user's message behind the run (plan wake-up, non-refine run): refused like any board run.
+  let r = await send(`${tickets}/${x.id}`, { status: "done" }, run, "PATCH");
+  expect(r.status).toBe(403);
+
+  const real = board.userRequestRights.bind(board);
+  board.userRequestRights = (slug, id) => (slug === p.slug && id === chatT.id ? store.getTicket(slug, id)! : real(slug, id));
+  try {
+    r = await send(`${tickets}/${x.id}`, { status: "done" }, run, "PATCH");
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as any).status).toBe("done");
+    expect(store.listComments(p.slug, x.id).at(-1)!.text).toBe(`Moved it to done by the Planning chat of ${chatT.id} (user request).`);
+    r = await send(`${tickets}/${y.id}`, { title: "Y2", body: "clearer" }, run, "PATCH");
+    expect(r.status).toBe(200);
+    expect(store.getTicket(p.slug, y.id)!.title).toBe("Y2");
+    expect(store.listComments(p.slug, y.id).at(-1)!.text).toBe(`Changed title, changed body by the Planning chat of ${chatT.id} (user request).`);
+    r = await send(`${tickets}/${y.id}/comments`, { text: "see X" }, run);
+    expect(((await r.json()) as any).text).toBe(`From the Planning chat of ${chatT.id} (user request): see X`);
+    r = await send(tickets, { title: "Follow-up" }, run);
+    expect(r.status).toBe(201);
+    const made = (await r.json()) as any;
+    expect([made.parentId ?? null, made.status]).toEqual([null, "backlog"]);
+    expect(store.listComments(p.slug, made.id).at(-1)!.text).toBe(`Created by the Planning chat of ${chatT.id} (user request).`);
+    r = await send(`${tickets}/${y.id}/stop`, {}, run);
+    expect(r.status).toBe(200);
+
+    // Its own ticket: refused, the user moves it.
+    r = await send(`${tickets}/${chatT.id}`, { status: "ready" }, run, "PATCH");
+    expect(r.status).toBe(403);
+    expect(await errorOf(r)).toContain("own ticket");
+    for (const action of ["stop", "chat", "comments"]) {
+      r = await send(`${tickets}/${chatT.id}/${action}`, { text: "go" }, run);
+      expect(r.status).toBe(403);
+    }
+    expect(store.getTicket(p.slug, chatT.id)!.status).toBe("backlog");
+    // Deleting stays the user's (propose_delete card), even here.
+    r = await fetch(`${tickets}/${y.id}`, { method: "DELETE", headers: run });
+    expect(r.status).toBe(403);
+    // A huddle agent of the same ticket, another ticket's run, and another board get nothing.
+    r = await send(`${tickets}/${x.id}`, { status: "review" }, { ...run, "x-ckanban-huddle-agent": "reviewer" }, "PATCH");
+    expect(r.status).toBe(403);
+    r = await send(`${tickets}/${x.id}`, { status: "review" }, { "x-ckanban-run": `${p.slug}/${y.id}` }, "PATCH");
+    expect(r.status).toBe(403);
+    const z = (await (await send(`${base}/api/profiles/${q.slug}/tickets`, { title: "Z" })).json()) as any;
+    r = await send(`${base}/api/profiles/${q.slug}/tickets/${z.id}`, { status: "done" }, run, "PATCH");
+    expect(r.status).toBe(403);
+    expect(store.getTicket(p.slug, x.id)!.status).toBe("done");
+    // The user's own delete (the card's Delete button) works.
+    r = await fetch(`${tickets}/${y.id}`, { method: "DELETE" });
+    expect(r.status).toBe(204);
+    expect(store.getTicket(p.slug, y.id)).toBeNull();
+  } finally {
+    board.userRequestRights = real;
+  }
+});

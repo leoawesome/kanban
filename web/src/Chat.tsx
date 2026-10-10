@@ -5,6 +5,7 @@ import { HuddleDigest } from "./HuddleDigest";
 import { autoGrow } from "./autoGrow";
 import { branchTicket } from "./branch";
 import { BranchCard } from "./BranchCard";
+import { DeleteCard } from "./DeleteCard";
 import { AgentRows } from "./AgentRow";
 import { ToolRows } from "./ToolRows";
 import { ArrowDownIcon, BranchIcon, CloseIcon, FileCodeIcon, FileTextIcon } from "./icons";
@@ -443,6 +444,9 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
                 <BranchCard reason={e.branch.reason} here={old} running={running} onOpen={onOpenTicket}
                   branch={tickets.find((t) => t.branchedFrom === ticket.id && !!t.branchPoint && t.branchPoint.at > e.at)}
                   onBranch={() => branchTicket(slug, ticket, onOpenTicket).then(() => {}, (err) => onError(err.message))} />
+              )}
+              {e.deletion && (
+                <DeleteCard slug={slug} ticket={ticket} tickets={tickets} uuid={e.uuid} ids={e.deletion.ids} reason={e.deletion.reason} onError={onError} />
               )}
               {e.huddle && (
                 <HuddleCard slug={slug} ticket={ticket} tickets={tickets} uuid={e.uuid} at={e.at} roster={e.huddle.roster} reason={e.huddle.reason} template={e.huddle.template}

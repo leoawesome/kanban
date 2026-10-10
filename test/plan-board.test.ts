@@ -282,3 +282,24 @@ test("planner rights: a reply to the user's own chat message, or any run of a ru
   expect(board.plannerRights("p", mgr.id)).toBeNull();
   await settle();
 }, 30000);
+
+test("user-request rights: only a Planning chat's reply to the user's own message", async () => {
+  process.env.FAKE_STEP_MS = "100";
+  const t = await board.createTicket("p", { title: "Shape me", body: "", status: "backlog" });
+  expect(board.userRequestRights("p", t.id)).toBeNull();
+  await board.chat("p", t.id, "move X to done");
+  expect(board.userRequestRights("p", t.id)?.id).toBe(t.id);
+  await settle();
+  expect(board.userRequestRights("p", t.id)).toBeNull();
+  // A message from another run (chat_ticket) doesn't hand the user's rights on.
+  await board.chat("p", t.id, "from a run", { fromPlanner: true });
+  expect(board.isRunning("p", t.id)).toBe(true);
+  expect(board.userRequestRights("p", t.id)).toBeNull();
+  await settle();
+  // A chat outside Backlog/Planning acts (bypassPermissions) and keeps the planner-only rights.
+  const r = await board.createTicket("p", { title: "Reviewed", body: "", status: "review" });
+  await board.chat("p", r.id, "move X to done");
+  expect(board.userChatRun("p", r.id)).toBe(true);
+  expect(board.userRequestRights("p", r.id)).toBeNull();
+  await settle();
+}, 30000);

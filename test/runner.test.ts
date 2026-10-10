@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { mcpConfig } from "../src/server/agents";
-import { buildArgs, startRun } from "../src/server/runner";
+import { buildArgs, controlResponse, startRun } from "../src/server/runner";
 import { tempDir } from "./helpers";
 
 const FAKE = join(import.meta.dir, "fixtures", "fake-claude.ts");
@@ -145,8 +145,11 @@ test("permission asks: Chrome tools are allowed, other tools denied, other reque
   const seen: any[] = [];
   const r = await startRun({ bin: FAKE, cwd: tempDir(), args: STREAM, input: "open example.com", onEvent: (e) => seen.push(e) }).done;
   expect(r.code).toBe(0);
-  expect(r.events.at(-1).result).toContain("Asks: mcp__claude-in-chrome__navigate=allow Bash=deny other=error");
+  expect(r.events.at(-1).result).toContain("Asks: mcp__claude-in-chrome__navigate=allow Bash=deny other=error mcp__ckanban__move_ticket=deny");
   expect(seen.some((e) => e.type === "control_request")).toBe(false);
+  // A Planning run (plan mode) may use the board tools; the daemon still checks each call.
+  const p = await startRun({ bin: FAKE, cwd: tempDir(), args: STREAM, input: "move t_1 to done", planning: true, onEvent: () => {} }).done;
+  expect(p.events.at(-1).result).toContain("Bash=deny other=error mcp__ckanban__move_ticket=allow");
 }));
 
 test("a background task keeps the run open until Claude picks its result up", withMode("background", async () => {
@@ -227,3 +230,19 @@ test("without idleMs input ends as soon as Claude is idle; endWhenIdle ends a ke
   expect((await kept.done).code).toBe(0);
   expect(Date.now() - t1).toBeLessThan(3000);
 }), 10000);
+
+test("controlResponse allows the board tools only for Planning runs; Chrome and huddle tools work for every run", () => {
+  const ask = (tool: string, planning?: boolean) =>
+    (controlResponse({ request_id: "r", request: { subtype: "can_use_tool", tool_name: tool, input: { id: "t_1" } } }, planning) as any).response.response.behavior;
+  const board = ["move_ticket", "update_ticket", "comment_ticket", "create_ticket", "chat_ticket", "stop_ticket", "plan_control", "adopt_tickets"];
+  for (const t of board) {
+    expect(ask(`mcp__ckanban__${t}`, true)).toBe("allow");
+    expect(ask(`mcp__ckanban__${t}`)).toBe("deny");
+  }
+  for (const planning of [false, true]) {
+    expect(ask("mcp__ckanban__huddle_post", planning)).toBe("allow");
+    expect(ask("mcp__claude-in-chrome__navigate", planning)).toBe("allow");
+    // Deleting, file edits and shell commands stay blocked in plan mode.
+    for (const t of ["mcp__ckanban__delete_ticket", "mcp__ckanban__run_schedule", "Edit", "Write", "Bash"]) expect(ask(t, planning)).toBe("deny");
+  }
+});

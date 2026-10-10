@@ -620,6 +620,13 @@ textarea { resize: vertical; font-size: 13.5px; }
 .proposal-title { font-size: 15px; font-weight: 650; }
 .proposal-body { font-size: 13px; border-top: 1px solid var(--border); padding-top: 6px; }
 .proposal-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* propose_delete: the user confirms deleting tickets */
+.delete-card { border-color: var(--err); }
+.delete-card .proposal-tag { color: var(--err); display: inline-flex; align-items: center; gap: 4px; }
+.delete-card.done { border-color: var(--border); }
+.delete-card.done .proposal-tag { color: var(--muted); }
+.delete-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.delete-card .proposal-actions { justify-content: flex-end; border-top: 1px solid var(--border); padding-top: 8px; }
 .new-ticket { border-top: 1px solid var(--border); padding-top: 6px; display: flex; flex-direction: column; gap: 6px; }
 .new-ticket-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .new-ticket-title { font-weight: 600; text-align: left; color: var(--text); }

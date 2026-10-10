@@ -280,6 +280,7 @@ const SCHEDULE_TOOLS: Tool[] = [
       "List a board's schedules (recurring tickets): id, active/paused, when it fires (plain English + cron), next run, last ticket, errors. " +
       "Check this before create_schedule to avoid duplicates.",
     inputSchema: { type: "object", properties: { profile: PROFILE } },
+    annotations: { readOnlyHint: true },
     changes: false,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
@@ -358,6 +359,7 @@ const SCHEDULE_TOOLS: Tool[] = [
       properties: { profile: PROFILE, id: SCHEDULE_ID, limit: { type: "number", description: "Entries to show. Default: 20." } },
       required: ["id"],
     },
+    annotations: { readOnlyHint: true },
     changes: false,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
@@ -518,6 +520,36 @@ const PLANNING_TOOLS: Tool[] = [
     async run(args) {
       if (args?.reason !== undefined && typeof args.reason !== "string") throw new ClientError("reason must be a string. Fix it and call propose_branch again.");
       return SHOWN;
+    },
+  },
+  {
+    name: "propose_delete",
+    description:
+      "Board ticket chat: ask the user to delete tickets on this ticket's board (delete_ticket is refused inside board runs). Only when the user asked for it. " +
+      "The board shows a card with each ticket's title, id and column, your reason, and Cancel / Delete buttons; deleting removes the ticket's " +
+      "worktree, branch and chat and can't be undone. This ticket itself can't be proposed. Nothing is deleted by the call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ids: { type: "array", items: { type: "string" }, minItems: 1, description: "Ticket ids to delete, e.g. [\"t_20261001_abcd\"]." },
+        reason: { type: "string", description: "One short line: why they can go (e.g. replaced by t_20261001_wxyz)." },
+      },
+      required: ["ids", "reason"],
+    },
+    annotations: { readOnlyHint: true },
+    changes: false,
+    async run(args, ctx) {
+      const ids = Array.isArray(args?.ids) ? [...new Set(args.ids.filter((x: unknown) => typeof x === "string" && x.trim()).map((x: string) => x.trim()))] as string[] : [];
+      if (!ids.length) throw new ClientError("ids must be a non-empty list of ticket ids. Fix it and call propose_delete again.");
+      if (typeof args?.reason !== "string" || !args.reason.trim()) throw new ClientError("reason is required. Fix it and call propose_delete again.");
+      const own = runTicketId(ctx);
+      if (own && ids.includes(own)) throw new ClientError(`${own} is this chat's own ticket and can't be proposed for deletion; ask the user to delete it from the board.`);
+      // Always this chat's board: the card can only delete tickets there.
+      const slug = await slugFor({}, ctx);
+      const known = new Set((await ctx.client.listTickets(slug)).map((t) => t.id));
+      const missing = ids.filter((id) => !known.has(id));
+      if (missing.length === ids.length) throw new ClientError(`no such ticket on board ${slug}: ${missing.join(", ")}. Check list_tickets.`);
+      return SHOWN + (missing.length ? ` Not on board ${slug}, shown as skipped: ${missing.join(", ")}.` : "");
     },
   },
   {
@@ -893,6 +925,7 @@ export const TOOLS: Tool[] = [
     name: "list_profiles",
     description: "List the kanban boards (profiles) and the repo folder each one belongs to.",
     inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true },
     changes: false,
     async run(_args, ctx) {
       const ps = await ctx.client.listProfiles();
@@ -903,6 +936,7 @@ export const TOOLS: Tool[] = [
     name: "list_tickets",
     description: "List tickets on a board with id, column and title. Call this before create_ticket to avoid duplicates.",
     inputSchema: { type: "object", properties: { profile: PROFILE, status: { ...STATUS, description: "Only this column." } } },
+    annotations: { readOnlyHint: true },
     changes: false,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
@@ -918,6 +952,7 @@ export const TOOLS: Tool[] = [
     name: "get_ticket",
     description: "Show one ticket: description, column, run state, branch/PR and comments.",
     inputSchema: { type: "object", properties: { profile: PROFILE, id: ID }, required: ["id"] },
+    annotations: { readOnlyHint: true },
     changes: false,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);

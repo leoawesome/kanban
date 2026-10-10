@@ -62,6 +62,8 @@ export interface SessionEntry {
   branch?: { reason: string };
   /** Claude proposed a huddle roster (propose_huddle; rendered with a Start button). */
   huddle?: { roster: RosterEntry[]; reason: string; template?: string };
+  /** Claude asked to delete tickets (propose_delete; rendered with Cancel / Delete buttons). */
+  deletion?: { ids: string[]; reason: string };
   /** Mockups Claude sent as blocks (saved to outputs/mockups; the chat links to them). */
   mockups?: string[];
   /** Claude asked the board to move the ticket (a planning-only request arrived in Review). */
@@ -349,10 +351,11 @@ const PROPOSAL_TOOL = /(?:^|__)propose_ticket$/;
 const TICKETS_TOOL = /(?:^|__)propose_tickets$/;
 const BRANCH_TOOL = /(?:^|__)propose_branch$/;
 const HUDDLE_TOOL = /(?:^|__)propose_huddle$/;
+const DELETE_TOOL = /(?:^|__)propose_delete$/;
 const REPLY_HEAD = /^Reply from ticket (\S+) .*:\n\n/;
 
 /** The form or card a planning-chat tool call shows, or null for other tools (or input that can't be read). */
-function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "newTickets" | "branch" | "huddle"> | null {
+function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "newTickets" | "branch" | "huddle" | "deletion"> | null {
   const name = String(block.name ?? "");
   if (QUESTIONS_TOOL.test(name)) {
     const questions = parseQuestions(block.input?.questions);
@@ -367,6 +370,10 @@ function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "n
     return newTickets && { newTickets };
   }
   if (BRANCH_TOOL.test(name)) return { branch: { reason: typeof block.input?.reason === "string" ? block.input.reason.trim() : "" } };
+  if (DELETE_TOOL.test(name)) {
+    const ids = Array.isArray(block.input?.ids) ? [...new Set(block.input.ids.filter((x: unknown) => typeof x === "string" && x.trim()).map((x: string) => x.trim()))] as string[] : [];
+    return ids.length ? { deletion: { ids, reason: typeof block.input?.reason === "string" ? block.input.reason.trim() : "" } } : null;
+  }
   if (HUDDLE_TOOL.test(name)) {
     const template = typeof block.input?.template === "string" && block.input.template.trim() ? block.input.template.trim() : undefined;
     // With a template the roster is optional: the card fills in the template's.
@@ -526,11 +533,12 @@ export function parseSession(raw: string): ParsedSession {
   for (const e of entries) if (e.toolUseId && errored.has(e.toolUseId)) e.error = true;
   if (failed.size) entries.splice(0, entries.length, ...entries.filter((e) => !failed.has(e.uuid)));
   dropBlockedMoves(entries);
-  const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal || e.newTickets || e.branch));
+  const last = entries.findLast((e) => e.kind === "text" && (e.text || e.questions || e.proposal || e.newTickets || e.branch || e.deletion));
   const lastText = !last ? "" : last.text
     || (last.questions ? `Asked ${last.questions.length} question${last.questions.length > 1 ? "s" : ""}`
       : last.newTickets ? `Proposed ${last.newTickets.length} new ticket${last.newTickets.length > 1 ? "s" : ""}`
-      : last.branch ? "Offered to branch this ticket" : "Proposed an updated ticket");
+      : last.branch ? "Offered to branch this ticket"
+      : last.deletion ? `Asked to delete ${last.deletion.ids.length} ticket${last.deletion.ids.length > 1 ? "s" : ""}` : "Proposed an updated ticket");
   const asked = last?.role === "assistant" ? entries.findLast((e, i) => i < entries.indexOf(last) && e.role === "user" && e.kind === "text") : undefined;
   return {
     title: customTitle ?? aiTitle,

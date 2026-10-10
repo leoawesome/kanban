@@ -222,19 +222,39 @@ test("inside a board run, changing tools are refused and read tools work", async
 
 test("every tool advertises a profile argument; change tools are flagged", () => {
   // The planning chat tools (forms, cards, artifacts) don't touch the board: no profile.
-  const PLANNING = ["ask_questions", "propose_branch", "propose_huddle", "propose_ticket", "propose_tickets", "publish_artifact", "read_artifact"];
+  const PLANNING = ["ask_questions", "propose_branch", "propose_delete", "propose_huddle", "propose_ticket", "propose_tickets", "publish_artifact", "read_artifact"];
   for (const t of TOOLS.filter((t) => t.name !== "list_profiles" && !PLANNING.includes(t.name))) expect(t.inputSchema.properties.profile).toBeDefined();
   expect(TOOLS.filter((t) => !t.changes).map((t) => t.name).sort()).toEqual([
-    "ask_questions", "get_ticket", "huddle_read", "list_huddle_presets", "list_profiles", "list_schedules", "list_tickets", "propose_branch", "propose_huddle", "propose_ticket",
-    "propose_tickets", "publish_artifact", "read_artifact", "report_bug", "schedule_history",
+    "ask_questions", "get_ticket", "huddle_read", "list_huddle_presets", "list_profiles", "list_schedules", "list_tickets", "propose_branch", "propose_delete", "propose_huddle",
+    "propose_ticket", "propose_tickets", "publish_artifact", "read_artifact", "report_bug", "schedule_history",
   ]);
-  expect(TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name).sort()).toEqual(["huddle_read", "list_huddle_presets", ...PLANNING].sort());
+  // Read tools run in a Planning chat (plan mode) without a permission ask; report_bug files an issue, so it asks.
+  const READ = ["get_ticket", "huddle_read", "list_huddle_presets", "list_profiles", "list_schedules", "list_tickets", "schedule_history"];
+  expect(TOOLS.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name).sort()).toEqual([...READ, ...PLANNING].sort());
   // Huddle tools work inside runs: the daemon checks who the run is (lead, coordinator, the participant itself).
   expect(TOOLS.filter((t) => t.allowInRun).map((t) => t.name).sort()).toEqual([
     "ask_ticket", "create_schedule", "delete_huddle_preset", "delete_schedule", "huddle_add_participant", "huddle_brief", "huddle_close", "huddle_findings", "huddle_mode", "huddle_post", "huddle_status",
     "reply_ticket",
     "save_huddle_preset", "update_schedule",
   ]);
+});
+
+test("propose_delete shows a card for the run's own board and deletes nothing", async () => {
+  const { ctx, calls } = ctxWith({ CKANBAN_TICKET: "kanban/t_9" }, "/elsewhere");
+  let r = await callTool("propose_delete", { ids: ["t_1", "t_1", "t_ghost"], reason: "replaced" }, ctx);
+  expect(r.isError).toBeUndefined();
+  expect(r.content[0].text).toContain("Shown to the user as a card");
+  expect(r.content[0].text).toContain("shown as skipped: t_ghost");
+  expect(calls.filter((c) => c.fn === "listTickets").map((c) => c.args)).toEqual([["kanban"]]);
+  expect(calls.some((c) => c.fn === "deleteTicket")).toBe(false);
+  r = await callTool("propose_delete", { ids: ["t_9"], reason: "x" }, ctx);
+  expect(r.isError).toBe(true);
+  expect(r.content[0].text).toContain("this chat's own ticket");
+  expect((await callTool("propose_delete", { ids: ["t_ghost"], reason: "x" }, ctx)).content[0].text).toContain("no such ticket");
+  expect((await callTool("propose_delete", { ids: [], reason: "x" }, ctx)).isError).toBe(true);
+  expect((await callTool("propose_delete", { ids: ["t_1"] }, ctx)).content[0].text).toContain("reason is required");
+  // delete_ticket itself stays refused inside runs.
+  expect((await callTool("delete_ticket", { id: "t_1" }, ctx)).content[0].text).toContain("inside a board run");
 });
 
 test("report_bug files from inside a board run, with the ticket attached", async () => {

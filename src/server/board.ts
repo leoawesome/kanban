@@ -618,6 +618,7 @@ export class Board {
       args: buildArgs(session.sessionId, session.existed, t.model ?? profile.model, refine ? "plan" : "bypassPermissions", mcpConfig(), systemPrompt),
       input: prompt,
       inputLocal: run.chat?.slash === "local",
+      planning: refine,
       // CKANBAN_TICKET marks board runs: the ckanban MCP/CLI refuses board changes there (no runs starting runs).
       env: { CKANBAN_OUTPUT_DIR: outputDir, CKANBAN_TICKET: `${slug}/${id}` },
       onEvent: (ev) => {
@@ -1028,6 +1029,15 @@ export class Board {
     if (!t) return null;
     if (planActive(t.plan)) return t;
     return t.plan?.state !== "done" && this.userChatRun(slug, runTicketId) ? t : null;
+  }
+
+  /**
+   * The ticket whose Planning chat (refine mode) is answering a message the user typed: that reply may manage
+   * other tickets on the board for the user (see plannerFor in http.ts). Plan wake-ups and peer replies don't count.
+   */
+  userRequestRights(slug: string, runTicketId: string): Ticket | null {
+    const chat = this.runs.get(this.key(slug, runTicketId))?.chat;
+    return chat?.mode === "refine" && chat.user ? this.store.getTicket(slug, runTicketId) ?? null : null;
   }
 
   /**

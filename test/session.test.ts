@@ -339,6 +339,18 @@ test("parseSession: propose_branch shows a Branch card", () => {
   expect(parseSession(asst([{ type: "tool_use", id: "b2", name: "propose_branch", input: {} }], "1")).entries[0].branch).toEqual({ reason: "" });
 });
 
+test("parseSession: propose_delete shows a delete card; a refused call shows none", () => {
+  const s = parseSession(asst([{ type: "tool_use", id: "toolu_d", name: "mcp__ckanban__propose_delete", input: { ids: [" t_1 ", "t_2", "t_1", 3], reason: " replaced " } }], "2026-10-10T01:00:00Z"));
+  expect(s.entries).toEqual([{ uuid: "toolu_d", at: "2026-10-10T01:00:00Z", role: "assistant", kind: "text", text: "", deletion: { ids: ["t_1", "t_2"], reason: "replaced" } }]);
+  expect(s.lastMessage?.text).toBe("Asked to delete 2 tickets");
+  const refused = parseSession([
+    asst([{ type: "tool_use", id: "toolu_own", name: "mcp__ckanban__propose_delete", input: { ids: ["t_9"], reason: "x" } }], "2026-10-10T01:00:00Z"),
+    user([{ type: "tool_result", tool_use_id: "toolu_own", is_error: true, content: [{ type: "text", text: "t_9 is this chat's own ticket" }] }], "2026-10-10T01:00:01Z"),
+  ].join("\n"));
+  expect(refused.entries.some((e) => e.deletion)).toBe(false);
+  expect(parseSession(asst([{ type: "tool_use", id: "x", name: "propose_delete", input: { ids: [] } }], "1")).entries[0].kind).toBe("tool");
+});
+
 test("parseSession: an unreadable planning tool call falls back to a tool line", () => {
   const s = parseSession(asst([{ type: "tool_use", id: "x", name: "mcp__ckanban__propose_tickets", input: { tickets: "nope" } }], "1"));
   expect(s.entries[0].kind).toBe("tool");

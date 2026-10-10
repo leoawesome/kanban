@@ -201,7 +201,10 @@ test("ticket chats can manage tickets when the user asks; planners hear about ne
   const act = chatPrompt(ticket, "manage A and B", "act", "/o");
   for (const s of ["adopt_tickets", "plan_control", "needs (e.g. [\"emulator\"])", "If the user only asked to create or adopt tickets, don't start the plan"]) expect(act).toContain(s);
   const refine = chatPrompt(ticket, "manage A and B", "refine", "/o");
-  expect(refine).toContain("this Planning chat is read-only and can't change the board");
+  expect(refine).not.toContain("read-only and can't change the board");
+  for (const s of ["ONLY when the user asks for it in their message", "move_ticket", "propose_delete", "Never change this ticket itself", "Say in your reply what you changed"]) {
+    expect(refine).toContain(s);
+  }
   expect(refine).toContain('"needs":["emulator"]');
   const wake = orchestratorPrompt(ticket, { kind: "event", events: [], table: "", board: "kanban", outputDir: "/o" });
   expect(wake).toContain("one ticket per exclusive resource (needs) at a time");

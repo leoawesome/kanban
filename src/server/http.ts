@@ -156,25 +156,39 @@ export function createServer(deps: ServerDeps) {
     return t;
   };
   /**
-   * Board runs send RUN_HEADER ("<profile>/<ticket id>") with ticket changes. Runs can't change the board, except
-   * a planner on its own child tickets: any run of a running plan, or a reply to the user's message in the
-   * planner's chat (see Board.plannerRights). Returns that planner, or undefined for the user.
+   * Board runs send RUN_HEADER ("<profile>/<ticket id>") with ticket changes. Runs can't change the board, except:
+   * - a Planning chat answering the user's message (Board.userRequestRights) acts for the user on any ticket of its
+   *   board but its own: returned as `requester`;
+   * - a planner on its own child tickets: any run of a running plan, or a reply to the user's message in the
+   *   planner's chat (Board.plannerRights): returned as `planner`.
+   * Returns {} for the user. Huddle agents run as their host ticket but get neither.
    */
-  const plannerFor = (req: Request, slug: string, target?: Ticket): Ticket | undefined => {
+  const runRights = (req: Request, slug: string, target?: Ticket): { planner?: Ticket; requester?: Ticket } => {
     const h = req.headers.get(RUN_HEADER);
-    if (!h) return undefined;
+    if (!h) return {};
     const [runSlug, runId] = h.split("/");
-    // A huddle agent runs as its host ticket but is not that ticket's planner.
-    const planner = runSlug === slug && runId && !req.headers.get(HUDDLE_HEADER) ? board.plannerRights(slug, runId) : null;
+    const mine = runSlug === slug && !!runId && !req.headers.get(HUDDLE_HEADER);
+    const requester = mine ? board.userRequestRights(slug, runId) : null;
+    if (requester) {
+      if (target?.id === requester.id) {
+        throw new HttpError(403, `${target.id} is this Planning chat's own ticket: ask the user to move, edit or stop it themselves ` +
+          "(changing it from here would end this reply or start its work)");
+      }
+      return { requester };
+    }
+    const planner = mine ? board.plannerRights(slug, runId) : null;
     if (!planner) {
       throw new HttpError(403, "changing the board is disabled inside a board run, so runs can't create or start other runs; " +
-        "only a planner may change its own child tickets: while its plan runs, or when the user asked for it in the planner's own chat");
+        "only a Planning chat answering the user's message may change other tickets, and a planner its own child tickets: " +
+        "while its plan runs, or when the user asked for it in the planner's own chat");
     }
     if (target && target.parentId !== planner.id) {
       throw new HttpError(403, `${target.id} is not a child ticket of plan ${planner.id}; the planner may only change its own child tickets`);
     }
-    return planner;
+    return { planner };
   };
+  /** How a change made for the user from a Planning chat is credited on the changed ticket. */
+  const byRequest = (requester: Ticket) => `by the Planning chat of ${requester.id} (user request)`;
   /** The board run's ticket (RUN_HEADER), null outside runs; a run may only reach tickets on its own board. */
   const runTicket = (req: Request, slug: string): string | null => {
     const h = req.headers.get(RUN_HEADER);
@@ -650,7 +664,7 @@ export function createServer(deps: ServerDeps) {
         const b = await body(req);
         const title = String(b.title ?? "").trim();
         if (!title) throw new HttpError(400, "title is required");
-        const planner = plannerFor(req, slug);
+        const { planner, requester } = runRights(req, slug);
         let status: Status = STATUSES.includes(b.status) ? b.status : "backlog";
         let mode: "auto" | "interview" = b.mode === "auto" ? "auto" : "interview";
         let parentId = typeof b.parentId === "string" && b.parentId ? b.parentId : undefined;
@@ -675,6 +689,7 @@ export function createServer(deps: ServerDeps) {
           title, body: String(b.body ?? ""), status: b.sessionId && !planner ? "backlog" : status, mode, parentId, planKey, dependsOn, needs,
         });
         if (planner) store.addComment(slug, t.id, "ai", `Created by the planner of plan ${planner.id}.`);
+        if (requester) store.addComment(slug, t.id, "ai", `Created ${byRequest(requester)}.`);
         if (b.sessionId && !planner) {
           try {
             await board.linkSession(slug, t.id, String(b.sessionId));
@@ -697,7 +712,7 @@ export function createServer(deps: ServerDeps) {
         const b = await body(req);
         if (b.status !== undefined && !STATUSES.includes(b.status)) throw new HttpError(400, `invalid status ${b.status}`);
         const target = store.getTicket(slug, id)!;
-        const planner = plannerFor(req, slug, target);
+        const { planner, requester } = runRights(req, slug, target);
         const patch: Parameters<Board["updateTicket"]>[2] = {};
         const deps = strings(b.dependsOn);
         if (deps) patch.dependsOn = deps;
@@ -712,9 +727,11 @@ export function createServer(deps: ServerDeps) {
         if (b.status) patch.status = b.status;
         if (typeof b.order === "number") patch.order = b.order;
         if (b.notice === null) patch.notice = null;
-        if (planner) {
+        if (planner || requester) {
           delete patch.order;
           delete patch.notice;
+        }
+        if (planner) {
           if (patch.status === "ready" && target.status !== "ready" && target.runCount > 0) {
             try {
               board.countRetry(slug, planner.id, id, MAX_RETRIES);
@@ -730,10 +747,11 @@ export function createServer(deps: ServerDeps) {
           if (e instanceof ConflictError) throw e;
           throw new HttpError(400, (e as Error).message);
         }
-        if (planner) {
+        const changer = planner ?? requester;
+        if (changer) {
           const what = Object.entries(patch)
-            .map(([k, v]) => (k === "status" ? `moved it to ${v}` : k === "parentId" ? `released it from plan ${planner.id}` : `changed ${k}`)).join(", ");
-          if (what) store.addComment(slug, id, "ai", `Planner ${what}.`);
+            .map(([k, v]) => (k === "status" ? `moved it to ${v}` : k === "parentId" ? `released it from plan ${target.parentId}` : `changed ${k}`)).join(", ");
+          if (what) store.addComment(slug, id, "ai", planner ? `Planner ${what}.` : `${what[0].toUpperCase()}${what.slice(1)} ${byRequest(changer)}.`);
         }
         return json(view(profile, t));
       }
@@ -847,8 +865,9 @@ export function createServer(deps: ServerDeps) {
         const text = String(b.text ?? "").trim();
         if (!text) throw new HttpError(400, "text is required");
         // The child reads user comments on its next run; mark who wrote this one.
-        const planner = plannerFor(req, slug, store.getTicket(slug, id)!);
-        return json(board.addComment(slug, id, planner ? `Planner: ${text}` : text), 201);
+        const { planner, requester } = runRights(req, slug, store.getTicket(slug, id)!);
+        const by = planner ? "Planner: " : requester ? `From the Planning chat of ${requester.id} (user request): ` : "";
+        return json(board.addComment(slug, id, by + text), 201);
       }
     }
     // Another ticket's Claude asks this ticket's Claude (ask_ticket); the asker then polls questions/:q/poll.
@@ -860,11 +879,13 @@ export function createServer(deps: ServerDeps) {
       return json(q, 201);
     }
     if (m === "POST" && action === "chat") {
-      const planner = plannerFor(req, slug, store.getTicket(slug, id)!);
+      const { planner, requester } = runRights(req, slug, store.getTicket(slug, id)!);
       const b = await body(req);
       const text = String(b.text ?? "").trim();
       if (!text) throw new HttpError(400, "text is required");
-      const t = await board.chat(slug, id, text, { fromPlanner: !!planner });
+      // A message from a run never hands the user's rights on to the run it starts.
+      const t = await board.chat(slug, id, text, { fromPlanner: !!(planner || requester) });
+      if (requester) store.addComment(slug, id, "ai", `Message sent ${byRequest(requester)}.`);
       return json(view(profile, t), 202);
     }
     // A message Stop left unsent: POST .../queued/<msgId> sends it, DELETE discards it.
@@ -898,9 +919,10 @@ export function createServer(deps: ServerDeps) {
       }
     }
     if (m === "POST" && action === "stop") {
-      const planner = plannerFor(req, slug, store.getTicket(slug, id)!);
+      const { planner, requester } = runRights(req, slug, store.getTicket(slug, id)!);
       const stopped = board.stop(slug, id);
       if (planner && stopped) store.addComment(slug, id, "ai", "Planner stopped this run.");
+      if (requester && stopped) store.addComment(slug, id, "ai", `Run stopped ${byRequest(requester)}.`);
       return json({ stopped });
     }
     // Start / pause / resume / mark done a planner's plan, or change how many children run at once.

@@ -132,7 +132,7 @@ if (mode === "partial") {
 // Asks the host for permission like the real CLI does with --permission-prompt-tool stdio.
 const decisions: string[] = [];
 if (mode === "asks") {
-  const asks = [["c1", "mcp__claude-in-chrome__navigate"], ["c2", "Bash"], ["c3", "other"]];
+  const asks = [["c1", "mcp__claude-in-chrome__navigate"], ["c2", "Bash"], ["c3", "other"], ["c4", "mcp__ckanban__move_ticket"]];
   for (const [id, tool] of asks) {
     emit({ type: "control_request", request_id: id, request: tool === "other"
       ? { subtype: "elicitation" }
