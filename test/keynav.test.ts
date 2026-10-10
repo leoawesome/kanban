@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { boardDigit, cardDir, hintStep, isTyping, nextStep, panelStep, stepBoard, stepCard } from "../web/src/keynav";
+import { boardDigit, canStartFromProposal, cardDir, hintStep, isTyping, nextStep, panelStep, stepBoard, stepCard } from "../web/src/keynav";
 
 test("cardDir maps J/K/H/L and arrows, ignores other keys", () => {
   expect(cardDir("j")).toBe("down");
@@ -69,8 +69,10 @@ test("panelStep: plain arrows and J/K step tickets, modifiers and other keys don
   expect(k("j", { metaKey: true })).toBeNull();
 });
 
-test("nextStep applies a pending proposal first, then the column's action", () => {
-  expect(nextStep({ status: "planning", working: false, proposalPending: true })).toBe("apply");
+test("nextStep applies a pending proposal first (starting work from Backlog/Planning), then the column's action", () => {
+  expect(nextStep({ status: "planning", working: false, proposalPending: true })).toBe("apply-start");
+  expect(nextStep({ status: "backlog", working: false, proposalPending: true })).toBe("apply-start");
+  expect(nextStep({ status: "ready", working: false, proposalPending: true })).toBe("apply");
   expect(nextStep({ status: "planning", working: false, proposalPending: false })).toBe("start");
   expect(nextStep({ status: "backlog", working: false, proposalPending: false })).toBe("start");
   expect(nextStep({ status: "review", working: false, proposalPending: false })).toBe("done");
@@ -99,4 +101,11 @@ test("isTyping is true in text fields only", () => {
   expect(isTyping({ target: { tagName: "DIV", isContentEditable: true } as any })).toBe(true);
   expect(isTyping({ target: { tagName: "BUTTON", isContentEditable: false } as any })).toBe(false);
   expect(isTyping({ target: null })).toBe(false);
+});
+
+test("canStartFromProposal only from Backlog or Planning while Claude is idle", () => {
+  expect(canStartFromProposal({ status: "planning", working: false })).toBe(true);
+  expect(canStartFromProposal({ status: "backlog", working: false })).toBe(true);
+  expect(canStartFromProposal({ status: "planning", working: true })).toBe(false);
+  for (const status of ["ready", "in_progress", "review", "done"]) expect(canStartFromProposal({ status, working: false })).toBe(false);
 });

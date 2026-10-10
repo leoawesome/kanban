@@ -378,22 +378,22 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const col = COLUMNS.find((c) => c.id === ticket.status);
   const startTarget = startWorkTarget(ticket);
   const startWork = () => (startTarget === "planning" ? setStatus("planning") : setConfirmStart(true));
-  // The chat's newest unapplied proposal (Chat reports it), so ⌘⇧Enter can apply it before moving the ticket on.
-  const applyProposalRef = useRef<(() => Promise<void>) | null>(null);
+  // The chat's newest unapplied proposal (Chat reports it), so ⌘⇧Enter can apply it and start work in one go.
+  const applyProposalRef = useRef<((start: boolean) => Promise<void>) | null>(null);
   const [proposalPending, setProposalPending] = useState(false);
-  const onPendingProposal = useCallback((apply: (() => Promise<void>) | null) => {
+  const onPendingProposal = useCallback((apply: ((start: boolean) => Promise<void>) | null) => {
     applyProposalRef.current = apply;
     setProposalPending(!!apply);
   }, []);
   const next = nextStep({ status: ticket.status, working, proposalPending });
   const nextStepRef = useRef(() => {});
   nextStepRef.current = () => {
-    if (next === "apply") applyProposalRef.current?.();
+    if (next === "apply" || next === "apply-start") applyProposalRef.current?.(next === "apply-start");
     else if (next === "start") startWork();
     else if (next === "done") setStatus("done");
   };
   useEffect(() => {
-    // ⌘⇧Enter / Ctrl+Shift+Enter: the ticket's next step (apply proposal, Start work, Mark done), also while typing.
+    // ⌘⇧Enter / Ctrl+Shift+Enter: the ticket's next step (apply proposal & start work, Start work, Mark done), also while typing.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !e.shiftKey || !(e.metaKey || e.ctrlKey) || e.altKey || e.isComposing) return;
       if (document.querySelector(".overlay")) return;
@@ -487,8 +487,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                 {working && <button className="btn danger" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop Claude"}</button>}
                 {!working && (ticket.status === "backlog" || ticket.status === "planning") && (
                   <button className={`btn ${att?.kind === "questions" || att?.kind === "proposal" ? "" : "primary"}`}
-                    onClick={startWork} title={`${startTarget === "planning" ? "Claude interviews you first" : "Claude works on its own"} (${MOD}⇧Enter${proposalPending ? " after applying the proposal" : ""})`}>
-                    Start work<KeyHint keys={proposalPending ? "⌘⇧↵ after Apply" : "⌘⇧↵"} />
+                    onClick={startWork} title={`${startTarget === "planning" ? "Claude interviews you first" : "Claude works on its own"} (${proposalPending ? `${MOD}⇧Enter applies the proposal and starts` : `${MOD}⇧Enter`})`}>
+                    Start work{!proposalPending && <KeyHint keys="⌘⇧↵" />}
                   </button>
                 )}
                 {!working && ticket.status === "backlog" && (

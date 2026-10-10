@@ -23,6 +23,7 @@ import { handoff as handoffOf, liveView, saved, type Handoff } from "./liveReply
 import { baseName, copyFile, downloadFile } from "./share";
 import { draftKey, formKey } from "./drafts";
 import { fullTime, timeAgo, useNow } from "./time";
+import { canStartFromProposal } from "./keynav";
 import { toast } from "./toast";
 import { Markdown } from "./Transcript";
 import { usePersistentState } from "./usePersistentState";
@@ -145,7 +146,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   onOpenOutput?: (name: string) => void;
   onError: (m: string) => void;
   /** The newest proposal card not applied yet, as its Apply action (null when none): ⌘⇧Enter in the panel applies it. */
-  onPendingProposal?: (apply: (() => Promise<void>) | null) => void;
+  /** The newest unapplied proposal's apply; start: also move the ticket to Ready. */
+  onPendingProposal?: (apply: ((start: boolean) => Promise<void>) | null) => void;
   /** The ticket's huddle, to tell whether a proposed one was started. */
   huddle?: Huddle | null;
   onOpenHuddle?: () => void;
@@ -355,13 +357,23 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
     }
   };
 
-  const applyProposal = async (p: { title: string; description: string }) => {
+  // Proposals applied with "Apply & start work" here, so their card says the ticket moved on.
+  const [startedProposals, setStartedProposals] = useState<ReadonlySet<string>>(new Set());
+  const canStart = canStartFromProposal({ status: ticket.status, working: ticket.status === "in_progress" || running });
+  const applyProposal = async (p: { title: string; description: string }, start?: { uuid: string }) => {
     const before = { title: ticket.title, body: ticket.body };
     try {
+      // One update, so the ticket never sits in Ready with the old text.
       await api.updateTicket(slug, ticket.id, {
         ...(p.title ? { title: p.title } : {}),
         ...(p.description ? { body: p.description } : {}),
+        ...(start ? { status: "ready" as const } : {}),
       });
+      // No Undo once it starts: Claude may already be working from the new text.
+      if (start) {
+        setStartedProposals((s) => new Set(s).add(start.uuid));
+        return void toast("Applied to the ticket and moved to Ready", { tone: "ok" });
+      }
       toast("Applied to the ticket", {
         tone: "ok",
         action: {
@@ -375,10 +387,12 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   };
 
   const pendingProposal = entries.findLast((e) => e.proposal && !isApplied(e.proposal));
-  const applyPendingRef = useRef(() => Promise.resolve());
-  applyPendingRef.current = () => (pendingProposal?.proposal ? applyProposal(pendingProposal.proposal) : Promise.resolve());
+  const applyPendingRef = useRef((_start: boolean) => Promise.resolve());
+  applyPendingRef.current = (start) => (pendingProposal?.proposal
+    ? applyProposal(pendingProposal.proposal, start && canStart ? { uuid: pendingProposal.uuid } : undefined)
+    : Promise.resolve());
   useEffect(() => {
-    onPendingProposal?.(pendingProposal ? () => applyPendingRef.current() : null);
+    onPendingProposal?.(pendingProposal ? (start) => applyPendingRef.current(start) : null);
   }, [pendingProposal?.uuid]);
   useEffect(() => () => onPendingProposal?.(null), []);
 
@@ -435,7 +449,10 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
                   storageKey={formKey(slug, ticket.id, e.uuid)} />
               )}
               {e.proposal && (
-                <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)} onApply={() => applyProposal(e.proposal!)} keyHint={e === pendingProposal} />
+                <ProposalCard proposal={e.proposal} applied={isApplied(e.proposal)} started={startedProposals.has(e.uuid)}
+                  onApply={() => applyProposal(e.proposal!)}
+                  onApplyStart={canStart ? () => applyProposal(e.proposal!, { uuid: e.uuid }) : undefined}
+                  keyHint={e === pendingProposal} />
               )}
               {e.newTickets && (
                 <NewTicketsCard drafts={e.newTickets} created={childFor} onCreate={createChild} onOpen={onOpenTicket} />

@@ -48,7 +48,7 @@ const GROUPS: { title: string; keys: [string[], string][] }[] = [
     keys: [
       [["↑", "↓", "K", "J"], "Previous / next ticket"],
       [["Alt", "↑", "↓"], "Previous / next ticket, also while typing"],
-      [[MOD, "Shift", "Enter"], "Next step: apply proposal / start work / mark done"],
+      [[MOD, "Shift", "Enter"], "Next step: apply proposal & start work / start work / mark done"],
       [["Enter"], "Send a chat message"],
       [["Shift", "Enter"], "New line"],
       [["E"], "Edit the description"],

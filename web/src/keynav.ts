@@ -61,11 +61,16 @@ export function panelStep(e: { key: string; metaKey: boolean; ctrlKey: boolean; 
   }
 }
 
-/** ⌘⇧Enter in the ticket panel does the ticket's next step: apply a pending proposal first, then the column's action. */
-export type NextStep = "apply" | "start" | "done" | null;
+/** A proposal can be applied and started in one go only from Backlog or Planning, while Claude isn't working on it. */
+export function canStartFromProposal(t: { status: string; working: boolean }): boolean {
+  return !t.working && (t.status === "backlog" || t.status === "planning");
+}
+
+/** ⌘⇧Enter in the ticket panel does the ticket's next step: apply a pending proposal first (and start work when it can), then the column's action. */
+export type NextStep = "apply" | "apply-start" | "start" | "done" | null;
 export function nextStep(t: { status: string; working: boolean; proposalPending: boolean }): NextStep {
   if (t.working) return null;
-  if (t.proposalPending) return "apply";
+  if (t.proposalPending) return canStartFromProposal(t) ? "apply-start" : "apply";
   if (t.status === "backlog" || t.status === "planning") return "start";
   if (t.status === "review") return "done";
   return null;
