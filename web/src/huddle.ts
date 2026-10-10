@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, onReconnect, subscribe, type Huddle, type HuddleMessage } from "./api";
 import { AVATAR_COLORS } from "./avatar";
-import { mergeMessages, pickHuddle, upsertHuddle } from "./huddleText";
+import { mergeMessages, pickHuddle, upsertHuddle, withActivity } from "./huddleText";
 
 export { brakeLabel, cardHuddleBadge, dollars, guestTickets, idleFor, quietLabel, sortHuddles, type CardHuddleBadge } from "./huddleText";
-export { handleInitials, isForYou, mentionCandidates, mentionQuery, participantActivity, untaggedHint } from "./huddleText";
+export { handleInitials, isForYou, mentionCandidates, mentionQuery, participantActivity, sourceLabel, untaggedHint } from "./huddleText";
 
 /** Participants that count toward the cap (everyone but the user). */
 export const members = (h: Huddle) => h.participants.filter((p) => p.kind !== "human");
@@ -84,6 +84,8 @@ export function useHuddle(slug: string, ticketId: string): HuddleState {
       else if (e.huddle.status !== "closed") reload();
     } else if (e.type === "huddle.message" && e.profile === slug && e.huddleId === idRef.current) {
       setMessages((ms) => mergeMessages(ms, [e.message]));
+    } else if (e.type === "huddle.activity" && e.profile === slug && e.huddleId === idRef.current) {
+      setHuddle((h) => h && withActivity(h, e.handle, e.lastActivity));
     }
   }), [slug, ticketId, reload]);
 
@@ -115,6 +117,7 @@ export function useBoardHuddles(slug: string | null): Huddle[] {
   }, [reload]);
   useEffect(() => subscribe((e) => {
     if (e.type === "huddle.updated" && e.profile === slug) setList((hs) => upsertHuddle(hs, e.huddle));
+    else if (e.type === "huddle.activity" && e.profile === slug) setList((hs) => hs.map((h) => (h.id === e.huddleId ? withActivity(h, e.handle, e.lastActivity) : h)));
   }), [slug]);
   useEffect(() => onReconnect(reload), [reload]);
   return list;

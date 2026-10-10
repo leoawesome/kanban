@@ -14,7 +14,7 @@ import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
 import { SnippetError, Snippets } from "./snippets";
 import { QuestionError, Questions } from "./questions";
 import { HuddleError, Huddles, type Caller } from "./huddle";
-import { HUDDLE_HEADER } from "./huddle-roster";
+import { HUDDLE_HEADER, SOURCE_HEADER } from "./huddle-roster";
 import { ticketAttention, userWaitReason } from "./attention";
 import { isComplete, MAX_RETRIES, planActive } from "./plan";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
@@ -629,6 +629,16 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
 
+    // /profiles/:p/huddle-templates[/:name] — whole-huddle templates (roster and rules). Anyone reads; only the user changes them.
+    if (parts[2] === "huddle-templates") {
+      if (parts.length === 3 && m === "GET") return json(huddles.templates(slug));
+      if (req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER)) throw new HttpError(403, "only the user changes huddle templates (board settings)");
+      if (parts.length === 3 && m === "POST") return json(huddles.saveTemplate(slug, await body(req)), 201);
+      if (parts.length === 4 && m === "PUT") return json(huddles.saveTemplate(slug, { ...(await body(req)), name: parts[3] }));
+      if (parts.length === 4 && m === "DELETE") return json(huddles.deleteTemplate(slug, parts[3]));
+      throw new HttpError(404, "not found");
+    }
+
     // /profiles/:p/huddles — shared rooms where several Claude sessions work on a ticket (see huddle.ts)
     if (parts[2] === "huddles") return huddleApi(req, url, slug, parts.slice(3));
 
@@ -974,6 +984,7 @@ export function createServer(deps: ServerDeps) {
         const h = huddles.create(slug, ticketId, Array.isArray(b.roster) ? b.roster : [], {
           maxParticipants: Number(b.maxParticipants) || undefined,
           maxCostUsd: b.maxCostUsd === undefined || b.maxCostUsd === null ? undefined : Number(b.maxCostUsd),
+          template: typeof b.template === "string" && b.template.trim() ? b.template : undefined,
         });
         return json(huddles.view(slug, h), 201);
       }
@@ -989,7 +1000,13 @@ export function createServer(deps: ServerDeps) {
       const b = await body(req);
       const kind = b.kind === "finding" ? "finding" : "message";
       const status = b.status ? { status: b.status, reason: typeof b.reason === "string" ? b.reason : undefined } : undefined;
-      return json(huddles.post(slug, h.id, me, String(b.text ?? ""), kind, status), 201);
+      const src = req.headers.get(SOURCE_HEADER);
+      return json(huddles.post(slug, h.id, me, String(b.text ?? ""), kind, status, src === "ui" || src === "mcp" ? src : "none"), 201);
+    }
+    // The pinned brief (goal, decisions): leads, @main and the user.
+    if (m === "PUT" && action === "brief" && !handle) {
+      const b = await body(req);
+      return json(huddles.view(slug, huddles.setBrief(slug, h.id, me, String(b.text ?? ""))));
     }
     // A participant's own status: done, blocked (reason) or active again.
     if (m === "POST" && action === "status" && !handle) {

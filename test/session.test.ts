@@ -367,3 +367,16 @@ test("parseSession: huddle digests are huddle entries, not the user's; Claude's 
   expect(replied.lastMessage).toMatchObject({ role: "assistant", peerReply: true });
   expect(parseSession(RAW).lastMessage?.from).toBeUndefined();
 });
+
+test("parseSession: a propose_huddle card with a template and no roster", () => {
+  const raw = [
+    asst([{ type: "tool_use", id: "h1", name: "mcp__ckanban__propose_huddle", input: { template: "design-review", reason: "Review the feature" } }], "2026-10-10T01:00:00Z"),
+    asst([{ type: "tool_use", id: "h2", name: "mcp__ckanban__propose_huddle", input: { template: "design-review", roster: [{ preset: "qa" }] } }], "2026-10-10T01:00:01Z"),
+    asst([{ type: "tool_use", id: "h3", name: "mcp__ckanban__propose_huddle", input: { reason: "no roster, no template" } }], "2026-10-10T01:00:02Z"),
+  ].join("\n");
+  const cards = parseSession(raw).entries.filter((e: any) => e.huddle).map((e: any) => e.huddle);
+  expect(cards).toEqual([
+    { roster: [], reason: "Review the feature", template: "design-review" },
+    { roster: [{ preset: "qa" }], reason: "", template: "design-review" },
+  ]);
+});

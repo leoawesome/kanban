@@ -23,7 +23,9 @@ export type BusEvent =
   /** A huddle's status, roster or findings changed. */
   | { type: "huddle.updated"; profile: string; huddle: HuddleView }
   /** A message was posted in a huddle. */
-  | { type: "huddle.message"; profile: string; huddleId: string; message: HuddleMessage };
+  | { type: "huddle.message"; profile: string; huddleId: string; message: HuddleMessage }
+  /** What a huddle participant is doing now (lastActivity), without a whole huddle.updated. */
+  | { type: "huddle.activity"; profile: string; huddleId: string; handle: string; lastActivity: string | null };
 
 export class Bus {
   private listeners = new Set<(e: BusEvent) => void>();

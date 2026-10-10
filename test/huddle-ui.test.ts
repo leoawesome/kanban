@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import {
-  brakeLabel, cardHuddleBadge, digestPreview, digestSenders, parseDigest, draftError, draftTags, idleFor, isForYou, untaggedHint, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, upsertHuddle,
+  applyTemplate, brakeLabel, cardHuddleBadge, digestPreview, digestSenders, parseDigest, draftError, draftTags, idleFor, isForYou, untaggedHint, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, sourceLabel, upsertHuddle, withActivity,
 } from "../web/src/huddleText";
 
 type P = { handle: string; role: string; kind: string; mode: string; status: string; statusReason?: string | null; lastActivity?: string | null; error?: string | null };
@@ -160,4 +160,35 @@ test("parseDigest: entries back from a digest, continuation lines unindented and
   expect(digestSenders(d.entries)).toEqual(["qa-1", "rev"]);
   expect(digestPreview(text)).toBe("@rev: Pin it (+2 more)");
   expect(digestPreview("plain")).toBe("plain");
+  // The pinned brief heading a digest is kept apart from the note and the entries.
+  const withBrief = parseDigest(huddleDigest([{ seq: 4, from: "qa-1", kind: "message", text: "hi" }], 1, { text: "Goal: ship.\nDecided: no.", by: "main", at: "" }));
+  expect(withBrief).toMatchObject({ brief: "Goal: ship.\nDecided: no.", note: "(1 earlier unread message left out; read them with huddle_read)" });
+  expect(withBrief.entries).toEqual([{ seq: 4, from: "qa-1", finding: false, text: "hi" }]);
+});
+
+test("applyTemplate fills the roster and budget and remembers the template; none keeps the rows", () => {
+  type E = { preset?: string; role?: string; handle?: string };
+  const d = rosterDraft<E>([{ preset: "qa" }]);
+  const t: { name: string; roster: E[]; maxCostUsd: number | null } = { name: "design-review", roster: [{ handle: "ux", role: "UX critic" }, { preset: "reviewer" }], maxCostUsd: 30 };
+  const a = applyTemplate(d, t);
+  expect(a.rows.map((r) => rowHandle(r))).toEqual(["ux", "reviewer"]);
+  expect(a).toMatchObject({ template: "design-review", maxCostUsd: 30 });
+  // Claude's own roster with a template: its rows, the template's budget and rules.
+  expect(applyTemplate(d, t, [{ preset: "qa" }]).rows.map((r) => r.preset)).toEqual(["qa"]);
+  expect(applyTemplate(d, { ...t, maxCostUsd: null }).maxCostUsd).toBe(20);
+  const none = applyTemplate(a, null);
+  expect(none.template).toBeNull();
+  expect(none.rows).toBe(a.rows);
+});
+
+test("sourceLabel and withActivity", () => {
+  expect(sourceLabel("ui")).toContain("board");
+  expect(sourceLabel("mcp")).toContain("MCP");
+  expect(sourceLabel("none")).toContain("no client header");
+  expect(sourceLabel(undefined)).toBeNull();
+  const h = huddle();
+  const next = withActivity(h, "qa-1", "Reading a.ts");
+  expect(next.participants.find((x) => x.handle === "qa-1")!.lastActivity).toBe("Reading a.ts");
+  expect(withActivity(next, "qa-1", "Reading a.ts")).toBe(next);
+  expect(withActivity(h, "nobody", "x")).toBe(h);
 });

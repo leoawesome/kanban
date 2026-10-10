@@ -3,11 +3,11 @@ import { api, type Huddle, type HuddleMessage, type HuddleMode, type HuddleParti
 import { ConfirmDialog } from "./ConfirmDialog";
 import { draftKey } from "./drafts";
 import {
-  dollars, handleColor, handleInitials, huddleCost, idleFor, isForYou, members, mentionCandidates, mentionQuery, participantActivity, untaggedHint,
+  dollars, handleColor, handleInitials, huddleCost, idleFor, isForYou, members, mentionCandidates, mentionQuery, participantActivity, sourceLabel, untaggedHint,
   type HuddleState,
 } from "./huddle";
-import { DEFAULT_MAX, draftError, RosterEditor, rosterDraft, startFromDraft, usePresets, type RosterDraft } from "./HuddleRoster";
-import { DEFAULT_BUDGET } from "./huddleText";
+import { DEFAULT_MAX, draftError, RosterEditor, rosterDraft, startFromDraft, TemplatePicker, usePresets, useTemplates, type RosterDraft } from "./HuddleRoster";
+import { BRIEF_MAX, DEFAULT_BUDGET, POST_MAX } from "./huddleText";
 import { CloseIcon } from "./icons";
 import { KeyHint } from "./KeyHint";
 import { Select } from "./Select";
@@ -73,6 +73,7 @@ function StartHuddle({ slug, ticket, tickets, onError, onBack, onStarted }: {
   onStarted: () => void;
 }) {
   const presets = usePresets(slug);
+  const templates = useTemplates(slug);
   const [draft, setDraft] = useState<RosterDraft>(() => rosterDraft([{ preset: "reviewer" }, { preset: "qa" }]));
   const [busy, setBusy] = useState(false);
   const err = draftError(draft);
@@ -105,6 +106,7 @@ function StartHuddle({ slug, ticket, tickets, onError, onBack, onStarted }: {
       </div>
       <div className="huddle-card">
         <div className="huddle-card-head"><span>🗣 New huddle</span><small>roster</small></div>
+        <TemplatePicker templates={templates} draft={draft} setDraft={setDraft} disabled={busy} />
         <RosterEditor presets={presets} draft={draft} setDraft={setDraft} tickets={tickets} hostId={ticket.id} onEnter={start} disabled={busy} />
         <div className="huddle-card-actions">
           <span className="muted small">{err ?? "Agents start as soon as you press Start."}</span>
@@ -241,6 +243,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
           <Composer slug={slug} ticket={ticket} huddle={h} onError={onError} />
         </div>
         <aside className="huddle-side">
+          <Brief slug={slug} huddle={h} handles={handles} onError={onError} />
           <Roster slug={slug} huddle={h} onError={onError} />
           <Findings slug={slug} huddle={h} handles={handles} onError={onError} />
         </aside>
@@ -317,7 +320,7 @@ function Message({ m, p, handles, forYou }: { m: HuddleMessage; p: HuddlePartici
         <div className="hd-msg-head">
           <b>@{m.from}</b>
           {p && p.kind !== "human" && <span className="muted">{p.role}</span>}
-          <time className="muted" dateTime={m.ts} title={fullTime(m.ts)}>· {clock(m.ts)}</time>
+          <time className="muted" dateTime={m.ts} title={[fullTime(m.ts), sourceLabel(m.source)].filter(Boolean).join(" · ")}>· {clock(m.ts)}</time>
           {p?.mode === "monitor" && p.kind !== "human" && <span className="hd-mode monitor">monitor</span>}
           {forYou && <span className="hd-for-you">· for you</span>}
         </div>
@@ -353,7 +356,8 @@ function Composer({ slug, ticket, huddle: h, onError }: { slug: string; ticket: 
   const q = mentionQuery(draft, caret);
   const options = q ? mentionCandidates(h).filter((c) => c.handle.startsWith(q.query)) : [];
   const open = !!q && options.length > 0 && !closedPopup;
-  const hint = h.status === "live" ? untaggedHint(draft, h) : null;
+  const tooLong = draft.trim().length > POST_MAX;
+  const hint = tooLong ? `${draft.trim().length} / ${POST_MAX} characters: too long to post. Shorten it or split it.` : h.status === "live" ? untaggedHint(draft, h) : null;
   useEffect(() => setActive(0), [q?.query, q?.start]);
 
   const pick = (handle: string) => {
@@ -368,7 +372,7 @@ function Composer({ slug, ticket, huddle: h, onError }: { slug: string; ticket: 
   };
   const send = async () => {
     const text = draft.trim();
-    if (!text || sending || closed) return;
+    if (!text || sending || closed || tooLong) return;
     setSending(true);
     try {
       await api.postHuddle(slug, h.id, text);
@@ -433,7 +437,7 @@ function Composer({ slug, ticket, huddle: h, onError }: { slug: string; ticket: 
           </span>
         )}
         <span className="composer-actions">
-          <button className="btn primary small" disabled={!draft.trim() || sending} onClick={send}>{sending ? "Sending…" : "Send"}<KeyHint keys="↵" /></button>
+          <button className="btn primary small" disabled={!draft.trim() || sending || tooLong} onClick={send}>{sending ? "Sending…" : "Send"}<KeyHint keys="↵" /></button>
         </span>
       </div>
     </div>
@@ -444,6 +448,54 @@ const MODE_OPTIONS = [
   { value: "tagged" as const, label: "tagged", hint: "wakes when @tagged" },
   { value: "monitor" as const, label: "monitor ($)", hint: "reads every message: costs more" },
 ];
+
+/** The pinned brief: goal and decisions, at the head of every digest the agents get. The user, leads and @main edit it. */
+function Brief({ slug, huddle: h, handles, onError }: { slug: string; huddle: Huddle; handles: string[]; onError: (m: string) => void }) {
+  const [edit, setEdit] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const closed = h.status === "closed";
+  useEffect(() => setEdit(null), [h.id]);
+  if (closed && !h.brief) return null;
+  const save = async () => {
+    if (edit === null || busy) return;
+    setBusy(true);
+    try {
+      await api.setHuddleBrief(slug, h.id, edit);
+      setEdit(null);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="hd-brief">
+      <h3>
+        Brief
+        {!closed && edit === null && <button className="link-btn hd-brief-edit" onClick={() => setEdit(h.brief?.text ?? "")}>{h.brief ? "Edit" : "+ Add"}</button>}
+      </h3>
+      {edit !== null ? (
+        <>
+          <textarea rows={6} value={edit} maxLength={BRIEF_MAX} disabled={busy} autoFocus aria-label="Pinned brief"
+            placeholder="Goal, decisions so far, constraints. Every agent reads this first." onChange={(e) => setEdit(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setEdit(null); } }} />
+          <div className="hd-brief-actions">
+            <span className="muted small">{edit.length}/{BRIEF_MAX}</span>
+            <span className="spacer" />
+            <button className="btn small" onClick={() => setEdit(null)} disabled={busy}>Cancel</button>
+            <button className="btn small primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+          </div>
+        </>
+      ) : h.brief ? (
+        <div className="hd-brief-text" title={`Last changed by @${h.brief.by} · ${fullTime(h.brief.at)}`}>
+          <Markdown text={h.brief.text} handles={handles} />
+        </div>
+      ) : (
+        <div className="muted small">The goal and the decisions so far. It heads every digest the agents get.</div>
+      )}
+    </section>
+  );
+}
 
 /** Participants: status (restart the failed and stopped), mode, what each spent; the cap counter. */
 function Roster({ slug, huddle: h, onError }: { slug: string; huddle: Huddle; onError: (m: string) => void }) {

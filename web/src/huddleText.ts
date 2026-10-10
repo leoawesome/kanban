@@ -27,6 +27,20 @@ export function mergeMessages<M extends { seq: number }>(a: M[], b: M[]): M[] {
   return [...bySeq.values()].sort((x, y) => x.seq - y.seq);
 }
 
+/** The huddle with one participant's lastActivity changed (huddle.activity events). */
+export function withActivity<H extends { participants: { handle: string; lastActivity?: string | null }[] }>(h: H, handle: string, lastActivity: string | null): H {
+  if (!h.participants.some((p) => p.handle === handle && p.lastActivity !== lastActivity)) return h;
+  return { ...h, participants: h.participants.map((p) => (p.handle === handle ? { ...p, lastActivity } : p)) };
+}
+
+/** Where a post came in from, for its tooltip; null for system messages and old posts without a source. */
+export function sourceLabel(source: string | undefined): string | null {
+  if (source === "ui") return "Sent from the board";
+  if (source === "mcp") return "Sent through the ckanban MCP tools (or CLI)";
+  if (source === "none") return "Sent with no client header (a script or a direct API call)";
+  return null;
+}
+
 /** Avatar letters: first letter, plus the number of a numbered copy (qa-2: Q2). */
 export function handleInitials(handle: string): string {
   const n = handle.match(/-(\d+)$/)?.[1];
@@ -88,6 +102,9 @@ export function mentionQuery(text: string, caret: number): { start: number; quer
 }
 
 export const DEFAULT_MAX = 8;
+/** Longest huddle post (the daemon's POST_MAX) and pinned brief (BRIEF_MAX). */
+export const POST_MAX = 2000;
+export const BRIEF_MAX = 2000;
 /** A huddle's default spending limit (the daemon's DEFAULT_MAX_COST_USD). */
 export const DEFAULT_BUDGET = 20;
 
@@ -98,6 +115,16 @@ export interface Draft<E extends EntryLike = EntryLike, Mode extends string = st
   mainMode: Mode | null;
   /** Spending limit in USD; the huddle stops when it is spent. */
   maxCostUsd: number;
+  /** Template the roster came from: Start sends it, so its rules become the huddle's brief. */
+  template?: string | null;
+}
+
+interface TemplateLike<E extends EntryLike> { name: string; roster: E[]; maxCostUsd: number | null }
+
+/** The draft after picking a template: its roster (unless `rows` is given) and budget. Null: no template, the rows stay. */
+export function applyTemplate<E extends EntryLike, Mode extends string>(d: Draft<E, Mode>, t: TemplateLike<E> | null, rows?: E[]): Draft<E, Mode> {
+  if (!t) return { ...d, template: null };
+  return { ...d, rows: (rows ?? t.roster).map((e) => ({ ...e, key: rowKey() })), maxCostUsd: t.maxCostUsd ?? DEFAULT_BUDGET, template: t.name };
 }
 
 let nextKey = 0;
@@ -263,10 +290,13 @@ const DIGEST_HEAD = /^\[#(\d+)\] (?:\(system\) ?|@([\w.-]+)( \(finding\))?: ?)/;
 /**
  * A huddle digest sent into a ticket's chat (see the server's huddleLine), back as entries: each starts with "[#n]"
  * at a line start, later lines are indented, escaped entry starts are unescaped. note: a leading "(N earlier…)" line.
+ * brief: the pinned brief heading the digest (its indented lines, see the server's briefBlock).
  */
-export function parseDigest(text: string): { entries: DigestEntry[]; note: string | null } {
+export function parseDigest(text: string): { entries: DigestEntry[]; note: string | null; brief: string | null } {
   const entries: DigestEntry[] = [];
   const notes: string[] = [];
+  const brief: string[] = [];
+  let inBrief = false;
   for (const line of text.split("\n")) {
     const m = DIGEST_HEAD.exec(line);
     if (m) {
@@ -276,10 +306,15 @@ export function parseDigest(text: string): { entries: DigestEntry[]; note: strin
     const body = line.replace(/^ {4}/, "").replace(/^(\s*)\\(\[#\d+\]|\(system\))/i, "$1$2");
     const cur = entries.at(-1);
     if (cur) cur.text += `\n${body}`;
-    else if (line.trim()) notes.push(line.trim());
+    else if (!notes.length && !brief.length && line.startsWith("Pinned brief")) inBrief = true;
+    else if (inBrief && line.startsWith("    ")) brief.push(body);
+    else if (line.trim()) {
+      inBrief = false;
+      notes.push(line.trim());
+    }
   }
   for (const e of entries) e.text = e.text.replace(/^(\s*)\\(\[#\d+\]|\(system\))/i, "$1$2").trim();
-  return { entries, note: notes.join(" ") || null };
+  return { entries, note: notes.join(" ") || null, brief: brief.join("\n").trim() || null };
 }
 
 /** Distinct sender handles of a digest, in order ("(system)" left out). */

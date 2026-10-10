@@ -66,7 +66,7 @@ const CHROME_TOOL = "mcp__claude-in-chrome__";
  * The board's huddle tools: they only touch the huddle, never files, so a Planning chat (plan mode, which asks
  * before every MCP tool that isn't read-only) can coordinate its huddle too.
  */
-const HUDDLE_TOOLS = new Set(["huddle_post", "huddle_read", "huddle_mode", "huddle_findings", "huddle_add_participant", "huddle_status", "huddle_close"].map((t) => `mcp__ckanban__${t}`));
+const HUDDLE_TOOLS = new Set(["huddle_post", "huddle_read", "huddle_mode", "huddle_findings", "huddle_add_participant", "huddle_status", "huddle_close", "huddle_brief"].map((t) => `mcp__ckanban__${t}`));
 
 /**
  * The board's answer to a control request from claude (stream-json). Permission asks for Claude in Chrome

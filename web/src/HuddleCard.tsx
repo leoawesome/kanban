@@ -1,14 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Huddle, RosterEntry, Ticket } from "./api";
 import { formKey } from "./drafts";
-import { draftError, RosterEditor, rosterDraft, startFromDraft, usePresets, type RosterDraft } from "./HuddleRoster";
+import { applyTemplate, draftError, RosterEditor, rosterDraft, startFromDraft, TemplatePicker, usePresets, useTemplates, type RosterDraft } from "./HuddleRoster";
 import { usePersistentState } from "./usePersistentState";
 
 /**
  * Claude proposed a huddle (propose_huddle). The roster is editable until Start; nothing runs before that.
  * `huddle`: the ticket's current huddle, to tell whether this proposal was started.
  */
-export function HuddleCard({ slug, ticket, tickets, uuid, at, roster, reason, huddle, old, onOpen, onError }: {
+export function HuddleCard({ slug, ticket, tickets, uuid, at, roster, reason, template, huddle, old, onOpen, onError }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
@@ -16,6 +16,8 @@ export function HuddleCard({ slug, ticket, tickets, uuid, at, roster, reason, hu
   at: string;
   roster: RosterEntry[];
   reason: string;
+  /** Template Claude proposed (its roster when `roster` is empty, its budget and rules). */
+  template?: string;
   huddle: Huddle | null;
   /** Copied history of a branched ticket: read-only. */
   old?: boolean;
@@ -23,7 +25,13 @@ export function HuddleCard({ slug, ticket, tickets, uuid, at, roster, reason, hu
   onError: (m: string) => void;
 }) {
   const presets = usePresets(slug);
+  const templates = useTemplates(slug);
   const [draft, setDraft] = useState<RosterDraft>(() => rosterDraft(roster));
+  // The proposed template, once the board's templates are in: its roster (unless Claude gave one) and budget.
+  useEffect(() => {
+    const t = template && templates?.find((x) => x.name === template);
+    if (t) setDraft((d) => (d.template ? d : applyTemplate(d, t, roster.length ? roster : undefined)));
+  }, [templates, template]);
   const [busy, setBusy] = useState(false);
   const [dismissed, setDismissed] = usePersistentState(formKey(slug, ticket.id, `huddle-${uuid}`), () => false, (v) => !v, (v) => typeof v === "boolean");
   const started = !!huddle && huddle.createdAt >= at;
@@ -59,10 +67,13 @@ export function HuddleCard({ slug, ticket, tickets, uuid, at, roster, reason, hu
       {reason && <div className="huddle-card-reason">{reason}</div>}
       {started || old ? (
         <div className="huddle-card-summary muted small">
-          {roster.map((r) => `${r.count && r.count > 1 ? `${r.count}× ` : ""}${r.preset ?? r.role}`).join(" · ")}
+          {roster.length ? roster.map((r) => `${r.count && r.count > 1 ? `${r.count}× ` : ""}${r.handle ?? r.preset ?? r.role}`).join(" · ") : `template ${template}`}
         </div>
       ) : (
-        <RosterEditor presets={presets} draft={draft} setDraft={setDraft} tickets={tickets} hostId={ticket.id} onEnter={start} disabled={busy} />
+        <>
+          <TemplatePicker templates={templates} draft={draft} setDraft={setDraft} disabled={busy} />
+          <RosterEditor presets={presets} draft={draft} setDraft={setDraft} tickets={tickets} hostId={ticket.id} onEnter={start} disabled={busy} />
+        </>
       )}
       <div className="huddle-card-actions">
         {started ? (

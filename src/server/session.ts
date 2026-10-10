@@ -61,7 +61,7 @@ export interface SessionEntry {
   /** Claude offered to branch this ticket (rendered with a Branch button). */
   branch?: { reason: string };
   /** Claude proposed a huddle roster (propose_huddle; rendered with a Start button). */
-  huddle?: { roster: RosterEntry[]; reason: string };
+  huddle?: { roster: RosterEntry[]; reason: string; template?: string };
   /** Mockups Claude sent as blocks (saved to outputs/mockups; the chat links to them). */
   mockups?: string[];
   /** Claude asked the board to move the ticket (a planning-only request arrived in Review). */
@@ -368,9 +368,12 @@ function cardEntry(block: any): Pick<SessionEntry, "questions" | "proposal" | "n
   }
   if (BRANCH_TOOL.test(name)) return { branch: { reason: typeof block.input?.reason === "string" ? block.input.reason.trim() : "" } };
   if (HUDDLE_TOOL.test(name)) {
-    const roster = block.input?.roster;
-    if (rosterError(roster)) return null;
-    return { huddle: { roster, reason: typeof block.input?.reason === "string" ? block.input.reason.trim() : "" } };
+    const template = typeof block.input?.template === "string" && block.input.template.trim() ? block.input.template.trim() : undefined;
+    // With a template the roster is optional: the card fills in the template's.
+    const roster = template && block.input?.roster === undefined ? [] : block.input?.roster;
+    if (!(template && Array.isArray(roster) && !roster.length) && rosterError(roster)) return null;
+    const reason = typeof block.input?.reason === "string" ? block.input.reason.trim() : "";
+    return { huddle: { roster, reason, ...(template ? { template } : {}) } };
   }
   return null;
 }

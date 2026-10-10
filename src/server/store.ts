@@ -1,5 +1,5 @@
 import {
-  appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
+  appendFileSync, closeSync, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -8,6 +8,7 @@ import type {
   ActivityEntry, Comment, Config, Huddle, HuddleMessage, OutputFile, Profile, Schedule, ScheduleHistoryEntry, Status, Ticket, TicketMode, TicketQuestion,
 } from "./types";
 import { cleanPresets, type HuddlePreset } from "./huddle-presets";
+import { cleanTemplates, type HuddleTemplate } from "./huddle-templates";
 import { newId, newTicketId, nowIso } from "./util";
 
 const DEFAULT_CONFIG: Config = { port: 7777, prPollMinutes: 5 };
@@ -49,6 +50,8 @@ function serializeTicket(t: Ticket): string {
 }
 
 export class Store {
+  /** Parsed huddle message logs by "<slug>/<huddle>", with the byte offset read up to (see readHuddleMessages). */
+  private huddleLogs = new Map<string, { offset: number; msgs: HuddleMessage[] }>();
   constructor(public readonly root: string) {
     mkdirSync(join(root, "profiles"), { recursive: true });
   }
@@ -323,6 +326,21 @@ export class Store {
     atomicWrite(join(this.profileDir(slug), "huddle-presets.json"), JSON.stringify(ps, null, 2) + "\n");
   }
 
+  /** The board's own huddle templates and overrides of the built-ins (merge with mergeTemplates). */
+  listHuddleTemplates(slug: string): HuddleTemplate[] {
+    const file = join(this.profileDir(slug), "huddle-templates.json");
+    if (!existsSync(file)) return [];
+    try {
+      return cleanTemplates(JSON.parse(readFileSync(file, "utf8")));
+    } catch {
+      return [];
+    }
+  }
+
+  saveHuddleTemplates(slug: string, ts: HuddleTemplate[]): void {
+    atomicWrite(join(this.profileDir(slug), "huddle-templates.json"), JSON.stringify(ts, null, 2) + "\n");
+  }
+
   private huddlesDir(slug: string) {
     return join(this.profileDir(slug), "huddles");
   }
@@ -368,8 +386,45 @@ export class Store {
     appendFileSync(join(this.huddlesDir(slug), `${id}.messages.jsonl`), JSON.stringify(m) + "\n");
   }
 
+  /**
+   * The huddle's messages, oldest first. The parsed log is cached per huddle with the byte offset read up to (the
+   * append index): a read parses only the lines appended since. A shorter file (replaced) is read again in full.
+   */
   readHuddleMessages(slug: string, id: string): HuddleMessage[] {
-    return readJsonl<HuddleMessage>(join(this.huddlesDir(slug), `${id}.messages.jsonl`));
+    const file = join(this.huddlesDir(slug), `${id}.messages.jsonl`);
+    const key = `${slug}/${id}`;
+    let size: number;
+    try {
+      size = statSync(file).size;
+    } catch {
+      this.huddleLogs.delete(key);
+      return [];
+    }
+    let log = this.huddleLogs.get(key);
+    if (!log || size < log.offset) log = { offset: 0, msgs: [] };
+    if (size > log.offset) {
+      const fd = openSync(file, "r");
+      let buf: Buffer;
+      try {
+        buf = Buffer.alloc(size - log.offset);
+        buf = buf.subarray(0, readSync(fd, buf, 0, buf.length, log.offset));
+      } finally {
+        closeSync(fd);
+      }
+      // Only whole lines: a line still being written is read next time.
+      const end = buf.lastIndexOf(0x0a) + 1;
+      const msgs = log.msgs.slice();
+      for (const line of buf.subarray(0, end).toString("utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          msgs.push(JSON.parse(line));
+        } catch {}
+      }
+      log = { offset: log.offset + end, msgs };
+    }
+    this.huddleLogs.set(key, log);
+    // Copies: a caller changing a message must not change the cache.
+    return log.msgs.map((m) => ({ ...m, mentions: [...(m.mentions ?? [])] }));
   }
 
   /** Where a huddle participant saves reports and scripts: outputs/<handle>/ of the host ticket. */

@@ -16,7 +16,7 @@ export function HuddleDigest({ text, meta, old, pending, onOpen, children }: {
   /** Shown under the block, outside the fold (Send / Discard for an unsent one). */
   children?: ReactNode;
 }) {
-  const { entries, note } = parseDigest(text);
+  const { entries, note, brief } = parseDigest(text);
   const senders = digestSenders(entries);
   const n = entries.length;
   const block = (
@@ -28,6 +28,7 @@ export function HuddleDigest({ text, meta, old, pending, onOpen, children }: {
         </span>
         {meta}
       </summary>
+      {brief && <div className="muted small hdg-brief" title={brief}>📌 Brief: {brief.split("\n")[0]}</div>}
       {note && <div className="muted small">{note}</div>}
       {n === 0 ? <Markdown text={text} /> : (
         <ol className="hdg-list">

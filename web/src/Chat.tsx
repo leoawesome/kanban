@@ -445,7 +445,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
                   onBranch={() => branchTicket(slug, ticket, onOpenTicket).then(() => {}, (err) => onError(err.message))} />
               )}
               {e.huddle && (
-                <HuddleCard slug={slug} ticket={ticket} tickets={tickets} uuid={e.uuid} at={e.at} roster={e.huddle.roster} reason={e.huddle.reason}
+                <HuddleCard slug={slug} ticket={ticket} tickets={tickets} uuid={e.uuid} at={e.at} roster={e.huddle.roster} reason={e.huddle.reason} template={e.huddle.template}
                   huddle={huddle} old={old} onOpen={() => onOpenHuddle?.()} onError={onError} />
               )}
               {e.mockups && (

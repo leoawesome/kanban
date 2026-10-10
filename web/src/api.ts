@@ -275,7 +275,7 @@ export interface SessionEntry {
   /** Claude offered to branch this ticket (Branch button). */
   branch?: { reason: string };
   /** Claude proposed a huddle (propose_huddle): the roster card with Start. */
-  huddle?: { roster: RosterEntry[]; reason: string };
+  huddle?: { roster: RosterEntry[]; reason: string; template?: string };
   /** Mockups Claude sent in this reply, saved as outputs/mockups/<name>. */
   mockups?: string[];
   moved?: "planning";
@@ -433,6 +433,21 @@ export interface HuddlePreset {
   source: "builtin" | "override" | "board";
 }
 
+/** A whole-huddle template (src/server/huddle-templates.ts): a roster and its rules. */
+export interface HuddleTemplate {
+  name: string;
+  label: string;
+  description: string;
+  roster: RosterEntry[];
+  /** Rounds of discussion before the lead wraps up; null: no limit. */
+  rounds: number | null;
+  /** Budget in USD; null: the default. */
+  maxCostUsd: number | null;
+  /** Report format ("" for none). */
+  report: string;
+  source: "builtin" | "override" | "board";
+}
+
 /** One line of a huddle roster (src/server/huddle-roster.ts): `count` participants from a preset or a free-form role. */
 export interface RosterEntry {
   preset?: string;
@@ -505,6 +520,10 @@ export interface Huddle {
   /** Messages tagging @you since the user last posted or acted (Stop, Resume…); forYouSince: that seq. */
   forYou?: number;
   forYouSince?: number;
+  /** Pinned brief (goal, decisions) at the head of every digest. */
+  brief?: { text: string; by: string; at: string } | null;
+  /** Template it was started from. */
+  template?: string | null;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
@@ -518,6 +537,8 @@ export interface HuddleMessage {
   text: string;
   mentions: string[];
   kind: "message" | "finding" | "system";
+  /** Where a post came in from: the board UI, the MCP server/CLI, or a request with neither header. */
+  source?: "ui" | "mcp" | "none";
 }
 
 const hud = (slug: string, id?: string) => `/api/profiles/${encodeURIComponent(slug)}/huddles${id ? `/${encodeURIComponent(id)}` : ""}`;
@@ -587,7 +608,8 @@ export type BusEvent =
   | { type: "schedule.updated"; profile: string; id: string; schedule: Omit<Schedule, "summary" | "active"> | null }
   | { type: "restart.updated"; pending: boolean; waiting: number }
   | { type: "huddle.updated"; profile: string; huddle: Huddle }
-  | { type: "huddle.message"; profile: string; huddleId: string; message: HuddleMessage };
+  | { type: "huddle.message"; profile: string; huddleId: string; message: HuddleMessage }
+  | { type: "huddle.activity"; profile: string; huddleId: string; handle: string; lastActivity: string | null };
 
 export interface InboxItem {
   profile: string;
@@ -629,7 +651,8 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const hasBody = method === "POST" || method === "PATCH" || method === "PUT";
   const r = await fetch(url, {
     method,
-    headers: hasBody ? { "content-type": "application/json" } : undefined,
+    // x-ckanban-source: the daemon records where huddle posts come from.
+    headers: hasBody ? { "content-type": "application/json", "x-ckanban-source": "ui" } : undefined,
     body: hasBody ? JSON.stringify(body ?? {}) : undefined,
   });
   if (r.status === 204) return undefined as T;
@@ -679,8 +702,16 @@ export const api = {
   huddle: (slug: string, id: string, q: { before?: number; since?: number; limit?: number } = {}) =>
     req<{ huddle: Huddle; you: string; messages: HuddleMessage[]; hasMore: boolean }>("GET",
       `${hud(slug, id)}?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]))}`),
-  startHuddle: (slug: string, ticketId: string, roster: RosterEntry[], maxParticipants?: number, maxCostUsd?: number) =>
-    req<Huddle>("POST", hud(slug), { ticketId, roster, maxParticipants, maxCostUsd }),
+  /** template: a template's name (its roster when `roster` is empty, its budget unless given, its rules as the brief). */
+  startHuddle: (slug: string, ticketId: string, roster: RosterEntry[], maxParticipants?: number, maxCostUsd?: number, template?: string) =>
+    req<Huddle>("POST", hud(slug), { ticketId, roster, maxParticipants, maxCostUsd, template }),
+  setHuddleBrief: (slug: string, id: string, text: string) => req<Huddle>("PUT", `${hud(slug, id)}/brief`, { text }),
+  huddleTemplates: (slug: string) => req<HuddleTemplate[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates`),
+  saveHuddleTemplate: (slug: string, t: Omit<HuddleTemplate, "source">) =>
+    req<HuddleTemplate>("POST", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates`, t),
+  /** A board template goes away; a changed built-in goes back to its default. */
+  deleteHuddleTemplate: (slug: string, name: string) =>
+    req<{ reset: boolean; templates: HuddleTemplate[] }>("DELETE", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates/${encodeURIComponent(name)}`),
   postHuddle: (slug: string, id: string, text: string) => req<HuddleMessage>("POST", `${hud(slug, id)}/messages`, { text }),
   addHuddleParticipants: (slug: string, id: string, entry: RosterEntry) =>
     req<{ added: HuddleParticipant[]; huddle: Huddle }>("POST", `${hud(slug, id)}/participants`, entry),

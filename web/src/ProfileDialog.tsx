@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type ClaudeProject, type Profile, type SetupDetection } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { HuddleRoles } from "./HuddleRoles";
+import { HuddleTemplates } from "./HuddleTemplates";
 import { Modal } from "./Modal";
 import { Select } from "./Select";
 import { timeAgo } from "./time";
@@ -247,6 +248,7 @@ export function ProfileDialog({ profile, onClose, onSaved, onDeleted }: {
               <span className="muted small setup-hint">Runs in the worktree before the board removes it.</span>
             </label>
             <HuddleRoles slug={profile.slug} />
+            <HuddleTemplates slug={profile.slug} />
           </>
         )}
 

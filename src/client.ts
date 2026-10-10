@@ -2,7 +2,8 @@
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import type { HuddlePresetView } from "./server/huddle-presets";
-import { HUDDLE_AGENT_ENV, HUDDLE_HEADER, type RosterEntry } from "./server/huddle-roster";
+import { HUDDLE_AGENT_ENV, HUDDLE_HEADER, SOURCE_HEADER, type RosterEntry } from "./server/huddle-roster";
+import type { HuddleTemplateView } from "./server/huddle-templates";
 import { RUN_HEADER } from "./server/scheduler";
 import { defaultRoot, Store } from "./server/store";
 import { STATUSES, type HuddleFinding, type HuddleMessage, type HuddleMode, type Status, type TicketMode } from "./server/types";
@@ -162,6 +163,8 @@ export interface HuddleInfo {
   quiet?: boolean;
   idleSince?: string | null;
   closeRequest?: { by: string; at: string; reason: string } | null;
+  /** Pinned brief (goal, decisions). */
+  brief?: { text: string; by: string; at: string } | null;
 }
 
 /** A participant's own huddle status: done, blocked (with a reason) or active again. */
@@ -299,11 +302,14 @@ export class BoardClient {
   deleteHuddlePreset = (slug: string, name: string, c: HuddleCaller = {}) =>
     this.req<{ reset: boolean; presets: HuddlePresetView[] }>("DELETE", this.hp(slug, name), undefined, this.as(c));
 
+  // Whole-huddle templates (roster and rules): built-ins merged with the board's own.
+  listHuddleTemplates = (slug: string) => this.req<HuddleTemplateView[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/huddle-templates`);
+
   // Huddles. The daemon decides who the caller is from these headers, never from the request body.
   private h(slug: string, hid: string): string {
     return `/api/profiles/${encodeURIComponent(slug)}/huddles/${encodeURIComponent(hid)}`;
   }
-  private as = (c: HuddleCaller): Record<string, string> => ({ ...this.by(c.run), ...(c.agent ? { [HUDDLE_HEADER]: c.agent } : {}) });
+  private as = (c: HuddleCaller): Record<string, string> => ({ [SOURCE_HEADER]: "mcp", ...this.by(c.run), ...(c.agent ? { [HUDDLE_HEADER]: c.agent } : {}) });
   /** hid "current": the caller's own huddle. */
   huddleRead = (slug: string, hid: string, q: { since?: number; limit?: number }, c: HuddleCaller) => {
     const qs = new URLSearchParams();
@@ -324,6 +330,8 @@ export class BoardClient {
     this.req<{ added: HuddleParticipantInfo[]; huddle: HuddleInfo }>("POST", `${this.h(slug, hid)}/participants`, entry, this.as(c));
   huddleFindings = (slug: string, hid: string, action: "add" | "resolve" | "list", arg: { text?: string; id?: string }, c: HuddleCaller) =>
     this.req<HuddleFinding[]>("POST", `${this.h(slug, hid)}/findings`, { action, ...arg }, this.as(c));
+  /** Set the pinned brief ("" clears it). */
+  huddleBrief = (slug: string, hid: string, text: string, c: HuddleCaller) => this.req<HuddleInfo>("PUT", `${this.h(slug, hid)}/brief`, { text }, this.as(c));
 }
 
 function real(p: string): string {

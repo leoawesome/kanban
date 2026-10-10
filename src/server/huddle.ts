@@ -37,10 +37,15 @@ import {
 import {
   deletePreset, type HuddlePreset, type HuddlePresetView, MAIN_PRESET, mergePresets, presetName, savePreset,
 } from "./huddle-presets";
+import {
+  deleteTemplate, type HuddleTemplate, type HuddleTemplateView, mergeTemplates, saveTemplate, templateBrief,
+} from "./huddle-templates";
 import { huddleAgentPrompt, huddleAgentSystemPrompt, huddleDigest, huddleMainPrompt } from "./prompts";
 import { buildArgs, MONITOR_IDLE_MS, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
-import type { Huddle, HuddleFinding, HuddleMessage, HuddleMessageKind, HuddleMode, HuddleParticipant, HuddleStopReason, Profile, Ticket } from "./types";
+import type {
+  Huddle, HuddleFinding, HuddleMessage, HuddleMessageKind, HuddleMode, HuddleParticipant, HuddleSource, HuddleStopReason, Profile, Ticket,
+} from "./types";
 import { newId, nowIso } from "./util";
 
 export class HuddleError extends Error {
@@ -51,6 +56,12 @@ export class HuddleError extends Error {
 
 /** Unread messages handed to a session at once; older ones are left to huddle_read. */
 const DIGEST_MAX = 40;
+/** Longest message anyone can post: longer reports go in a file. */
+export const POST_MAX = 2000;
+/** Longest pinned brief. */
+export const BRIEF_MAX = 2000;
+/** A finding's title as system lines show it (the findings list has the whole text). */
+const FINDING_TITLE = 100;
 const ACTIVITY_THROTTLE_MS = 1000;
 export const DEFAULT_MAX_COST_USD = 20;
 export const DEFAULT_MAX_MESSAGES = 150;
@@ -385,6 +396,37 @@ export class Huddles {
     return { reset: r.reset, presets: this.presets(slug) };
   }
 
+  // ---- Whole-huddle templates (built-ins + the board's huddle-templates.json) ----
+
+  templates(slug: string): HuddleTemplateView[] {
+    return mergeTemplates(this.store.listHuddleTemplates(slug));
+  }
+
+  /** Add or change a board template (a built-in's name overrides it). */
+  saveTemplate(slug: string, input: unknown): HuddleTemplateView {
+    if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
+    let r: ReturnType<typeof saveTemplate>;
+    try {
+      r = saveTemplate(this.store.listHuddleTemplates(slug), input, this.presets(slug).map((p) => p.name));
+    } catch (e) {
+      throw new HuddleError(400, (e as Error).message);
+    }
+    this.store.saveHuddleTemplates(slug, r.board);
+    return this.templates(slug).find((t) => t.name === r.template.name)!;
+  }
+
+  /** Delete a board template, or reset a changed built-in. Built-ins themselves can't be deleted. */
+  deleteTemplate(slug: string, name: string): { reset: boolean; templates: HuddleTemplateView[] } {
+    let r: ReturnType<typeof deleteTemplate>;
+    try {
+      r = deleteTemplate(this.store.listHuddleTemplates(slug), name);
+    } catch (e) {
+      throw new HuddleError(/built-in/.test((e as Error).message) ? 409 : 404, (e as Error).message);
+    }
+    this.store.saveHuddleTemplates(slug, r.board);
+    return { reset: r.reset, templates: this.templates(slug) };
+  }
+
   // ---- Changing ----
 
   /** Read, change and save a huddle in one step (nothing else runs in between), then tell the UI. */
@@ -399,6 +441,16 @@ export class Huddles {
 
   private updateP(slug: string, hid: string, handle: string, patch: Partial<HuddleParticipant>): void {
     if (!this.load(slug, hid)) return;
+    // Only what it is doing now (many times a minute): saved, and sent as a small event instead of the whole view.
+    if (Object.keys(patch).every((k) => k === "lastActivity")) {
+      const h = this.get(slug, hid);
+      const p = h.participants.find((x) => x.handle === handle);
+      if (!p || p.lastActivity === patch.lastActivity) return;
+      p.lastActivity = patch.lastActivity;
+      this.save(slug, h);
+      this.bus.emit({ type: "huddle.activity", profile: slug, huddleId: hid, handle, lastActivity: patch.lastActivity ?? null });
+      return;
+    }
     this.update(slug, hid, (h) => {
       const p = h.participants.find((x) => x.handle === handle);
       if (p) Object.assign(p, patch);
@@ -406,7 +458,7 @@ export class Huddles {
   }
 
   /** known: handles that can be mentioned (plus "all" when allowAll). System messages mention only `known`, given as is. */
-  private append(slug: string, hid: string, from: string, text: string, kind: HuddleMessageKind, known: string[], allowAll = false): HuddleMessage {
+  private append(slug: string, hid: string, from: string, text: string, kind: HuddleMessageKind, known: string[], allowAll = false, source?: HuddleSource): HuddleMessage {
     let seq = 0;
     this.update(slug, hid, (h) => {
       seq = h.seq = h.seq + 1;
@@ -415,7 +467,7 @@ export class Huddles {
       if (p && p.cursor === seq - 1) p.cursor = seq;
     });
     const mentions = kind === "system" ? known : parseMentions(text).filter((m) => (m === "all" ? allowAll : known.includes(m)));
-    const m: HuddleMessage = { id: `m_${newId()}`, seq, ts: nowIso(), from, text, mentions, kind };
+    const m: HuddleMessage = { id: `m_${newId()}`, seq, ts: nowIso(), from, text, mentions, kind, ...(source ? { source } : {}) };
     this.store.appendHuddleMessage(slug, hid, m);
     this.bus.emit({ type: "huddle.message", profile: slug, huddleId: hid, message: m });
     return m;
@@ -429,14 +481,24 @@ export class Huddles {
     return m;
   }
 
-  /** Start a huddle on a ticket from a roster (the user pressed Start on a proposed roster, or made one). */
-  create(slug: string, hostId: string, roster: RosterEntry[], opts: { maxParticipants?: number; maxCostUsd?: number } = {}): Huddle {
+  /**
+   * Start a huddle on a ticket from a roster (the user pressed Start on a proposed roster, or made one). template: a
+   * template's name; its roster is used when `roster` is empty, its budget unless one is given, and its rules become
+   * the pinned brief.
+   */
+  create(slug: string, hostId: string, roster: RosterEntry[], opts: { maxParticipants?: number; maxCostUsd?: number; template?: string } = {}): Huddle {
     const host = this.store.getTicket(slug, hostId);
     if (!host) throw new HuddleError(404, `ticket ${hostId} not found`);
     if (host.error?.startsWith("corrupt")) throw new HuddleError(409, `ticket ${hostId} file is corrupt`);
+    let tpl: HuddleTemplate | undefined;
+    if (opts.template) {
+      tpl = this.templates(slug).find((t) => t.name === opts.template!.trim());
+      if (!tpl) throw new HuddleError(404, `no huddle template "${opts.template}" (templates: ${this.templates(slug).map((t) => t.name).join(", ")})`);
+      if (!roster.length) roster = tpl.roster;
+    }
     const max = Math.max(2, Math.min(32, Math.round(opts.maxParticipants ?? DEFAULT_MAX_PARTICIPANTS)));
     if (opts.maxCostUsd !== undefined && !(Number.isFinite(opts.maxCostUsd) && opts.maxCostUsd > 0)) throw new HuddleError(400, "maxCostUsd must be a positive amount");
-    const maxCostUsd = opts.maxCostUsd ?? DEFAULT_MAX_COST_USD;
+    const maxCostUsd = opts.maxCostUsd ?? tpl?.maxCostUsd ?? DEFAULT_MAX_COST_USD;
     const open = this.store.listHuddles(slug).find((h) => h.hostTicket === hostId && h.status !== "closed");
     if (open) throw new HuddleError(409, `ticket ${hostId} already has an open huddle (${open.id}); close it first`);
     const presets = this.presetMap(slug);
@@ -448,6 +510,7 @@ export class Huddles {
     const h: Huddle = {
       id: `h_${newId()}`, hostTicket: hostId, status: "live", maxParticipants: max, findings: [], invited: [], seq: 0,
       maxCostUsd, maxMessages: DEFAULT_MAX_MESSAGES, posts: 0, sinceUser: 0, stopReason: null, createdAt: at, updatedAt: at,
+      template: tpl?.name ?? null, brief: tpl ? { text: templateBrief(tpl, maxCostUsd), by: USER_HANDLE, at } : null,
       participants: [
         { ...base, handle: USER_HANDLE, role: "User", model: null, mode: "monitor", lead: true, canEdit: false, kind: "human" },
         {
@@ -464,7 +527,7 @@ export class Huddles {
     }
     this.save(slug, h);
     this.bus.emit({ type: "huddle.updated", profile: slug, huddle: this.view(slug, h) });
-    this.system(slug, h.id, `Huddle started on ticket ${hostId} "${host.title}" with ${agents.map((p) => `@${p.handle} (${p.role})`).join(", ")}. @main coordinates. Budget ${money(maxCostUsd)}.`);
+    this.system(slug, h.id, `Huddle started on ticket ${hostId} "${host.title}"${tpl ? ` from template ${tpl.label}` : ""} with ${agents.map((p) => `@${p.handle} (${p.role})`).join(", ")}. @main coordinates. Budget ${money(maxCostUsd)}.`);
     for (const p of agents) this.kickoff(slug, h.id, p.handle);
     return this.get(slug, h.id);
   }
@@ -580,7 +643,7 @@ export class Huddles {
       if (!text) throw new HuddleError(400, "text is required");
       const f: HuddleFinding = { id: `f${h.findings.length + 1}`, text, by: by.handle, status: "open", resolvedBy: null, at: nowIso() };
       this.update(slug, hid, (x) => void x.findings.push(f));
-      this.system(slug, hid, `@${by.handle} pinned finding ${f.id}: ${text}`);
+      this.system(slug, hid, `@${by.handle} pinned finding ${f.id}: ${findingTitle(text)}`);
     } else if (action === "resolve") {
       const f = h.findings.find((x) => x.id === arg.id);
       if (!f) throw new HuddleError(404, `no finding ${arg.id}`);
@@ -598,18 +661,39 @@ export class Huddles {
    * Post a message as `by` (the daemon decided who that is) and route it. status: the sender is done or blocked
    * (reason) with this message, as with setStatus.
    */
-  post(slug: string, hid: string, by: HuddleParticipant, text: string, kind: HuddleMessageKind = "message", status?: { status: StatusChange; reason?: string }): HuddleMessage {
+  post(
+    slug: string, hid: string, by: HuddleParticipant, text: string, kind: HuddleMessageKind = "message", status?: { status: StatusChange; reason?: string },
+    source?: HuddleSource,
+  ): HuddleMessage {
     const h = this.get(slug, hid);
     this.assertOpen(h);
     if (!text.trim()) throw new HuddleError(400, "text is required");
+    const len = text.trim().length;
+    if (len > POST_MAX) {
+      throw new HuddleError(400, `your message is ${len} characters, over the huddle's limit of ${POST_MAX}. Nothing was posted. ` +
+        "Shorten it, split it into a few messages, or put the details in a file in your outputs folder and post its path.");
+    }
     if (kind !== "message" && kind !== "finding") throw new HuddleError(400, "kind must be message or finding");
     if (by.status === "stopped" && by.kind !== "human") throw new HuddleError(409, `@${by.handle} was stopped by the user`);
     if (status) this.checkStatus(by, status.status, status.reason);
-    const m = this.append(slug, hid, by.handle, text.trim(), kind, h.participants.map((p) => p.handle), canManage(h, by));
+    const m = this.append(slug, hid, by.handle, text.trim(), kind, h.participants.map((p) => p.handle), canManage(h, by), source);
     // Stopped: the log keeps it; Resume wakes whoever it tags (wakeIfOwed).
     if (h.status === "live" && this.brakes(slug, hid, by, m)) this.route(slug, hid, m);
     if (status) this.setStatus(slug, hid, by, status.status, status.reason);
     return m;
+  }
+
+  /** Set (or clear, with "") the pinned brief: the goal and decisions so far, at the head of every digest. Leads, @main and the user. */
+  setBrief(slug: string, hid: string, by: HuddleParticipant, text: string): Huddle {
+    const h = this.get(slug, hid);
+    this.assertOpen(h);
+    if (!canManage(h, by)) throw new HuddleError(403, "only a lead, @main or the user can change the brief; suggest the change to your lead");
+    const t = text.trim();
+    if (t.length > BRIEF_MAX) throw new HuddleError(400, `the brief is ${t.length} characters, over the limit of ${BRIEF_MAX}; keep only the goal and the decisions`);
+    if ((h.brief?.text ?? "") === t) return h;
+    this.update(slug, hid, (x) => void (x.brief = t ? { text: t, by: by.handle, at: nowIso() } : null));
+    this.system(slug, hid, t ? `@${by.handle} updated the pinned brief.` : `@${by.handle} cleared the pinned brief.`);
+    return this.get(slug, hid);
   }
 
   private checkStatus(by: HuddleParticipant, status: StatusChange, reason?: string) {
@@ -800,7 +884,7 @@ export class Huddles {
     const tags = (m: HuddleMessage) => m.mentions.includes(handle) || m.mentions.includes("all");
     if (!unread.length || (!withSystem && !unread.some((m) => m.kind !== "system" || tags(m)))) return null;
     const shown = unread.slice(-DIGEST_MAX);
-    return { digest: huddleDigest(shown, unread.length - shown.length), tagged: unread.some(tags), undo: () => this.updateP(slug, hid, handle, { cursor: prev }) };
+    return { digest: huddleDigest(shown, unread.length - shown.length, h.brief), tagged: unread.some(tags), undo: () => this.updateP(slug, hid, handle, { cursor: prev }) };
   }
 
   private deliver(slug: string, h: Huddle, p: HuddleParticipant, mentioned: boolean) {
@@ -1248,6 +1332,12 @@ export class Huddles {
 }
 
 export type StatusChange = "done" | "blocked" | "active";
+
+/** A finding's first line, cut to FINDING_TITLE characters. */
+export function findingTitle(text: string): string {
+  const line = text.trim().split("\n")[0].trim();
+  return line.length > FINDING_TITLE ? `${line.slice(0, FINDING_TITLE - 1).trimEnd()}…` : line;
+}
 
 /** An agent's own or snapshot worktree: next to the board's worktree folder, so its startup sweep (one folder per ticket id) leaves it alone. */
 function agentDir(profile: Profile, h: Huddle, p: HuddleParticipant): string {

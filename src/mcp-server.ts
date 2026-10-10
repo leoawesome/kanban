@@ -6,6 +6,7 @@ import {
 } from "./client";
 import { BUILTIN_PRESETS, MAIN_PRESET, presetLine } from "./server/huddle-presets";
 import { huddleLine, rosterEntryError, rosterError } from "./server/huddle-roster";
+import { BUILTIN_TEMPLATES, templateLine } from "./server/huddle-templates";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -108,7 +109,7 @@ export interface ToolContext {
     | "comment" | "ask" | "pollQuestion" | "replyQuestion" | "reportBug" | "listSchedules" | "createSchedule" | "updateSchedule" | "deleteSchedule" | "runSchedule"
     | "scheduleHistory" | "cronPreview" | "adopt" | "planAction" | "huddleRead" | "huddlePost" | "huddleMode" | "huddleAdd" | "huddleFindings"
     | "huddleStatus" | "huddleCloseRequest"
-    | "listHuddlePresets" | "saveHuddlePreset" | "deleteHuddlePreset">;
+    | "listHuddlePresets" | "saveHuddlePreset" | "deleteHuddlePreset" | "listHuddleTemplates" | "huddleBrief">;
   cwd: string;
   env: Record<string, string | undefined>;
   main?: (dir: string) => string | null;
@@ -597,10 +598,18 @@ function huddleId(args: any, ctx: ToolContext): string {
   return "current";
 }
 
-export function huddlePageText(p: HuddlePage): string {
+/** since: reading on from a message, so only the new messages (the brief, roster and findings are left out). */
+export function huddlePageText(p: HuddlePage, since?: number): string {
   const h = p.huddle;
+  const head = `Huddle ${h.id} on ticket ${h.hostTicket}${h.hostTitle ? ` "${h.hostTitle}"` : ""}: ${h.status}. You are @${p.you}.`;
+  if (since !== undefined) {
+    const lines = [head, "", p.messages.length ? `Messages after #${since}:` : `No messages after #${since}.`, ...p.messages.map(huddleLine)];
+    if (p.hasMore) lines.push("", `More messages: call huddle_read with since=${p.messages.at(-1)?.seq ?? 0}.`);
+    return lines.join("\n");
+  }
   const lines = [
-    `Huddle ${h.id} on ticket ${h.hostTicket}${h.hostTitle ? ` "${h.hostTitle}"` : ""}: ${h.status}. You are @${p.you}.`,
+    head,
+    ...(h.brief?.text ? ["", `Pinned brief (by @${h.brief.by}):`, ...h.brief.text.split("\n").map((l) => `    ${l}`)] : []),
     "",
     `Participants (${h.participants.filter((x) => x.kind !== "human").length}/${h.maxParticipants}):`,
     ...h.participants.map((x) =>
@@ -690,7 +699,8 @@ const HUDDLE_TOOLS: Tool[] = [
   },
   {
     name: "huddle_read",
-    description: "Read your huddle: the roster, the pinned findings and recent messages (or the ones after `since`).",
+    description: "Read your huddle: the pinned brief, the roster, the findings and recent messages. With `since`, only the messages after that #seq " +
+      "(no roster or findings), in full: since=n-1 shows message #n that a digest cut short.",
     inputSchema: {
       type: "object",
       properties: { since: { type: "integer", description: "Only messages after this #seq." }, huddle: HUDDLE, profile: PROFILE },
@@ -700,7 +710,26 @@ const HUDDLE_TOOLS: Tool[] = [
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
       const since = Number.isInteger(args?.since) ? args.since : undefined;
-      return huddlePageText(await ctx.client.huddleRead(slug, huddleId(args, ctx), { since, limit: 60 }, huddleCaller(ctx.env)));
+      return huddlePageText(await ctx.client.huddleRead(slug, huddleId(args, ctx), { since, limit: 60 }, huddleCaller(ctx.env)), since);
+    },
+  },
+  {
+    name: "huddle_brief",
+    description:
+      "Leads, @main and the user: set the huddle's pinned brief, the goal and the decisions so far (max 2,000 characters). It heads every digest each " +
+      "participant gets, so keep it short and current; empty text clears it. Replaces the whole brief: include what should stay.",
+    inputSchema: {
+      type: "object",
+      properties: { text: { type: "string", description: "The whole brief: goal, decisions, constraints. Empty clears it." }, huddle: HUDDLE, profile: PROFILE },
+      required: ["text"],
+    },
+    changes: true,
+    allowInRun: true,
+    async run(args, ctx) {
+      if (typeof args?.text !== "string") throw new ClientError("text is required (empty text clears the brief)");
+      const slug = await slugFor(args, ctx);
+      const h = await ctx.client.huddleBrief(slug, huddleId(args, ctx), args.text, huddleCaller(ctx.env));
+      return h.brief ? `Pinned brief updated (${h.brief.text.length} characters).` : "Pinned brief cleared.";
     },
   },
   {
@@ -770,20 +799,31 @@ const HUDDLE_TOOLS: Tool[] = [
       "Board ticket chat (the ticket's own session, as coordinator): propose a huddle, a room where helper Claude sessions (reviewer, QA testers, a QA lead...) " +
       "work on this ticket with you and talk to each other; you join as @main. The board shows the roster as a card; nothing starts until the user presses Start. " +
       "For each entry choose workspace: shared (read-only in this ticket's worktree) for review and QA, own (its own worktree and branch) when several agents would edit code in parallel. " +
-      "A lead (e.g. qa-lead) gathers findings so you are woken with one consolidated list. Keep it small (limit 8 including you). Nothing starts by the call.",
+      "A lead (e.g. qa-lead) gathers findings so you are woken with one consolidated list. Keep it small (limit 8 including you). Nothing starts by the call. " +
+      `Or give a template (a whole roster with its rules: rounds, budget, report format; built-in: ${BUILTIN_TEMPLATES.map((t) => t.name).join(", ")}; list_huddle_presets lists the board's) ` +
+      "and leave out roster to use the template's.",
     inputSchema: {
       type: "object",
       properties: {
-        roster: { type: "array", minItems: 1, items: ROSTER_ENTRY },
+        roster: { type: "array", minItems: 1, items: ROSTER_ENTRY, description: "The participants. Optional with a template (its roster is used)." },
+        template: { type: "string", description: "Template name, e.g. design-review: its roster (unless you give one), budget and rules." },
         reason: { type: "string", description: "One line: what the huddle is for." },
       },
-      required: ["roster"],
     },
     annotations: { readOnlyHint: true },
     changes: false,
     async run(args, ctx) {
       // The board's presets, when the daemon is reachable; otherwise only the shape is checked here and the daemon checks names at Start.
-      const names = await slugFor(args, ctx).then((slug) => ctx.client.listHuddlePresets(slug)).then((ps) => ps.map((p) => p.name), () => undefined);
+      const slug = await slugFor(args, ctx).catch(() => null);
+      const names = slug ? await ctx.client.listHuddlePresets(slug).then((ps) => ps.map((p) => p.name), () => undefined) : undefined;
+      const template = typeof args?.template === "string" && args.template.trim() ? args.template.trim() : null;
+      if (args?.template !== undefined && args?.template !== null && !template) throw new ClientError("template must be a template name");
+      if (template) {
+        // Checked here when the daemon is reachable; otherwise the daemon checks it at Start.
+        const known = slug ? await ctx.client.listHuddleTemplates(slug).then((ts) => ts.map((t) => t.name), () => null) : null;
+        if (known && !known.includes(template)) throw new ClientError(`unknown template "${template}" (templates: ${known.join(", ")}). Fix it and call propose_huddle again.`);
+        if (args?.roster === undefined) return SHOWN;
+      }
       const e = rosterError(args?.roster, undefined, names);
       if (e) throw new ClientError(`${e}. Fix it and call propose_huddle again.`);
       return SHOWN;
@@ -791,14 +831,16 @@ const HUDDLE_TOOLS: Tool[] = [
   },
   {
     name: "list_huddle_presets",
-    description: "List the board's huddle role presets (built-ins and the board's own) with their prompt, default model, mode, lead, canEdit and workspace. Use the names in propose_huddle and huddle_add_participant.",
+    description: "List the board's huddle role presets (built-ins and the board's own) with their prompt, default model, mode, lead, canEdit and workspace, and the board's huddle templates. " +
+      "Use the preset names in propose_huddle and huddle_add_participant, the template names in propose_huddle.",
     inputSchema: { type: "object", properties: { profile: PROFILE } },
     annotations: { readOnlyHint: true },
     changes: false,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
-      const ps = await ctx.client.listHuddlePresets(slug);
-      return `Huddle presets on board ${slug}:\n${ps.map(presetLine).join("\n")}`;
+      const [ps, ts] = await Promise.all([ctx.client.listHuddlePresets(slug), ctx.client.listHuddleTemplates(slug).catch(() => [])]);
+      return `Huddle presets on board ${slug}:\n${ps.map(presetLine).join("\n")}` +
+        (ts.length ? `\n\nHuddle templates (whole rosters with rules; use with propose_huddle template):\n${ts.map(templateLine).join("\n")}` : "");
     },
   },
   {

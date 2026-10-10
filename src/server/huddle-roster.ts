@@ -7,6 +7,8 @@ export const DEFAULT_MAX_PARTICIPANTS = 8;
 export const HUDDLE_AGENT_ENV = "CKANBAN_HUDDLE_AGENT";
 /** The MCP server/CLI forwards HUDDLE_AGENT_ENV to the daemon in this header. */
 export const HUDDLE_HEADER = "x-ckanban-huddle-agent";
+/** Where a request comes from: "ui" (the board's web UI) or "mcp" (BoardClient: the MCP server and CLI). Recorded on posts. */
+export const SOURCE_HEADER = "x-ckanban-source";
 /** The host ticket's own session: the coordinator. */
 export const MAIN_HANDLE = "main";
 /** The user, posting from the board. */

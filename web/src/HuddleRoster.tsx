@@ -1,15 +1,15 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
-import { api, type Huddle, type HuddleMode, type HuddlePreset, type RosterEntry, type Ticket } from "./api";
+import { api, type Huddle, type HuddleMode, type HuddlePreset, type HuddleTemplate, type RosterEntry, type Ticket } from "./api";
 import { CloseIcon } from "./icons";
 import { Select } from "./Select";
-import { DEFAULT_MAX, draftError, draftSize, handleBase, rosterDraft, rowHandle, rowKey as key, type Draft } from "./huddleText";
+import { applyTemplate, DEFAULT_MAX, draftError, draftSize, dollars, handleBase, rosterDraft, rowHandle, rowKey as key, type Draft } from "./huddleText";
 
 const MODELS = ["opus", "sonnet", "haiku"];
 const MAX_COUNT = 8;
 
 export type RosterRow = RosterEntry & { key: string };
 export type RosterDraft = Draft<RosterEntry, HuddleMode>;
-export { DEFAULT_MAX, draftError, draftSize, rosterDraft, rowHandle };
+export { applyTemplate, DEFAULT_MAX, draftError, draftSize, rosterDraft, rowHandle };
 
 /** The board's huddle presets (null while loading). */
 export function usePresets(slug: string): HuddlePreset[] | null {
@@ -24,14 +24,56 @@ export function usePresets(slug: string): HuddlePreset[] | null {
   return presets;
 }
 
-/** Start the huddle a draft describes: create it, invite the tickets, set @main's mode. */
+/** The board's whole-huddle templates (null while loading). */
+export function useTemplates(slug: string): HuddleTemplate[] | null {
+  const [templates, setTemplates] = useState<HuddleTemplate[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.huddleTemplates(slug).then((t) => live && setTemplates(t), () => live && setTemplates([]));
+    return () => {
+      live = false;
+    };
+  }, [slug]);
+  return templates;
+}
+
+/** Start the huddle a draft describes: create it (with its template's rules), invite the tickets, set @main's mode. */
 export async function startFromDraft(slug: string, ticketId: string, d: RosterDraft): Promise<Huddle> {
   const roster = d.rows.map(({ key: _k, ...e }) => ({ ...e, ...(e.focus?.trim() ? { focus: e.focus.trim() } : { focus: undefined }) }));
-  let h = await api.startHuddle(slug, ticketId, roster, undefined, d.maxCostUsd);
+  let h = await api.startHuddle(slug, ticketId, roster, undefined, d.maxCostUsd, d.template ?? undefined);
   for (const t of d.invites) await api.inviteToHuddle(slug, h.id, t);
   const main = h.participants.find((p) => p.handle === "main");
   if (d.mainMode && main && main.mode !== d.mainMode) h = await api.setHuddleMode(slug, h.id, "main", d.mainMode);
   return h;
+}
+
+/** A template's rules in one line: "2 rounds · $20 budget · report format". */
+export const templateRules = (t: HuddleTemplate) =>
+  [t.rounds && `${t.rounds} round${t.rounds === 1 ? "" : "s"}`, t.maxCostUsd && `${dollars(t.maxCostUsd)} budget`, t.report && "report format"].filter(Boolean).join(" · ");
+
+/** Start from a template: fills in its roster and budget; its rules become the huddle's pinned brief. */
+export function TemplatePicker({ templates, draft, setDraft, disabled }: {
+  templates: HuddleTemplate[] | null;
+  draft: RosterDraft;
+  setDraft: (d: RosterDraft) => void;
+  disabled?: boolean;
+}) {
+  if (!templates?.length) return null;
+  const cur = templates.find((t) => t.name === draft.template);
+  return (
+    <div className="roster-template">
+      <Select ariaLabel="Template" className="roster-select" value={draft.template ?? ""}
+        renderValue={() => (cur ? `Template: ${cur.label}` : "No template")}
+        options={[{ value: "", label: "No template", hint: "your own roster" },
+          ...templates.map((t) => ({ value: t.name, label: t.label, hint: `${t.roster.length} roles${templateRules(t) ? ` · ${templateRules(t)}` : ""}` }))]}
+        onChange={(v) => !disabled && setDraft(applyTemplate(draft, templates.find((t) => t.name === v) ?? null))} />
+      {cur && (
+        <span className="muted small" title={cur.report ? `Report format: ${cur.report}` : undefined}>
+          {cur.description}{templateRules(cur) ? ` (${templateRules(cur)}; the rules become the huddle's pinned brief)` : ""}
+        </span>
+      )}
+    </div>
+  );
 }
 
 const MODE_OPTIONS = [

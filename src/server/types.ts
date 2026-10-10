@@ -365,12 +365,18 @@ export interface Huddle {
   stopReason?: HuddleStopReason | null;
   /** @main or a lead asked the user to close the huddle (huddle_close); only the user closes it. */
   closeRequest?: { by: string; at: string; reason: string } | null;
+  /** Pinned brief (goal, decisions) the leads, @main and the user keep current; it heads every digest. */
+  brief?: { text: string; by: string; at: string } | null;
+  /** Template the huddle was started from (see huddle-templates.ts). */
+  template?: string | null;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
 }
 
 export type HuddleMessageKind = "message" | "finding" | "system";
+/** Where a post came in from: the board UI, the MCP server or CLI (BoardClient), or a request with neither header (e.g. curl). */
+export type HuddleSource = "ui" | "mcp" | "none";
 
 export interface HuddleMessage {
   id: string;
@@ -382,4 +388,6 @@ export interface HuddleMessage {
   /** Handles mentioned with @handle; "all" for @all. */
   mentions: string[];
   kind: HuddleMessageKind;
+  /** Posts only (system messages have none). */
+  source?: HuddleSource;
 }
