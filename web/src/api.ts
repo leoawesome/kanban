@@ -1,6 +1,8 @@
 import type { SlashCommand } from "./slashText";
 import type { TicketUsage, UsageResult } from "./usage";
 import type { Status } from "./columns";
+import type { PrStatus } from "./prText";
+export type { PrCheck, PrStatus } from "./prText";
 export type { Status } from "./columns";
 export type Outcome = null | "done" | "blocked" | "failed" | "stopped" | "needs_input";
 export type TicketMode = "interview" | "auto";
@@ -114,6 +116,8 @@ export interface Ticket {
   workdir?: string | null;
   branch: string | null;
   prUrl: string | null;
+  /** Last fetched PR status; stale when pr.url differs from prUrl. */
+  pr?: PrStatus | null;
   outcome: Outcome;
   lastActivity: string | null;
   lastRunAt: string | null;
@@ -959,6 +963,10 @@ export const api = {
     return r;
   }),
   checkPr: (slug: string, id: string) => req<{ state: string | null }>("POST", `${t(slug, id)}/check-pr`),
+  /** force: skip the server's 30s reuse of a fresh status. */
+  prRefresh: (slug: string, id: string, force = false) => req<{ pr: PrStatus | null; ticket: Ticket }>("POST", `${t(slug, id)}/pr/refresh`, { force }),
+  prSendFailures: (slug: string, id: string) => req<Ticket>("POST", `${t(slug, id)}/pr/send-failures`),
+  prMerge: (slug: string, id: string) => req<Ticket>("POST", `${t(slug, id)}/pr/merge`),
   planningCommand: (slug: string, id: string) => req<{ command: string }>("POST", `${t(slug, id)}/planning-command`),
   /** Raw image bytes; the server saves them and returns the URL to put in markdown. */
   uploadImage: async (file: Blob) => {

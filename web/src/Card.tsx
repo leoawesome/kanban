@@ -4,6 +4,7 @@ import { type CardHuddleBadge, digestPreview } from "./huddleText";
 import { ClockIcon } from "./icons";
 import { KeyHint } from "./KeyHint";
 import { ResourceChip, resourceWait } from "./Needs";
+import { currentPr, prChips } from "./prText";
 import { elapsed, fullTime, plainPreview, timeAgo, useNow } from "./time";
 
 /** Live running time: ticks every second for the first minute, then every 30s. */
@@ -122,6 +123,9 @@ export function Card({ ticket, onClick, dragging, queued, held, huddle, onOpenHu
               PR #{ticket.prUrl.split("/").pop()}
             </a>
           )}
+          {ticket.status === "review" && prChips(currentPr(ticket)).map((c) => (
+            <span key={c.label} className={`badge pr-chip ${c.tone}`} title={c.title}>{c.label}</span>
+          ))}
           {ticket.workdir && (ticket.terminalOpen
             ? <span className="badge running" title="This ticket's Claude session is open in a terminal"><span className="live-dot" /> In terminal</span>
             : <span className="badge stopped" title="Linked to an existing Claude session">session</span>)}

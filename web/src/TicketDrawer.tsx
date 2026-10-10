@@ -15,6 +15,7 @@ import { KeyHint } from "./KeyHint";
 import { MOD } from "./Shortcuts";
 import { complete, PlanPanel, PlanSummary } from "./PlanPanel";
 import { Outputs } from "./Outputs";
+import { PrBox } from "./PrBox";
 import { Select } from "./Select";
 import { useShareNotices } from "./share";
 import { SessionPicker, sessionLabel } from "./SessionPicker";
@@ -502,12 +503,13 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                   </button>
                 )}
                 {ticket.status === "review" && (
-                  <button className="btn primary" onClick={() => setStatus("done")} title={`Mark done (${MOD}⇧Enter)`}>Mark done{!working && <KeyHint keys={proposalPending ? "⌘⇧↵ after Apply" : "⌘⇧↵"} />}</button>
+                  <button className={`btn ${ticket.prUrl ? "" : "primary"}`} onClick={() => setStatus("done")} title={`Mark done (${MOD}⇧Enter)`}>Mark done{!working && <KeyHint keys={proposalPending ? "⌘⇧↵ after Apply" : "⌘⇧↵"} />}</button>
                 )}
-                {ticket.prUrl && (
+                {ticket.prUrl && ticket.status !== "review" && (
                   <a className="btn icon-label" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer">Open PR #{ticket.prUrl.split("/").pop()} <ExternalIcon size={12} /></a>
                 )}
               </div>
+              {ticket.prUrl && ticket.status === "review" && <PrBox profile={profile} ticket={ticket as Ticket & { prUrl: string }} onError={onError} />}
 
               {ticket.parentId && (
                 <div className="field-row">

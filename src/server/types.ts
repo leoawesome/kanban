@@ -61,6 +61,8 @@ export interface Ticket {
   workdir?: string | null;
   branch: string | null;
   prUrl: string | null;
+  /** Last fetched state of prUrl's PR (checks, conflicts, reviews); stale once pr.url differs from prUrl. */
+  pr?: PrStatus | null;
   outcome: Outcome;
   lastActivity: string | null;
   lastRunAt: string | null;
@@ -109,6 +111,32 @@ export interface Ticket {
   createdAt: string;
   updatedAt: string;
   body: string;
+}
+
+export interface PrCheck {
+  name: string;
+  state: "pass" | "fail" | "pending" | "skipped";
+  /** Details page (an Actions job log for GitHub Actions checks). */
+  url: string | null;
+  /** When it finished, or started while running. */
+  at: string | null;
+}
+
+/** A ticket's pull request as `gh pr view` last reported it (see prstatus.ts). */
+export interface PrStatus {
+  url: string;
+  number: number | null;
+  state: "OPEN" | "MERGED" | "CLOSED" | null;
+  checks: PrCheck[];
+  failing: number;
+  pending: number;
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  conflicts: boolean;
+  mergeStateStatus: string | null;
+  /** APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED or null when no review is required. */
+  reviewDecision: string | null;
+  comments: number;
+  fetchedAt: string;
 }
 
 /** What the user did with a proposed teammate: saved it (as `name`, for all boards or this board) or dismissed it. */

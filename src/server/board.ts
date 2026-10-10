@@ -22,7 +22,7 @@ import { buildArgs, startRun, type RunHandle } from "./runner";
 import { BOARD_COMMANDS, commandText, listCommands, MODEL_HELP, parseSlash, REFUSED_COMMANDS, rememberInit, slashMessage, useBundledFile, validModel, type SlashCommand } from "./commands";
 import { mcpConfig } from "./agents";
 import type { Store } from "./store";
-import type { Interrupted, Plan, Profile, QueuedMessage, Status, Ticket, TicketMode } from "./types";
+import type { Interrupted, Plan, PrStatus, Profile, QueuedMessage, Status, Ticket, TicketMode } from "./types";
 import { CLEANUP_TIMEOUT_MS, prepareWorktree, runShell, withSetup, type SetupResult } from "./worktree-setup";
 import { nowIso, slugify } from "./util";
 
@@ -193,6 +193,11 @@ export class Board {
     const needs = [...(before?.needs ?? []), ...(t.needs ?? [])];
     if (needs.length && ("status" in patch || "runStartedAt" in patch || "needs" in patch)) this.resourceChanged(needs);
     return t;
+  }
+
+  /** Cache the ticket's PR status (prpoller.ts) and tell the UI. */
+  setPr(slug: string, id: string, pr: PrStatus): Ticket {
+    return this.patch(slug, id, { pr });
   }
 
   // ---- Exclusive resources (Ticket.needs): one ticket per resource at a time, across every board ----

@@ -7,7 +7,7 @@ import type { Bus, BusEvent } from "./events";
 import { listCommands } from "./commands";
 import { DiffError, ticketDiff } from "./diff";
 import { detectBaseBranch, isGitRepo, resolveBaseBranch, which } from "./git";
-import { checkPr } from "./prpoller";
+import { checkPr, mergePr, PrError, REFRESH_MIN_MS, refreshPr, sendFailures, type PrDeps } from "./prpoller";
 import { resumeCommand } from "./prompts";
 import { cronError, describeCron, nextRuns, parseCron } from "./cron";
 import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
@@ -43,6 +43,8 @@ export interface ServerDeps {
   board: Board;
   port: number;
   webDir: string;
+  /** gh stand-ins for the PR box (tests). */
+  pr?: PrDeps;
   /** URL path → embedded file (standalone binary). When non-empty, used instead of webDir. */
   assets?: Record<string, string>;
   sessions?: SessionCache;
@@ -1022,6 +1024,23 @@ export function createServer(deps: ServerDeps) {
     if (m === "POST" && action === "check-pr") {
       const state = await checkPr(board, store, slug, id);
       return json({ state, ticket: view(profile, store.getTicket(slug, id)!) });
+    }
+    // Review PR box: refresh (rate-limited unless force), send failing CI logs to Claude, Merge & done.
+    if (m === "POST" && action === "pr" && ["refresh", "send-failures", "merge"].includes(parts[5])) {
+      if (parts[5] !== "refresh" && req.headers.get(RUN_HEADER)) throw new HttpError(403, "only the user can merge a PR or send its CI failures from the board");
+      try {
+        if (parts[5] === "refresh") {
+          const force = !!(await body(req).catch(() => ({} as Record<string, unknown>))).force;
+          const pr = await refreshPr(board, store, slug, id, { ...deps.pr, maxAgeMs: force ? 0 : REFRESH_MIN_MS });
+          return json({ pr, ticket: view(profile, store.getTicket(slug, id)!) });
+        }
+        const t = parts[5] === "merge" ? await mergePr(board, store, slug, id, deps.pr) : await sendFailures(board, store, slug, id, deps.pr);
+        return json(view(profile, t), parts[5] === "merge" ? 200 : 202);
+      } catch (e) {
+        if (e instanceof PrError) throw new HttpError(e.status, e.message);
+        if (e instanceof HttpError || e instanceof ConflictError) throw e;
+        throw new HttpError(502, (e as Error).message);
+      }
     }
     if (m === "POST" && action === "planning-command") {
       try {
