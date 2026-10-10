@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { api, type Huddle, type HuddleLearning, type HuddleMessage, type HuddleMode, type HuddleParticipant, type HuddlePreset, type Ticket } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { draftKey } from "./drafts";
+import { draftKey, formKey } from "./drafts";
 import {
   dollars, handleColor, handleInitials, huddleCost, idleFor, isForYou, members, mentionCandidates, mentionQuery, participantActivity, sourceLabel, untaggedHint,
   type HuddleState,
@@ -10,6 +10,7 @@ import { DEFAULT_MAX, draftError, RosterEditor, rosterDraft, startFromDraft, Tem
 import { BRIEF_MAX, DEFAULT_BUDGET, POST_MAX } from "./huddleText";
 import { CloseIcon } from "./icons";
 import { KeyHint } from "./KeyHint";
+import { useLayer } from "./layers";
 import { Select } from "./Select";
 import { fullTime, useNow } from "./time";
 import { SessionPanel } from "./HuddleSession";
@@ -149,8 +150,11 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
   };
   const [adding, setAdding] = useState(false);
   const log = useRef<HTMLDivElement>(null);
-  const learningsRef = useRef<HTMLDivElement>(null);
-  const pending = (h.learnings ?? []).filter((l) => l.status === "pending");
+  const learnings = (h.learnings ?? []).filter((l) => l.status !== "discarded");
+  const pending = learnings.filter((l) => l.status === "pending");
+  // The learnings drawer: closed by default, open/closed remembered per huddle.
+  const [learningsOpen, setLearningsOpen] = usePersistentState(formKey(slug, ticket.id, `huddle-learnings-${h.id}`), () => false, (v) => !v, (v) => typeof v === "boolean");
+  const showLearnings = learningsOpen && learnings.length > 0;
   const now = useNow();
   const closed = h.status === "closed";
   const run = (p: Promise<unknown>) => p.catch((e) => onError((e as Error).message));
@@ -199,6 +203,13 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
         </span>
         {forYou > 0 && <button className="link-btn hd-jump" onClick={jump} title={`${forYou} ${forYou === 1 ? "message tags" : "messages tag"} you`}>↓ next for you</button>}
         <span className="spacer" />
+        {learnings.length > 0 && (
+          <button className={`btn small hd-learn-btn${pending.length ? " pending" : ""}`} aria-expanded={showLearnings} onClick={() => setLearningsOpen(!showLearnings)}
+            title={pending.length ? `${pending.length} lesson${pending.length === 1 ? "" : "s"} proposed by agents to review` : "Every lesson is reviewed"}>
+            <span aria-hidden>🎓</span> Learnings
+            {pending.length ? <span className="for-you-pill">{pending.length}</span> : <span className="hd-learn-done">✓ all reviewed</span>}
+          </button>
+        )}
         {closed ? (
           <>
             {h.closedAt && <span title={fullTime(h.closedAt)}>closed {clock(h.closedAt)} · read-only</span>}
@@ -260,7 +271,6 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
           <b>@{h.closeRequest.by}</b> asks to close the huddle: {h.closeRequest.reason}. The summary is in the ticket's outputs (huddle-summary.md).
         </div>
       )}
-      <Learnings slug={slug} huddle={h} boxRef={learningsRef} onError={onError} />
       {adding && !closed && <AddAgent slug={slug} huddle={h} onDone={() => setAdding(false)} onError={onError} />}
       <div className="huddle-body">
         <div className="huddle-feed">
@@ -276,6 +286,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
           <Roster slug={slug} huddle={h} onError={onError} viewing={viewing} onView={(handle) => setViewing((v) => (v === handle ? null : handle))} />
           <Findings slug={slug} huddle={h} handles={handles} onError={onError} />
         </aside>
+        {showLearnings && <Learnings slug={slug} huddle={h} onClose={() => setLearningsOpen(false)} onError={onError} />}
       </div>
       {confirm === "stop" && (
         <ConfirmDialog title="Stop agents?" confirmLabel="Stop agents" busyLabel="Stopping…" onCancel={() => setConfirm(null)}
@@ -296,7 +307,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, o
               <ul>{pending.map((l) => <li key={l.id}><span className="muted">@{l.from}:</span> {l.text}</li>)}</ul>
               <button className="btn small primary" onClick={() => {
                 setConfirm(null);
-                requestAnimationFrame(() => learningsRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+                setLearningsOpen(true);
               }}>Review them first</button>
             </div>
           )}
@@ -324,22 +335,26 @@ function targetOptions(l: HuddleLearning, presets: HuddlePreset[]): { value: str
 }
 
 /**
- * Learnings to review: lessons agents proposed when they turned done. Nothing is saved until the user picks a scope and
- * where it goes and presses Save; saved ones go into every future agent of that role's instructions.
+ * Learnings to review, in a drawer over the feed: lessons agents proposed when they turned done. Nothing is saved until
+ * the user picks a scope and where it goes and presses Save; saved ones go into every future agent of that role's instructions.
  */
-function Learnings({ slug, huddle: h, boxRef, onError }: { slug: string; huddle: Huddle; boxRef: RefObject<HTMLDivElement>; onError: (m: string) => void }) {
+function Learnings({ slug, huddle: h, onClose, onError }: { slug: string; huddle: Huddle; onClose: () => void; onError: (m: string) => void }) {
   const presets = usePresets(slug);
+  // Esc closes the drawer, but not while editing a lesson (its textarea's Esc cancels the edit).
+  useLayer(onClose, { skipInInputs: true });
   const shown = (h.learnings ?? []).filter((l) => l.status !== "discarded");
-  if (!shown.length) return null;
   const pending = shown.filter((l) => l.status === "pending");
   const adhoc = pending.some((l) => !l.preset);
   return (
-    <section className="hd-learnings" ref={boxRef} aria-label="Learnings to review">
+    <section className="hd-learnings" aria-label="Learnings to review">
       <div className="hd-learnings-head">
-        <span aria-hidden>🎓</span> Learnings to review
+        <span aria-hidden>🎓</span> {pending.length ? "Learnings to review" : "Learnings: all reviewed"}
         {pending.length > 0 && <span className="for-you-pill">{pending.length}</span>}
         <span className="spacer" />
-        <span className="muted small">proposed by agents when they turned done · nothing is saved until you choose</span>
+        <button className="icon-btn" onClick={onClose} aria-label="Close learnings" title="Close (Esc)"><CloseIcon size={12} /><KeyHint keys="Esc" /></button>
+      </div>
+      <div className="hd-learnings-sub muted small">
+        {pending.length ? "Proposed by agents when they turned done · nothing is saved until you choose." : "Every lesson proposed in this huddle is saved or discarded."}
       </div>
       <div className="hd-learnings-list">
         {shown.map((l) => <Learning key={l.id} slug={slug} huddle={h} l={l} presets={presets ?? []} onError={onError} />)}
@@ -375,8 +390,7 @@ function Learning({ slug, huddle: h, l, presets, onError }: { slug: string; hudd
   return (
     <div className={`hd-learning ${l.status}`}>
       <div className="hd-learning-who">
-        <b>@{l.from}</b>
-        <span>{l.role}{!l.preset && <span className="hd-adhoc">ad-hoc</span>}</span>
+        <b>@{l.from}</b> · {l.role}{!l.preset && <span className="hd-adhoc">ad-hoc</span>}
       </div>
       <div className="hd-learning-main">
         {edit !== null ? (
