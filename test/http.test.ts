@@ -111,6 +111,26 @@ test("stale body edit returns 409", async () => {
   expect(r.status).toBe(409);
 });
 
+test("PATCH queued/:id edits a held message; a peer's or a missing one is refused", async () => {
+  const path = tempDir("ck-plain-");
+  await fetch(`${base}/api/profiles`, json("POST", { name: "Queue Edit", path }));
+  const t = (await (await fetch(`${base}/api/profiles/queue-edit/tickets`, json("POST", { title: "t", body: "" }))).json()) as any;
+  const at = new Date().toISOString();
+  store.updateTicket("queue-edit", t.id, { queued: [
+    { id: "m1", text: "old", at, state: "unsent" },
+    { id: "m2", text: "from a peer", at, state: "queued", peer: true },
+  ] });
+  const url = (m: string) => `${base}/api/profiles/queue-edit/tickets/${t.id}/queued/${m}`;
+  let r = await fetch(url("m1"), json("PATCH", { text: "new" }));
+  expect(r.status).toBe(200);
+  expect(((await r.json()) as any).queued[0]).toMatchObject({ id: "m1", text: "new", state: "unsent" });
+  expect((await fetch(url("m1"), json("PATCH", { text: " " }))).status).toBe(400);
+  r = await fetch(url("m2"), json("PATCH", { text: "x" }));
+  expect(r.status).toBe(409);
+  expect(((await r.json()) as any).error).toMatch(/on its way to Claude/);
+  expect((await fetch(url("nope"), json("PATCH", { text: "x" }))).status).toBe(404);
+});
+
 test("claude discovery endpoints respond", async () => {
   const projects = (await (await fetch(`${base}/api/claude/projects`)).json()) as any;
   expect(Array.isArray(projects)).toBe(true);

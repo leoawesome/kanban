@@ -858,6 +858,7 @@ export const api = {
   chat: (slug: string, id: string, text: string) => req<Ticket>("POST", `${t(slug, id)}/chat`, { text }),
   sendQueued: (slug: string, id: string, msgId: string) => req<Ticket>("POST", `${t(slug, id)}/queued/${msgId}`),
   discardQueued: (slug: string, id: string, msgId: string) => req<Ticket>("DELETE", `${t(slug, id)}/queued/${msgId}`),
+  editQueued: (slug: string, id: string, msgId: string, text: string) => req<Ticket>("PATCH", `${t(slug, id)}/queued/${msgId}`, { text }),
   conversation: (slug: string, id: string, before?: number) =>
     req<{ entries: SessionEntry[]; start: number; total: number; title: string | null }>(
       "GET", `${t(slug, id)}/conversation${before !== undefined ? `?before=${before}` : ""}`),

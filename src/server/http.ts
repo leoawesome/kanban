@@ -901,13 +901,18 @@ export function createServer(deps: ServerDeps) {
       if (requester) store.addComment(slug, id, "ai", `Message sent ${byRequest(requester)}.`);
       return json(view(profile, t), 202);
     }
-    // A message Stop left unsent: POST .../queued/<msgId> sends it, DELETE discards it.
-    if (action === "queued" && parts[5] && (m === "POST" || m === "DELETE")) {
+    // A message Claude hasn't received: POST .../queued/<msgId> sends it (unsent only), PATCH { text } edits it, DELETE discards it.
+    if (action === "queued" && parts[5] && (m === "POST" || m === "PATCH" || m === "DELETE")) {
       try {
-        const t = m === "POST" ? await board.sendQueued(slug, id, parts[5]) : board.discardQueued(slug, id, parts[5]);
+        let t: Ticket;
+        if (m === "PATCH") {
+          const text = String((await body(req)).text ?? "").trim();
+          if (!text) throw new HttpError(400, "text is required");
+          t = board.editQueued(slug, id, parts[5], text);
+        } else t = m === "POST" ? await board.sendQueued(slug, id, parts[5]) : board.discardQueued(slug, id, parts[5]);
         return json(view(profile, t), m === "POST" ? 202 : 200);
       } catch (e) {
-        if (e instanceof ConflictError) throw e;
+        if (e instanceof ConflictError || e instanceof HttpError) throw e;
         throw new HttpError(404, (e as Error).message);
       }
     }

@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, subscribe, type Huddle, type NewTicketDraft, type OutputFile, type SessionEntry, type Ticket } from "./api";
+import { api, subscribe, type Huddle, type NewTicketDraft, type OutputFile, type QueuedMessage, type SessionEntry, type Ticket } from "./api";
 import { HuddleCard } from "./HuddleCard";
 import { HuddleDigest } from "./HuddleDigest";
 import { autoGrow } from "./autoGrow";
@@ -239,11 +239,37 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
     if (!running) loadTail().catch(() => {}).finally(() => setLive(""));
   }, [running]);
 
+  // A message Claude hasn't received yet (not sent after Stop, or waiting for a slot or a restart): the user can
+  // still edit or discard it. With Claude running it was handed over at once.
+  const editable = (q: QueuedMessage) => q.state === "unsent" || (!q.peer && !running);
+  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const discarded = useRef(new Set<string>());
+  const cancelEdit = () => {
+    setEditing(null);
+    composer.current?.focus();
+  };
+  const saveEdit = async () => {
+    if (!editing?.text.trim()) return;
+    try {
+      await api.editQueued(slug, ticket.id, editing.id, editing.text.trim());
+      cancelEdit();
+    } catch (e: any) {
+      onError(e.message);
+    }
+  };
+  const discard = (msgId: string) => {
+    discarded.current.add(msgId);
+    api.discardQueued(slug, ticket.id, msgId).catch((e) => {
+      discarded.current.delete(msgId);
+      onError(e.message);
+    });
+  };
+
   // Claude read a queued message: keep its bubble until the session file shows it, so it doesn't blink out.
   const prevQueued = useRef(queued);
   useEffect(() => {
     // Peer messages show up in the session as another ticket's message, not as the user's bubble.
-    const read = prevQueued.current.filter((q) => q.state === "queued" && !q.peer && !queued.some((n) => n.id === q.id)).map((q) => q.text);
+    const read = prevQueued.current.filter((q) => q.state === "queued" && !q.peer && !discarded.current.has(q.id) && !queued.some((n) => n.id === q.id)).map((q) => q.text);
     prevQueued.current = queued;
     if (read.length) setPending((ps) => [...ps, ...read.map((text) => ({ text, steer: false }))]);
   }, [ticket.queued]);
@@ -639,19 +665,46 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
           </div>
         ))}
         {queued.filter((q) => !q.peer).map((q) => (
-          <div key={q.id} className={`conv-msg user pending${q.state === "unsent" ? " unsent" : ""}`}>
+          <div key={q.id} className={`conv-msg user pending${editable(q) ? " unsent" : ""}${editing?.id === q.id && editable(q) ? " editing" : ""}`}>
             <div className="conv-head">
               <b>You</b>
-              <span className="muted small">{q.state === "unsent" ? "not sent · Claude was stopped before reading it" : q.slash ? "queued · runs after Claude's current turn" : "queued · Claude reads this at its next step"}</span>
+              <span className="muted small">{q.state === "unsent" ? "not sent · Claude was stopped before reading it"
+                : running ? (q.slash ? "queued · runs after Claude's current turn" : "sent · Claude reads it at its next step")
+                : ticket.slotWait ? "queued · starts when a run slot is free" : "queued · starts when the board is back"}</span>
             </div>
-            <UserText text={q.text} commands={commands} />
-            {q.state === "unsent" && (
-              <div className="queued-actions">
-                <button className="btn primary small" disabled={stopping}
-                  onClick={() => api.sendQueued(slug, ticket.id, q.id).catch((e) => onError(e.message))}>Send</button>
-                <button className="btn ghost small"
-                  onClick={() => api.discardQueued(slug, ticket.id, q.id).catch((e) => onError(e.message))}>Discard</button>
-              </div>
+            {editing?.id === q.id && editable(q) ? (
+              <>
+                <textarea className="queued-edit" rows={3} autoFocus value={editing.text}
+                  onChange={(e) => setEditing({ id: q.id, text: e.target.value })}
+                  onFocus={(e) => e.target.setSelectionRange(e.target.value.length, e.target.value.length)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      cancelEdit();
+                    } else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      saveEdit();
+                    }
+                  }} />
+                <div className="queued-actions">
+                  <button className="btn primary small" disabled={!editing.text.trim()} onClick={saveEdit}>Save<KeyHint keys="↵" /></button>
+                  <button className="btn ghost small" onClick={cancelEdit}>Cancel<KeyHint keys="Esc" /></button>
+                </div>
+              </>
+            ) : (
+              <>
+                <UserText text={q.text} commands={commands} />
+                {editable(q) && (
+                  <div className="queued-actions">
+                    <button className="btn small" onClick={() => setEditing({ id: q.id, text: q.text })}>Edit</button>
+                    {q.state === "unsent" && (
+                      <button className="btn primary small" disabled={stopping}
+                        onClick={() => api.sendQueued(slug, ticket.id, q.id).catch((e) => onError(e.message))}>Send</button>
+                    )}
+                    <button className="btn ghost small" onClick={() => discard(q.id)}>Discard</button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         ))}
@@ -695,6 +748,13 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
           onKeyDown={(e) => {
             if (slash.onKeyDown(e)) return;
             if (snippets.onKeyDown(e)) return;
+            // ↑ in an empty composer fixes the last message Claude hasn't received yet.
+            const last = queued.filter((q) => !q.peer && editable(q)).at(-1);
+            if (e.key === "ArrowUp" && !draft && last && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+              e.preventDefault();
+              setEditing({ id: last.id, text: last.text });
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               send(draft);
@@ -706,7 +766,7 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
         <div className="composer-foot">
           <span className="muted small composer-hint">
             {refine ? "Refine mode: Claude won't change files." : "Claude acts on your message."}
-            <span className="composer-keys"> Enter to send · Shift+Enter for a new line</span>
+            <span className="composer-keys"> Enter to send · Shift+Enter for a new line{queued.some((q) => !q.peer && editable(q)) && " · ↑ to edit your queued message"}</span>
           </span>
           <span className="composer-actions">
             {running && <button className="btn danger small" disabled={stopping} onClick={stop}>{stopping ? "Stopping…" : "Stop"}</button>}

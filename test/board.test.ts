@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Board } from "../src/server/board";
+import { Board, ConflictError } from "../src/server/board";
 import { Bus } from "../src/server/events";
 import { run, worktreeDir } from "../src/server/git";
 import { Store } from "../src/server/store";
@@ -870,6 +870,65 @@ test("Stop on a reply waiting for a slot puts the card back and keeps the messag
   expect(board.isRunning("p", r.id)).toBe(false);
   expect(readArgs().some((c) => c.prompt?.startsWith("go on with it"))).toBe(false);
 }, 15000);
+
+test("a reply waiting for a slot can be edited; Claude gets the edited text", async () => {
+  await setup({ maxParallel: 1 });
+  process.env.FAKE_MODE = "slow";
+  const a = await board.createTicket("p", { title: "a", body: "", status: "ready" });
+  const r = await board.createTicket("p", { title: "r", body: "", status: "review" });
+  await Bun.sleep(300);
+  await board.chat("p", r.id, "go on with it");
+  const [msg] = store.getTicket("p", r.id)!.queued!;
+  expect(() => board.editQueued("p", r.id, msg.id, "  ")).toThrow(/empty/);
+  board.editQueued("p", r.id, msg.id, "go on, and add a test");
+  expect(store.getTicket("p", r.id)!.queued).toMatchObject([{ id: msg.id, text: "go on, and add a test", state: "queued" }]);
+
+  board.stop("p", a.id);
+  await Bun.sleep(1000);
+  expect(board.isRunning("p", r.id)).toBe(true);
+  expect(readArgs().at(-1)!.prompt.startsWith("go on, and add a test")).toBe(true);
+  // Now it is Claude's prompt: too late to change it.
+  expect(() => board.editQueued("p", r.id, msg.id, "other")).toThrow();
+}, 15000);
+
+test("discarding the only reply waiting for a slot puts the card back", async () => {
+  await setup({ maxParallel: 1 });
+  process.env.FAKE_MODE = "slow";
+  await board.createTicket("p", { title: "a", body: "", status: "ready" });
+  const r = await board.createTicket("p", { title: "r", body: "", status: "review" });
+  await Bun.sleep(300);
+  await board.chat("p", r.id, "go on with it");
+  const [msg] = store.getTicket("p", r.id)!.queued!;
+  const got = board.discardQueued("p", r.id, msg.id);
+  expect(got).toMatchObject({ status: "review", slotWait: null, queued: [] });
+}, 15000);
+
+test("a message steered into a running Claude can't be edited; an unsent one can", async () => {
+  await setup();
+  process.env.FAKE_MODE = "slow";
+  const t = await board.createTicket("p", { title: "x", body: "", status: "ready" });
+  await Bun.sleep(400);
+  await board.chat("p", t.id, "first");
+  const [msg] = store.getTicket("p", t.id)!.queued!;
+  expect(() => board.editQueued("p", t.id, msg.id, "changed")).toThrow(ConflictError);
+  expect(() => board.discardQueued("p", t.id, msg.id)).toThrow(ConflictError);
+  board.stop("p", t.id);
+  await board.whenIdle();
+  expect(store.getTicket("p", t.id)!.queued).toMatchObject([{ id: msg.id, state: "unsent" }]);
+  board.editQueued("p", t.id, msg.id, "first, fixed");
+  process.env.FAKE_MODE = "ok";
+  await board.sendQueued("p", t.id, msg.id);
+  await board.whenIdle();
+  expect(readArgs().at(-1)!.prompt.startsWith("first, fixed")).toBe(true);
+  expect(() => board.editQueued("p", t.id, "nope", "x")).toThrow(/not found/);
+}, 15000);
+
+test("a peer message waiting for a slot can't be edited", async () => {
+  await setup();
+  const t = await board.createTicket("p", { title: "x", body: "", status: "review" });
+  store.updateTicket("p", t.id, { queued: [{ id: "m1", text: "from a peer", at: new Date().toISOString(), state: "queued", peer: true }] });
+  expect(() => board.editQueued("p", t.id, "m1", "changed")).toThrow(ConflictError);
+});
 
 test("after a restart, waiting replies still respect maxParallel", async () => {
   await setup({ maxParallel: 1 });

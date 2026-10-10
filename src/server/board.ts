@@ -414,10 +414,30 @@ export class Board {
   }
 
   discardQueued(slug: string, id: string, msgId: string): Ticket {
+    const msg = this.held(slug, id, msgId);
+    const t = this.dropQueued(slug, id, [msgId]);
+    // The last reply waiting for a slot is gone: nothing is left to start, so the card goes back.
+    return t.slotWait && !this.waiting(slug, id).length ? this.cancelSlotWait(slug, id) : t;
+  }
+
+  /** Fix a message Claude hasn't received yet: it keeps its place in the queue. */
+  editQueued(slug: string, id: string, msgId: string, text: string): Ticket {
+    if (!text.trim()) throw new Error("message is empty");
+    const msg = this.held(slug, id, msgId);
+    const t = this.store.getTicket(slug, id)!;
+    return this.patch(slug, id, { queued: (t.queued ?? []).map((m) => (m.id === msg.id ? { ...m, text } : m)) });
+  }
+
+  /**
+   * A queued message the user can still change: left unsent by Stop, or waiting for a run slot or a restart.
+   * With a run going it was written to Claude's stdin at once (peer messages included), so it is delivered.
+   */
+  private held(slug: string, id: string, msgId: string): QueuedMessage {
     const msg = this.store.getTicket(slug, id)?.queued?.find((m) => m.id === msgId);
     if (!msg) throw new Error("message not found");
-    if (msg.state !== "unsent") throw new ConflictError("message is already on its way to Claude");
-    return this.dropQueued(slug, id, [msgId]);
+    if (msg.state === "unsent") return msg;
+    if (msg.peer || this.isRunning(slug, id)) throw new ConflictError("message is already on its way to Claude");
+    return msg;
   }
 
   private dropQueued(slug: string, id: string, ids: string[]): Ticket {

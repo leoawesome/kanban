@@ -588,6 +588,8 @@ textarea { resize: vertical; font-size: 13.5px; }
 .conv-msg.pending { opacity: 0.65; }
 .conv-msg.pending.unsent { opacity: 1; border: 1px dashed var(--border); }
 .queued-actions { display: flex; gap: 6px; margin-top: 6px; }
+.conv-msg.pending.editing { border: 1px solid var(--accent); }
+.queued-edit { width: 100%; min-width: min(380px, 70vw); font: inherit; font-size: 13.5px; resize: vertical; }
 .composer { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .composer textarea { border: 0; background: transparent; padding: 2px; resize: none; box-shadow: none !important; min-height: 44px; }
