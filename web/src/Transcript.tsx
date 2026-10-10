@@ -27,9 +27,10 @@ const PURIFY = {
 // Pasted images: the UI URL, or the absolute file path Claude was given in its prompt (seen in the chat history).
 const ATTACHMENT_SRC = /(?:^|\/)attachments\/([0-9a-f]{32}\.(?:png|jpg|gif|webp))$/;
 
-function thumbnails(html: string, commands?: SlashCommand[] | null): string {
+function thumbnails(html: string, commands?: SlashCommand[] | null, handles?: string[]): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
   if (commands?.length) mentionChips(doc, commands);
+  if (handles?.length) handleChips(doc, handles);
   doc.querySelectorAll("img").forEach((img) => {
     const m = (img.getAttribute("src") ?? "").match(ATTACHMENT_SRC);
     if (!m) return;
@@ -70,11 +71,40 @@ function mentionChips(doc: Document, commands: SlashCommand[]) {
   }
 }
 
-/** `commands`: `/name` mentions of these render as chips (ticket descriptions). */
-export function Markdown({ text, commands }: { text: string; commands?: SlashCommand[] | null }) {
+/** `@handle` of a huddle participant (or @all) in prose (not code or links) becomes a chip. */
+function handleChips(doc: Document, handles: string[]) {
+  const known = new Set(handles.map((h) => h.toLowerCase()));
+  const re = /(^|[^\w@./-])@([a-z0-9][a-z0-9_-]*)/gi;
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+  for (const node of nodes) {
+    const text = node.nodeValue ?? "";
+    if (!text.includes("@") || node.parentElement?.closest("code, pre, a")) continue;
+    const frag = doc.createDocumentFragment();
+    let last = 0;
+    for (const m of text.matchAll(re)) {
+      const name = m[2].replace(/[-_]+$/, "");
+      if (!known.has(name.toLowerCase())) continue;
+      const at = m.index! + m[1].length;
+      frag.append(text.slice(last, at));
+      const chip = doc.createElement("span");
+      chip.className = "at-chip";
+      chip.textContent = `@${name}`;
+      frag.append(chip);
+      last = at + 1 + name.length;
+    }
+    if (!last) continue;
+    frag.append(text.slice(last));
+    node.replaceWith(frag);
+  }
+}
+
+/** `commands`: `/name` mentions of these render as chips (ticket descriptions). `handles`: `@handle` mentions (huddles). */
+export function Markdown({ text, commands, handles }: { text: string; commands?: SlashCommand[] | null; handles?: string[] }) {
   const html = useMemo(
-    () => thumbnails(DOMPurify.sanitize(marked.parse(text, { async: false, breaks: true }) as string, PURIFY), commands),
-    [text, commands],
+    () => thumbnails(DOMPurify.sanitize(marked.parse(text, { async: false, breaks: true }) as string, PURIFY), commands, handles),
+    [text, commands, handles?.join(" ")],
   );
   return (
     <div className="md" dangerouslySetInnerHTML={{ __html: html }}

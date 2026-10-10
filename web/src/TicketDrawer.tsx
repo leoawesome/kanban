@@ -23,6 +23,8 @@ import { missingPctReason, UsagePanel, usageChipText, useTicketUsage } from "./U
 import { approxPct } from "./usage";
 import { Markdown } from "./Transcript";
 import { NeedsField } from "./Needs";
+import { useHuddle, members } from "./huddle";
+import { HuddlePanel } from "./HuddlePanel";
 
 // v2: widths saved under the old 80% default are dropped once so the new default shows.
 const WIDTH_KEY = "ckanban.panelWidth.v2";
@@ -213,7 +215,9 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const bodyInput = useRef<HTMLTextAreaElement>(null);
   // Body the current edit started from; the server rejects the save if the file changed meanwhile.
   const [baseBody, setBaseBody] = useState(ticket.body);
-  const [tabPick, setTab] = useState<"chat" | "plan" | "changes" | "outputs" | "usage">("chat");
+  const [tabPick, setTab] = useState<"chat" | "plan" | "changes" | "huddle" | "outputs" | "usage">("chat");
+  const huddleState = useHuddle(slug, ticket.id);
+  const huddle = huddleState.huddle;
   // The Plan tab exists only while the ticket has children; Changes only while it has a worktree.
   const tab = (tabPick === "plan" && !children.length) || (tabPick === "changes" && !ticket.worktree) ? "chat" : tabPick;
   const diffState = useTicketDiff(slug, ticket);
@@ -295,7 +299,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   // Opens fitted to the sidebar plus the chat's reading column; dragging can make it wider.
   const panel = usePanelWidth((detailsOpen ? side.pref : 0) + CHAT_ROOM);
   const { dragging, handle } = panel;
-  const width = tab === "changes" && !panel.custom ? clampWidth(CHANGES_WIDTH) : panel.width;
+  const width = (tab === "changes" || tab === "huddle") && !panel.custom ? clampWidth(CHANGES_WIDTH) : panel.width;
   const [descScrolled, setDescScrolled] = useState(false);
 
   const loadOutputs = () => api.outputs(slug, ticket.id).then((o) => setOutputCount(o.length)).catch(() => {});
@@ -613,6 +617,10 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                   </span>
                 </button>
               )}
+              <button role="tab" aria-selected={tab === "huddle"} className={tab === "huddle" ? "active" : ""} onClick={() => setTab("huddle")}>
+                Huddle{huddle && huddle.status !== "closed" && <span className={`tab-count${huddle.status === "live" ? " ok" : ""}`}>{members(huddle).length}</span>}
+                {huddle?.status === "live" && huddle.participants.some((p) => p.status === "working") && <span className="dot" />}
+              </button>
               {ticket.worktree && (
                 <button role="tab" aria-selected={tab === "changes"} className={tab === "changes" ? "active" : ""} onClick={() => { diffState.reload(); setTab("changes"); }}>
                   Changes{!!diffState.diff?.files.length && <span className="tab-count">{diffState.diff.files.length}</span>}
@@ -629,6 +637,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               <div className="panel-scroll panel-plan">
                 <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
               </div>
+            ) : tab === "huddle" ? (
+              <HuddlePanel slug={slug} ticket={ticket} tickets={tickets} state={huddleState} onError={onError} />
             ) : tab === "changes" ? (
               <Changes slug={slug} ticket={ticket} state={diffState} onSent={() => setTab("chat")} onError={onError} />
             ) : tab === "usage" ? (
@@ -637,6 +647,7 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
               <div className="panel-scroll panel-outputs"><Outputs slug={slug} ticket={ticket} onCount={setOutputCount} focus={outputFocus} /></div>
             ) : (
               <Chat slug={slug} ticket={ticket} tickets={tickets} onOpenTicket={onOpenTicket} onError={onError} onPendingProposal={onPendingProposal}
+                huddle={huddle} onOpenHuddle={() => setTab("huddle")}
                 onOpenOutput={(name) => { setOutputFocus(name); setTab("outputs"); }} />
             )}
           </div>

@@ -580,7 +580,11 @@ export class Huddles {
         if (ev?.type === "stream_event" || this.shuttingDown) return;
         if (ev?.type === "result") {
           run.idle = true;
-          this.updateP(slug, hid, handle, { status: "idle" });
+          const cur = this.get(slug, hid).participants.find((x) => x.handle === handle);
+          const total = Number(ev.total_cost_usd) || 0;
+          const prev = cur?.sessionCostUsd ?? 0;
+          const costUsd = (cur?.costUsd ?? 0) + (total >= prev ? total - prev : total);
+          this.updateP(slug, hid, handle, { status: "idle", costUsd, sessionCostUsd: total });
           // Turn boundary: a monitor gets what came in while it worked.
           if (run.pending) queueMicrotask(() => this.deliverNow(slug, hid, handle));
           return;

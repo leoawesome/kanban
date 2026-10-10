@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, subscribe, type NewTicketDraft, type OutputFile, type SessionEntry, type Ticket } from "./api";
+import { api, subscribe, type Huddle, type NewTicketDraft, type OutputFile, type SessionEntry, type Ticket } from "./api";
+import { HuddleCard } from "./HuddleCard";
 import { autoGrow } from "./autoGrow";
 import { branchTicket } from "./branch";
 import { BranchCard } from "./BranchCard";
@@ -129,7 +130,7 @@ export function useStop(slug: string, ticket: Ticket, working: boolean, onError:
   return { stopping, stop };
 }
 
-export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onError, onPendingProposal }: {
+export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onError, onPendingProposal, huddle = null, onOpenHuddle }: {
   slug: string;
   ticket: Ticket;
   /** The board's tickets, to tell which proposed new tickets already exist. */
@@ -140,6 +141,9 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
   onError: (m: string) => void;
   /** The newest proposal card not applied yet, as its Apply action (null when none): ⌘⇧Enter in the panel applies it. */
   onPendingProposal?: (apply: (() => Promise<void>) | null) => void;
+  /** The ticket's huddle, to tell whether a proposed one was started. */
+  huddle?: Huddle | null;
+  onOpenHuddle?: () => void;
 }) {
   const [page, setPage] = useState<{ entries: SessionEntry[]; start: number } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -429,6 +433,10 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
                 <BranchCard reason={e.branch.reason} here={old} running={running} onOpen={onOpenTicket}
                   branch={tickets.find((t) => t.branchedFrom === ticket.id && !!t.branchPoint && t.branchPoint.at > e.at)}
                   onBranch={() => branchTicket(slug, ticket, onOpenTicket).then(() => {}, (err) => onError(err.message))} />
+              )}
+              {e.huddle && (
+                <HuddleCard slug={slug} ticket={ticket} tickets={tickets} uuid={e.uuid} at={e.at} roster={e.huddle.roster} reason={e.huddle.reason}
+                  huddle={huddle} old={old} onOpen={() => onOpenHuddle?.()} onError={onError} />
               )}
               {e.mockups && (
                 <div className="chat-mockups">

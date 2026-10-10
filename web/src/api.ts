@@ -270,6 +270,8 @@ export interface SessionEntry {
   newTickets?: NewTicketDraft[];
   /** Claude offered to branch this ticket (Branch button). */
   branch?: { reason: string };
+  /** Claude proposed a huddle (propose_huddle): the roster card with Start. */
+  huddle?: { roster: RosterEntry[]; reason: string };
   /** Mockups Claude sent in this reply, saved as outputs/mockups/<name>. */
   mockups?: string[];
   moved?: "planning";
@@ -425,6 +427,81 @@ export interface HuddlePreset {
   source: "builtin" | "override" | "board";
 }
 
+/** One line of a huddle roster (src/server/huddle-roster.ts): `count` participants from a preset or a free-form role. */
+export interface RosterEntry {
+  preset?: string;
+  role?: string;
+  count?: number;
+  focus?: string;
+  model?: string | null;
+  mode?: HuddleMode;
+  workspace?: "shared" | "own";
+  lead?: boolean;
+  canEdit?: boolean;
+  handle?: string;
+  prompt?: string;
+}
+
+export type HuddleMode = "tagged" | "monitor";
+
+/** A huddle participant as the daemon shows it (src/server/huddle.ts ParticipantView). */
+export interface HuddleParticipant {
+  handle: string;
+  role: string;
+  preset: string | null;
+  focus?: string;
+  model: string | null;
+  mode: HuddleMode;
+  lead: boolean;
+  canEdit: boolean;
+  workspace: "shared" | "own";
+  status: "working" | "idle" | "stopped" | "failed";
+  kind: "agent" | "ticket-main" | "human";
+  ticketId?: string | null;
+  joinedAt: string;
+  lastActivity?: string | null;
+  costUsd?: number;
+  error?: string | null;
+  running: boolean;
+}
+
+export interface HuddleFinding {
+  id: string;
+  text: string;
+  by: string;
+  status: "open" | "resolved";
+  resolvedBy: string | null;
+  at: string;
+}
+
+export interface Huddle {
+  id: string;
+  hostTicket: string;
+  hostTitle: string | null;
+  status: "live" | "stopped" | "closed";
+  maxParticipants: number;
+  participants: HuddleParticipant[];
+  findings: HuddleFinding[];
+  invited: string[];
+  /** Highest message seq so far (the message count). */
+  seq: number;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | null;
+}
+
+export interface HuddleMessage {
+  id: string;
+  seq: number;
+  ts: string;
+  from: string;
+  text: string;
+  mentions: string[];
+  kind: "message" | "finding" | "system";
+}
+
+const hud = (slug: string, id?: string) => `/api/profiles/${encodeURIComponent(slug)}/huddles${id ? `/${encodeURIComponent(id)}` : ""}`;
+
 export interface Schedule {
   id: string;
   name: string;
@@ -488,7 +565,9 @@ export type BusEvent =
   | { type: "mcp.updated"; state: McpState }
   | { type: "snippets.updated" }
   | { type: "schedule.updated"; profile: string; id: string; schedule: Omit<Schedule, "summary" | "active"> | null }
-  | { type: "restart.updated"; pending: boolean; waiting: number };
+  | { type: "restart.updated"; pending: boolean; waiting: number }
+  | { type: "huddle.updated"; profile: string; huddle: Huddle }
+  | { type: "huddle.message"; profile: string; huddleId: string; message: HuddleMessage };
 
 export interface InboxItem {
   profile: string;
@@ -572,6 +651,25 @@ export const api = {
   /** Deletes a board preset, or resets an overridden built-in. */
   deleteHuddlePreset: (slug: string, name: string) =>
     req<{ reset: boolean; presets: HuddlePreset[] }>("DELETE", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets/${encodeURIComponent(name)}`),
+  /** Huddles the ticket hosts or takes part in. */
+  huddles: (slug: string, ticketId: string) => req<Huddle[]>("GET", `${hud(slug)}?ticket=${encodeURIComponent(ticketId)}`),
+  /** A huddle and its newest messages (`before`: the page before that seq; `since`: the ones after it). */
+  huddle: (slug: string, id: string, q: { before?: number; since?: number; limit?: number } = {}) =>
+    req<{ huddle: Huddle; you: string; messages: HuddleMessage[]; hasMore: boolean }>("GET",
+      `${hud(slug, id)}?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]))}`),
+  startHuddle: (slug: string, ticketId: string, roster: RosterEntry[], maxParticipants?: number) =>
+    req<Huddle>("POST", hud(slug), { ticketId, roster, maxParticipants }),
+  postHuddle: (slug: string, id: string, text: string) => req<HuddleMessage>("POST", `${hud(slug, id)}/messages`, { text }),
+  addHuddleParticipants: (slug: string, id: string, entry: RosterEntry) =>
+    req<{ added: HuddleParticipant[]; huddle: Huddle }>("POST", `${hud(slug, id)}/participants`, entry),
+  setHuddleMode: (slug: string, id: string, handle: string, mode: HuddleMode) =>
+    req<Huddle>("PATCH", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}`, { mode }),
+  stopHuddleParticipant: (slug: string, id: string, handle: string) =>
+    req<Huddle>("POST", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}/stop`),
+  huddleAction: (slug: string, id: string, action: "stop" | "resume" | "close") => req<Huddle>("POST", `${hud(slug, id)}/${action}`),
+  inviteToHuddle: (slug: string, id: string, ticketId: string) => req<HuddleParticipant>("POST", `${hud(slug, id)}/invite`, { ticketId }),
+  huddleFindings: (slug: string, id: string, action: "add" | "resolve", arg: { text?: string; id?: string }) =>
+    req<HuddleFinding[]>("POST", `${hud(slug, id)}/findings`, { action, ...arg }),
   files: (slug: string, path: string) =>
     req<{ path: string; entries: FileEntry[] }>("GET", `/api/profiles/${encodeURIComponent(slug)}/files?path=${encodeURIComponent(path)}`),
   file: (slug: string, path: string) =>

@@ -443,3 +443,14 @@ test("presets: saved through the MCP tool from a run, used by rosters, deleted o
   expect(builtin.status).toBe(409);
   expect(store.listHuddlePresets("p")).toEqual([]);
 }, 20000);
+
+test("an agent's cost adds up from its session's running totals", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  expect(participant(h, "reviewer").costUsd).toBeCloseTo(0.01);
+  // A resumed session reports the same running total: nothing new was spent.
+  huddles.post("p", h.id, you(h), "@reviewer again");
+  await idle();
+  expect(participant(h, "reviewer").costUsd).toBeCloseTo(0.01);
+});

@@ -302,6 +302,9 @@ export interface HuddleParticipant {
   cursor: number;
   joinedAt: string;
   lastActivity?: string | null;
+  /** Agents: what their runs cost so far, and the session's running total at its last result (results carry running totals). */
+  costUsd?: number;
+  sessionCostUsd?: number;
   error?: string | null;
   /** A daemon restart cut its turn off: recover() resumes it. */
   interrupted?: boolean;
