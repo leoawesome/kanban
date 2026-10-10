@@ -9,7 +9,7 @@ import { createServer } from "../src/server/http";
 import { Huddles, SUMMARY_FILE } from "../src/server/huddle";
 import { BUILTIN_PRESETS, deletePreset, mergePresets, savePreset } from "../src/server/huddle-presets";
 import { HUDDLE_HEADER, parseMentions, rosterError } from "../src/server/huddle-roster";
-import { huddleAgentPrompt, huddleDigest } from "../src/server/prompts";
+import { huddleAgentPrompt, huddleDigest, huddleMainPrompt } from "../src/server/prompts";
 import { controlResponse } from "../src/server/runner";
 import { Store } from "../src/server/store";
 import type { Huddle, Profile, Ticket } from "../src/server/types";
@@ -124,15 +124,16 @@ test("creating a huddle: @you and @main join, agents start on their job with sta
   expect(existsSync(store.ticketPath("p", t.id).replace("ticket.md", "")) && store.getHuddle("p", h.id)!.status).toBe("live");
   await idle();
   for (const a of ["reviewer", "qa-1", "qa-2"]) expect(heardBy(a)[0]).toContain(`You just joined the huddle as @${a}`);
-  // Agents can't edit tracked files; they get the host's worktree and their own session.
+  // Agents can't edit tracked files; each gets a snapshot of the host's worktree and its own session.
   const runs = processes();
   expect(runs.length).toBe(3);
   for (const r of runs) {
     expect(r.args).toContain("--disallowedTools");
     expect(r.args[r.args.indexOf("--disallowedTools") + 1]).toBe("Edit,Write,NotebookEdit");
     expect(r.args.join(" ")).toContain("You must NOT edit tracked files");
-    expect(r.cwd).toBe(store.getTicket("p", t.id)!.worktree);
+    expect(r.cwd).not.toBe(store.getTicket("p", t.id)!.worktree);
   }
+  expect(new Set(runs.map((r) => r.cwd))).toEqual(new Set(["reviewer", "qa-1", "qa-2"].map((a) => participant(h, a).worktree)));
   expect(new Set(runs.map((r) => r.args[r.args.indexOf("--session-id") + 1])).size).toBe(3);
   // The host's main session was not woken.
   expect(board.isRunning("p", t.id)).toBe(false);
@@ -372,6 +373,107 @@ test("own workspace: the agent gets a worktree off the host's branch and may edi
   expect(run.cwd).toBe(p.worktree);
   expect(run.args).not.toContain("--disallowedTools");
 }, 20000);
+
+test("read-only agents work in a detached snapshot of the host's HEAD, refreshed at every wake", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer", focus: "auth" }]);
+  await idle();
+  const hostDir = store.getTicket("p", t.id)!.worktree!;
+  const p = participant(h, "reviewer");
+  const head = (dir: string) => git(dir, "rev-parse", "HEAD").then((x) => x.trim());
+  const sha = await head(hostDir);
+  expect(p.worktree).toContain(`${t.id}.huddle`);
+  expect(p.branch).toBeNull();
+  const branch = store.getTicket("p", t.id)!.branch!;
+  expect(p.snapshot).toEqual({ branch, sha });
+  expect(processes()[0].cwd).toBe(p.worktree);
+  expect(await head(p.worktree!)).toBe(sha);
+  expect((await git(p.worktree!, "branch", "--show-current")).trim()).toBe("");
+  const system = processes()[0].args.join(" ");
+  expect(system).toContain(`host branch ${branch}, commit ${sha}`);
+  expect(system).toContain(`git diff main...${sha}`);
+  expect(system).toContain("focused on: auth");
+  expect(system).toContain("you see committed code only; ask @main to commit WIP".replace("you", "You"));
+  // What it writes stays in its snapshot.
+  writeFileSync(join(p.worktree!, "scratch.txt"), "x");
+  writeFileSync(join(p.worktree!, "README.md"), "changed");
+  expect(existsSync(join(hostDir, "scratch.txt"))).toBe(false);
+  expect(await git(hostDir, "status", "--porcelain")).toBe("");
+  // The host commits; the reviewer's next wake sees it, and the local changes are gone.
+  writeFileSync(join(hostDir, "login.ts"), "export {}\n");
+  await git(hostDir, "add", ".");
+  await git(hostDir, "commit", "-qm", "login");
+  const next = await head(hostDir);
+  huddles.post("p", h.id, you(h), "@reviewer please look again");
+  await idle();
+  expect(heardBy("reviewer").at(-1)).toContain("please look again");
+  expect(await head(p.worktree!)).toBe(next);
+  expect(existsSync(join(p.worktree!, "login.ts"))).toBe(true);
+  expect(existsSync(join(p.worktree!, "scratch.txt"))).toBe(false);
+  expect(await git(p.worktree!, "status", "--porcelain")).toBe("");
+  expect(participant(h, "reviewer").snapshot!.sha).toBe(next);
+  expect(processes().at(-1)!.args.join(" ")).toContain(`commit ${next}`);
+  // Closing removes the snapshot.
+  huddles.close("p", h.id);
+  await idle();
+  expect(existsSync(p.worktree!)).toBe(false);
+  expect(participant(h, "reviewer").worktree).toBeNull();
+  expect((await git(store.getProfile("p")!.path, "worktree", "list")).includes(p.worktree!)).toBe(false);
+}, 30000);
+
+test("a live monitor-mode snapshot is reset to the host's latest commit before new messages go in", async () => {
+  await Promise.all([board.shutdown(), huddles.shutdown()]);
+  server.stop(true);
+  await setup(60_000);
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "qa" }]);
+  await until(() => heardBy("qa").length === 1 && participant(h, "qa").status === "idle");
+  const hostDir = store.getTicket("p", t.id)!.worktree!;
+  writeFileSync(join(hostDir, "form.ts"), "export {}\n");
+  await git(hostDir, "add", ".");
+  await git(hostDir, "commit", "-qm", "form");
+  const next = (await git(hostDir, "rev-parse", "HEAD")).trim();
+  huddles.post("p", h.id, you(h), "@qa the form is in");
+  await until(() => heardBy("qa").length === 2);
+  expect(processes().length).toBe(1);
+  expect(heardBy("qa")[1]).toContain(`your snapshot now shows ${store.getTicket("p", t.id)!.branch} at ${next}`);
+  expect(existsSync(join(participant(h, "qa").worktree!, "form.ts"))).toBe(true);
+  huddles.stopAll("p", h.id);
+}, 30000);
+
+test("the coordinator is told to commit before tagging reviewers", () => {
+  const h = { id: "h_x", participants: [], hostTicket: "t" } as unknown as Huddle;
+  const main = { handle: "main", role: "Coordinator", prompt: "", mode: "tagged" } as any;
+  expect(huddleMainPrompt(h, main, "")).toContain("commit your work in progress before you tag them, and mention the commit sha");
+});
+
+test("a huddle file edited outside the board can't raise canEdit, lead or the limits", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }], { maxParticipants: 4 });
+  await idle();
+  const disk = store.getHuddle("p", h.id)!;
+  const r = disk.participants.find((p) => p.handle === "reviewer")!;
+  Object.assign(r, { canEdit: true, lead: true, statusReason: "kept" });
+  disk.maxParticipants = 32;
+  await Bun.sleep(5);
+  store.saveHuddle("p", disk);
+  const got = huddles.get("p", h.id);
+  expect(got.participants.find((p) => p.handle === "reviewer")).toMatchObject({ canEdit: false, lead: false, statusReason: "kept" });
+  expect(got.maxParticipants).toBe(4);
+  expect(participant(h, "reviewer").canEdit).toBe(false);
+  await Bun.sleep(0);
+  expect(messages(h).at(-1)).toMatchObject({ kind: "system", text: expect.stringContaining("Huddle file edited outside the board") });
+  // Its own saves don't count as edits.
+  const n = messages(h).length;
+  huddles.post("p", h.id, you(h), "hello");
+  huddles.get("p", h.id);
+  await Bun.sleep(0);
+  expect(messages(h).length).toBe(n + 1);
+  // The agent's next run still has no edit tools.
+  huddles.post("p", h.id, you(h), "@reviewer go");
+  await idle();
+  expect(processes().at(-1)!.args).toContain("--disallowedTools");
+}, 30000);
 
 test("a daemon restart resumes agents cut off mid-turn", async () => {
   const t = await host();

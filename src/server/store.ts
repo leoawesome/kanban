@@ -352,6 +352,16 @@ export class Store {
     atomicWrite(join(this.huddlesDir(slug), `${h.id}.json`), JSON.stringify(h, null, 2) + "\n");
   }
 
+  /** Identifies one version of the huddle file (inode and mtime), or null if it is gone: tells edits from outside. */
+  huddleStamp(slug: string, id: string): string | null {
+    try {
+      const st = statSync(join(this.huddlesDir(slug), `${id}.json`));
+      return `${st.ino}:${st.mtimeMs}`;
+    } catch {
+      return null;
+    }
+  }
+
   /** The message log is append-only: messages are never edited or removed. */
   appendHuddleMessage(slug: string, id: string, m: HuddleMessage): void {
     mkdirSync(this.huddlesDir(slug), { recursive: true });

@@ -12,12 +12,18 @@
 // was stopped or the daemon was down are delivered on Resume and after a restart (see wakeIfOwed).
 //
 // Lifecycle: @main or a lead writes outputs/huddle-summary.md and asks the user to close (huddle_close); only the
-// user closes, or the host ticket moving to Done does. Closing removes the agents' clean own worktrees.
+// user closes, or the host ticket moving to Done does. Closing removes the agents' clean own worktrees and the
+// read-only agents' snapshots.
+//
+// Workspaces: the shared worktree is the coordinator's. A read-only agent (shared, can't edit) works in a detached
+// snapshot worktree at the host branch's committed HEAD, reset at every wake, so its shell can't touch the
+// coordinator's files. The board remembers its own last save of the huddle file; an edit from outside can't raise
+// lead, canEdit or the limits (see guard).
 //
 // Brakes, so a huddle can't loop or overspend: it stops at maxCostUsd (agents' runs and @main's huddle replies; the
 // leads are warned at 80%) and at maxMessages; routing pauses after AGENT_ONLY_MAX messages without the user; two
 // participants answering each other PING_PONG times in a row stop waking each other and their lead is tagged.
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { summarizeEvent } from "./activity";
 import { mcpConfig } from "./agents";
@@ -34,7 +40,7 @@ import {
 import { huddleAgentPrompt, huddleAgentSystemPrompt, huddleDigest, huddleMainPrompt } from "./prompts";
 import { buildArgs, MONITOR_IDLE_MS, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
-import type { Huddle, HuddleFinding, HuddleMessage, HuddleMessageKind, HuddleMode, HuddleParticipant, HuddleStopReason, Ticket } from "./types";
+import type { Huddle, HuddleFinding, HuddleMessage, HuddleMessageKind, HuddleMode, HuddleParticipant, HuddleStopReason, Profile, Ticket } from "./types";
 import { newId, nowIso } from "./util";
 
 export class HuddleError extends Error {
@@ -111,10 +117,15 @@ interface AgentRun {
   /** Messages came in after input closed: deliver them in a new run once this one ends. */
   again: boolean;
   stopRequested: boolean;
+  /** Snapshot agent between turns: its worktree is being reset (refreshing), or was reset for the next wake (fresh). */
+  refreshing?: Promise<void> | null;
+  fresh?: boolean;
 }
 
 const isCoordinator = (h: Huddle, p: HuddleParticipant) => p.kind === "ticket-main" && p.ticketId === h.hostTicket;
 const canManage = (h: Huddle, p: HuddleParticipant) => p.kind === "human" || isCoordinator(h, p) || p.lead;
+/** A read-only agent in the shared workspace: it works in a detached snapshot of the host's HEAD. */
+const isSnapshot = (p: HuddleParticipant) => p.kind === "agent" && p.workspace === "shared" && !p.canEdit;
 /** done / blocked: set by the participant itself; its runs' turns ending don't change it. */
 const settled = (p: HuddleParticipant | undefined) => p?.status === "done" || p?.status === "blocked";
 
@@ -128,6 +139,8 @@ export class Huddles {
   private sessionExists: (id: string) => boolean;
   /** Background work whenIdle() waits for (worktree cleanup after a close). */
   private chores = new Set<Promise<void>>();
+  /** Each huddle as this board last saved it, with its file's stamp, by "<slug>/<huddle>" (see guard). */
+  private saved = new Map<string, { stamp: string | null; h: Huddle }>();
 
   constructor(private store: Store, private board: Board, private bus: Bus, private opts: HuddleOptions) {
     this.sessionExists = opts.sessionExists ?? claudeSessionExists;
@@ -148,7 +161,7 @@ export class Huddles {
       for (const key of [...this.mainPending]) {
         const [slug, hid, handle] = key.split("/");
         if (slug !== e.profile) continue;
-        const h = this.store.getHuddle(slug, hid);
+        const h = this.load(slug, hid);
         const p = h?.participants.find((x) => x.handle === handle);
         if (!h || !p || p.ticketId !== e.ticket.id || this.board.isRunning(slug, e.ticket.id)) continue;
         this.mainPending.delete(key);
@@ -166,7 +179,7 @@ export class Huddles {
     if (ev?.type !== "result" || this.shuttingDown) return;
     const woken = this.mainWoken.get(`${slug}/${ticketId}`);
     if (!woken || !this.board.isPeerRun(slug, ticketId)) return;
-    const h = this.store.getHuddle(slug, woken.hid);
+    const h = this.load(slug, woken.hid);
     const p = h?.participants.find((x) => x.handle === woken.handle && x.ticketId === ticketId);
     if (!h || !p || h.status === "closed") return;
     this.updateP(slug, h.id, p.handle, { ...costAfter(p, Number(ev.total_cost_usd) || 0), idleAt: nowIso() });
@@ -176,8 +189,58 @@ export class Huddles {
   // ---- Reading ----
 
   get(slug: string, hid: string): Huddle {
-    const h = this.store.getHuddle(slug, hid);
+    const h = this.load(slug, hid);
     if (!h) throw new HuddleError(404, `huddle ${hid} not found`);
+    return h;
+  }
+
+  /** The huddle from disk, checked against edits made outside the board (see guard). */
+  private load(slug: string, hid: string): Huddle | null {
+    const h = this.store.getHuddle(slug, hid);
+    if (!h) {
+      this.saved.delete(`${slug}/${hid}`);
+      return null;
+    }
+    return this.guard(slug, h);
+  }
+
+  private save(slug: string, h: Huddle) {
+    this.store.saveHuddle(slug, h);
+    this.saved.set(`${slug}/${h.id}`, { stamp: this.store.huddleStamp(slug, h.id), h: structuredClone(h) });
+  }
+
+  /**
+   * The huddle file changed since the board last saved it (an agent's shell can write it): whatever it raised (lead,
+   * canEdit, the limits, new participants' rights) goes back to what the board had, and a system message says so.
+   * The first read after a daemon start is taken as is.
+   */
+  private guard(slug: string, h: Huddle): Huddle {
+    const key = `${slug}/${h.id}`;
+    const last = this.saved.get(key);
+    const stamp = this.store.huddleStamp(slug, h.id);
+    if (!last) {
+      this.saved.set(key, { stamp, h: structuredClone(h) });
+      return h;
+    }
+    if (stamp === last.stamp) return h;
+    const was = last.h;
+    for (const p of h.participants) {
+      const before = was.participants.find((x) => x.handle === p.handle);
+      if (!before?.lead) p.lead = false;
+      if (!before?.canEdit) p.canEdit = false;
+      if (before) p.kind = before.kind;
+    }
+    for (const k of ["maxParticipants", "maxCostUsd", "maxMessages"] as const) {
+      const limit = was[k];
+      if (limit !== undefined && (h[k] === undefined || h[k]! > limit)) h[k] = limit;
+    }
+    this.save(slug, h);
+    // Not from inside this read: it may be part of an update that saves after it.
+    queueMicrotask(() => {
+      if (this.store.getHuddle(slug, h.id)) {
+        this.system(slug, h.id, "Huddle file edited outside the board. Any rise in lead, canEdit or the limits made there was ignored; only the board changes them.");
+      }
+    });
     return h;
   }
 
@@ -329,13 +392,13 @@ export class Huddles {
     const h = this.get(slug, hid);
     fn(h);
     h.updatedAt = nowIso();
-    this.store.saveHuddle(slug, h);
+    this.save(slug, h);
     this.bus.emit({ type: "huddle.updated", profile: slug, huddle: this.view(slug, h) });
     return h;
   }
 
   private updateP(slug: string, hid: string, handle: string, patch: Partial<HuddleParticipant>): void {
-    if (!this.store.getHuddle(slug, hid)) return;
+    if (!this.load(slug, hid)) return;
     this.update(slug, hid, (h) => {
       const p = h.participants.find((x) => x.handle === handle);
       if (p) Object.assign(p, patch);
@@ -399,7 +462,7 @@ export class Huddles {
       h.participants.push(...ps);
       agents.push(...ps);
     }
-    this.store.saveHuddle(slug, h);
+    this.save(slug, h);
     this.bus.emit({ type: "huddle.updated", profile: slug, huddle: this.view(slug, h) });
     this.system(slug, h.id, `Huddle started on ticket ${hostId} "${host.title}" with ${agents.map((p) => `@${p.handle} (${p.role})`).join(", ")}. @main coordinates. Budget ${money(maxCostUsd)}.`);
     for (const p of agents) this.kickoff(slug, h.id, p.handle);
@@ -650,7 +713,7 @@ export class Huddles {
 
   /** After a cost update: warn the leads at 80% of the budget, stop at 100%. */
   private checkBudget(slug: string, hid: string) {
-    const h = this.store.getHuddle(slug, hid);
+    const h = this.load(slug, hid);
     if (!h || h.status === "closed") return;
     const max = h.maxCostUsd ?? DEFAULT_MAX_COST_USD;
     const spent = huddleCost(h);
@@ -706,7 +769,7 @@ export class Huddles {
    * or the daemon was going down is lost. A monitor ticket session's pending messages come back this way too.
    */
   private wakeIfOwed(slug: string, hid: string, handle: string) {
-    const h = this.store.getHuddle(slug, hid);
+    const h = this.load(slug, hid);
     const p = h?.participants.find((x) => x.handle === handle);
     if (!h || !p || h.status !== "live") return;
     let owed: "mention" | "monitor" | null = null;
@@ -763,7 +826,7 @@ export class Huddles {
 
   /** Hand the participant everything it hasn't read: into its live run, a ticket chat message, or a new run. */
   private deliverNow(slug: string, hid: string, handle: string) {
-    const h = this.store.getHuddle(slug, hid);
+    const h = this.load(slug, hid);
     const p = h?.participants.find((x) => x.handle === handle);
     if (!h || !p || h.status !== "live" || p.status === "stopped" || p.status === "done" || this.shuttingDown) return;
     if (p.kind === "ticket-main") {
@@ -784,10 +847,28 @@ export class Huddles {
         run.pending = true;
         return;
       }
+      // Between turns, a snapshot agent sees the host's latest commit first. Mid-turn its files stay put.
+      if (run.idle && isSnapshot(p) && !run.fresh) {
+        if (run.refreshing) return;
+        run.refreshing = this.workspace(slug, h, p)
+          .then(() => {}, (e) => {
+            if (!run.stopRequested) this.system(slug, hid, `Couldn't refresh @${handle}'s snapshot: ${(e as Error).message}`);
+          })
+          .finally(() => {
+            run.refreshing = null;
+            run.fresh = true;
+            this.deliverNow(slug, hid, handle);
+          });
+        this.chore(run.refreshing);
+        return;
+      }
+      if (run.refreshing) return;
+      run.fresh = false;
       run.pending = false;
       const u = this.takeUnread(slug, hid, handle);
       if (!u) return;
-      if (run.handle?.send(huddleAgentPrompt("wake", p, u.digest, u.tagged))) {
+      const cur = this.get(slug, hid).participants.find((x) => x.handle === handle)!;
+      if (run.handle?.send(huddleAgentPrompt("wake", cur, u.digest, u.tagged, isSnapshot(cur) ? cur.snapshot : null))) {
         if (run.idle && !settled(p)) this.updateP(slug, hid, handle, { status: "working" });
         run.idle = false;
       } else {
@@ -834,24 +915,53 @@ export class Huddles {
         if (this.shuttingDown) return;
         this.board.restartWorkChanged();
         // Emit with running: false now that the run is gone.
-        if (this.store.getHuddle(slug, hid)) this.update(slug, hid, () => {});
+        if (this.load(slug, hid)) this.update(slug, hid, () => {});
         if ((run.again || run.pending) && !run.stopRequested) this.deliverNow(slug, hid, handle);
       });
   }
 
-  /** Where an agent works: the host ticket's worktree, or (workspace own) a worktree of its own off the host's branch. */
+  /**
+   * Where an agent works: (workspace own) a worktree of its own off the host's branch; a read-only agent, a detached
+   * snapshot of the host's HEAD (see snapshot); anyone else the host ticket's worktree.
+   */
   private async workspace(slug: string, h: Huddle, p: HuddleParticipant): Promise<string> {
     const host = await this.board.ensureSession(slug, h.hostTicket);
-    if (p.workspace === "shared") return host.dir;
+    if (p.workspace === "shared") return isSnapshot(p) && host.isGit ? this.snapshot(slug, h, p, host.dir) : host.dir;
     const profile = this.store.getProfile(slug)!;
     if (!(await isGitRepo(profile.path))) throw new Error("workspace own needs a git repository");
     if (p.worktree && existsSync(p.worktree)) return p.worktree;
     const t = this.store.getTicket(slug, h.hostTicket)!;
-    // Not in the board's worktree folder itself, so the startup sweep (one folder per ticket id) leaves it alone.
-    const dir = join(dirname(worktreeDir(profile, h.hostTicket)), `${h.hostTicket}.huddle`, p.handle);
+    const dir = agentDir(profile, h, p);
     const branch = p.branch ?? `ck/${h.hostTicket}-${p.handle}`;
     await addWorktree(profile.path, dir, branch, t.branch ?? profile.baseBranch);
     this.updateP(slug, h.id, p.handle, { worktree: dir, branch });
+    return dir;
+  }
+
+  /**
+   * A read-only agent's folder: a detached worktree at the host worktree's committed HEAD, made on its first run and
+   * reset at every wake (local changes and untracked files there are discarded). Nothing it does there reaches the
+   * coordinator's worktree.
+   */
+  private async snapshot(slug: string, h: Huddle, p: HuddleParticipant, hostDir: string): Promise<string> {
+    const profile = this.store.getProfile(slug)!;
+    const head = await git(["git", "rev-parse", "HEAD"], hostDir);
+    if (head.code !== 0) throw new Error(`couldn't read the host worktree's HEAD: ${head.stderr.trim()}`);
+    const sha = head.stdout.trim();
+    const branch = (await git(["git", "branch", "--show-current"], hostDir)).stdout.trim() || null;
+    const dir = p.worktree ?? agentDir(profile, h, p);
+    if (existsSync(dir)) {
+      for (const cmd of [["git", "checkout", "--quiet", "--force", "--detach", sha], ["git", "clean", "-fdq"]]) {
+        const r = await git(cmd, dir);
+        if (r.code !== 0) throw new Error(`couldn't reset the snapshot worktree ${dir}: ${r.stderr.trim()}`);
+      }
+    } else {
+      await git(["git", "worktree", "prune"], profile.path);
+      mkdirSync(dirname(dir), { recursive: true });
+      const r = await git(["git", "worktree", "add", "--detach", dir, sha], profile.path);
+      if (r.code !== 0) throw new Error(`couldn't make the snapshot worktree ${dir}: ${r.stderr.trim()}`);
+    }
+    this.updateP(slug, h.id, p.handle, { worktree: dir, branch: null, snapshot: { branch, sha } });
     return dir;
   }
 
@@ -869,7 +979,7 @@ export class Huddles {
     const resume = !!p.sessionStarted && this.sessionExists(sessionId);
     if (!p.sessionId) this.updateP(slug, hid, handle, { sessionId });
     const outputDir = this.store.huddleOutputsDir(slug, h.hostTicket, handle);
-    const system = huddleAgentSystemPrompt(h, p, host as Ticket, outputDir, dir);
+    const system = huddleAgentSystemPrompt(h, p, host as Ticket, outputDir, dir, profile.baseBranch);
     const args = [
       ...buildArgs(sessionId, resume, p.model ?? profile.model, "bypassPermissions", mcpConfig(), system),
       ...(p.canEdit ? [] : ["--disallowedTools", NO_EDIT_TOOLS]),
@@ -913,7 +1023,7 @@ export class Huddles {
     const out = await run.handle.done;
     if (this.shuttingDown) return;
     started ||= this.sessionExists(sessionId);
-    if (!this.store.getHuddle(slug, hid)) return;
+    if (!this.load(slug, hid)) return;
     if (run.stopRequested || run.handle.stopped) return this.updateP(slug, hid, handle, { sessionStarted: started, status: "stopped" });
     if (out.code !== 0) {
       const error = out.stderr.trim().split("\n").slice(-3).join("\n") || `claude exited with code ${out.code}`;
@@ -1058,8 +1168,8 @@ export class Huddles {
    */
   private async removeWorktrees(slug: string, hid: string): Promise<void> {
     // The agents' runs were just stopped: let them end first.
-    await Promise.all([...this.runs.entries()].filter(([k]) => k.startsWith(`${slug}/${hid}/`)).map(([, r]) => r.promise));
-    const h = this.store.getHuddle(slug, hid);
+    await Promise.all([...this.runs.entries()].filter(([k]) => k.startsWith(`${slug}/${hid}/`)).flatMap(([, r]) => [r.promise, r.refreshing ?? undefined]));
+    const h = this.load(slug, hid);
     const profile = this.store.getProfile(slug);
     if (!h || !profile) return;
     const base = this.store.getTicket(slug, h.hostTicket)?.branch ?? profile.baseBranch;
@@ -1067,6 +1177,13 @@ export class Huddles {
     const kept: string[] = [];
     for (const p of h.participants) {
       if (p.kind !== "agent" || !p.worktree) continue;
+      if (!p.branch) {
+        // A read-only snapshot: nothing in it is anyone's work, so it goes without a note.
+        const r = existsSync(p.worktree) ? await git(["git", "worktree", "remove", "--force", p.worktree], profile.path) : null;
+        if (r && r.code !== 0) kept.push(`@${p.handle}: ${p.worktree}: ${r.stderr.trim() || "couldn't remove it"}`);
+        else this.updateP(slug, hid, p.handle, { worktree: null });
+        continue;
+      }
       const why = await removeOwnWorktree(profile.path, p.worktree, p.branch ?? null, base);
       if (why) kept.push(`@${p.handle}: ${p.worktree}${p.branch ? ` (branch ${p.branch})` : ""}: ${why}`);
       else {
@@ -1131,6 +1248,11 @@ export class Huddles {
 }
 
 export type StatusChange = "done" | "blocked" | "active";
+
+/** An agent's own or snapshot worktree: next to the board's worktree folder, so its startup sweep (one folder per ticket id) leaves it alone. */
+function agentDir(profile: Profile, h: Huddle, p: HuddleParticipant): string {
+  return join(dirname(worktreeDir(profile, h.hostTicket)), `${h.hostTicket}.huddle`, p.handle);
+}
 
 /** Remove an agent's own worktree and branch; the reason it was kept instead, or null once removed. */
 async function removeOwnWorktree(repo: string, dir: string, branch: string | null, base: string): Promise<string | null> {

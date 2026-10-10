@@ -294,9 +294,14 @@ export interface HuddleParticipant {
   /** May edit tracked files; only the coordinator (and agents in their own worktree) by default. */
   canEdit: boolean;
   workspace: HuddleWorkspace;
-  /** workspace own: its worktree and branch, once made. */
+  /**
+   * workspace own: its worktree and branch, once made. A read-only agent in the shared workspace: its detached
+   * snapshot worktree at the host branch's HEAD (branch stays null), refreshed at every wake.
+   */
   worktree?: string | null;
   branch?: string | null;
+  /** Read-only snapshot: the host branch and the commit it shows (see huddle.ts snapshot()). */
+  snapshot?: { branch: string | null; sha: string } | null;
   /** Its own Claude session (agents only; a ticket-main uses its ticket's session). */
   sessionId: string | null;
   sessionStarted?: boolean;

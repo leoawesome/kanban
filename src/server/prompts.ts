@@ -411,10 +411,14 @@ const HUDDLE_TOOLS = `- \`huddle_post\`: post a message. Tag who should act with
 (ckanban MCP tools; if they are deferred, load them with ToolSearch first.)`;
 
 /** System prompt of a huddle agent's run: who it is, the room's rules, and what it may change. */
-export function huddleAgentSystemPrompt(h: Huddle, p: HuddleParticipant, host: Ticket, outputDir: string, workdir: string): string {
+export function huddleAgentSystemPrompt(h: Huddle, p: HuddleParticipant, host: Ticket, outputDir: string, workdir: string, baseBranch?: string): string {
+  const snap = p.snapshot;
   const edit = p.canEdit
     ? `You work in your own git worktree (${workdir}) on branch ${p.branch ?? "(your branch)"}: edit and commit there. Never push to or edit the host ticket's worktree.`
-    : `You must NOT edit tracked files in this repository (Edit, Write and NotebookEdit are disabled; don't change files through the shell either). You may run the app, tests and read-only commands. Put reports, notes and test scripts in your outputs folder: ${outputDir}`;
+    : `You must NOT edit tracked files in this repository (Edit, Write and NotebookEdit are disabled; don't change files through the shell either). You may run the app, tests and read-only commands. Put reports, notes and test scripts in your outputs folder: ${outputDir}${snap ? `
+- Your working folder is a read-only snapshot: a detached git worktree at the host branch ${snap.branch ?? "(detached)"}, commit ${snap.sha}. The board resets it to the host's latest commit at every wake, dropping any change made in it; never commit, push or switch branches there.
+- Review target: ${snap.branch ? `the commits of ${snap.branch}` : "the host's commits"}${baseBranch ? ` on top of ${baseBranch} (\`git diff ${baseBranch}...${snap.sha}\`)` : ""}, at ${snap.sha}${p.focus ? `, focused on: ${p.focus}` : ""}.
+- You see committed code only; ask @main to commit WIP.` : ""}`;
   return `# Huddle
 You are @${p.handle} (${p.role}) in a huddle: a shared message room where several Claude sessions work together on ticket ${host.id} "${host.title}". @main is that ticket's own session and coordinates; @you is the user.
 
@@ -442,12 +446,13 @@ Huddle id: ${h.id}. Working folder: ${workdir}`;
 }
 
 /** First message of a huddle agent's run, or the messages that woke it. */
-export function huddleAgentPrompt(kind: "start" | "wake" | "interrupted", p: HuddleParticipant, digest: string, tagged = false): string {
+/** snapshot: a live run's read-only snapshot was just reset to the host's latest commit (a new run's system prompt says it). */
+export function huddleAgentPrompt(kind: "start" | "wake" | "interrupted", p: HuddleParticipant, digest: string, tagged = false, snapshot?: HuddleParticipant["snapshot"]): string {
   const head = kind === "start"
     ? `You just joined the huddle as @${p.handle}. Start on your job now.`
     : kind === "interrupted"
     ? "The board restarted while you were working, so your last turn was cut off. Carry on where you stopped."
-    : `New huddle messages${tagged ? " (you were tagged)" : ""}:`;
+    : `New huddle messages${tagged ? " (you were tagged)" : ""}${snapshot ? `; your snapshot now shows ${snapshot.branch ?? "the host"} at ${snapshot.sha}` : ""}:`;
   return digest ? `${head}\n\n${digest}` : head;
 }
 
@@ -461,7 +466,7 @@ export function huddleMainPrompt(h: Huddle, p: HuddleParticipant, digest: string
 
 ${context("Huddle messages", `(Messages from huddle ${h.id}, where you are @${p.handle}${coordinator ? ", the coordinator" : ""}. Participants:
 ${rosterLines(h)}
-${coordinator && p.prompt ? `Your role as coordinator: ${p.prompt}\n` : ""}Answer in the huddle with the ckanban \`huddle_post\` tool, tagging who should act; your chat reply is not posted there.${coordinator ? " You may edit the code; the other agents can't (except in their own worktrees). Keep the pinned findings current with `huddle_findings`, and add participants with `huddle_add_participant` if needed (capped; ask the user when it's full). When the huddle's work is done, write the summary to outputs/huddle-summary.md in your outputs folder and ask the user to close it with `huddle_close`." : ""}
+${coordinator && p.prompt ? `Your role as coordinator: ${p.prompt}\n` : ""}Answer in the huddle with the ckanban \`huddle_post\` tool, tagging who should act; your chat reply is not posted there.${coordinator ? " You may edit the code; the other agents can't (except in their own worktrees). Reviewers and QA see only committed code (a snapshot of your branch's HEAD), so commit your work in progress before you tag them, and mention the commit sha. Keep the pinned findings current with `huddle_findings`, and add participants with `huddle_add_participant` if needed (capped; ask the user when it's full). When the huddle's work is done, write the summary to outputs/huddle-summary.md in your outputs folder and ask the user to close it with `huddle_close`." : ""}
 ${DIGEST_RULE} Don't post only to acknowledge, and tag only who must act.
 If you were in the middle of work, carry on with it afterwards and keep following the instructions you were given for that run, including how to end it. Otherwise just act on these messages and end your turn.)
 ${HUDDLE_TOOLS}`, { huddle: h.id })}`;
