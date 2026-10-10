@@ -167,6 +167,13 @@ export interface HuddleInfo {
   brief?: { text: string; by: string; at: string } | null;
 }
 
+/** A lesson an agent proposes when it turns done: a rule worth reusing, its evidence, and where it applies. */
+export interface HuddleLesson {
+  text: string;
+  evidence?: string;
+  scope?: "general" | "repo";
+}
+
 /** A participant's own huddle status: done, blocked (with a reason) or active again. */
 export type HuddleStatusChange = "done" | "blocked" | "active";
 
@@ -318,10 +325,11 @@ export class BoardClient {
     return this.req<HuddlePage>("GET", `${this.h(slug, hid)}${qs.size ? `?${qs}` : ""}`, undefined, this.as(c));
   };
   /** status: the sender is done or blocked (reason) with this message. */
-  huddlePost = (slug: string, hid: string, text: string, kind: "message" | "finding", c: HuddleCaller, status?: { status: HuddleStatusChange; reason?: string }) =>
+  huddlePost = (slug: string, hid: string, text: string, kind: "message" | "finding", c: HuddleCaller, status?: { status: HuddleStatusChange; reason?: string; lessons?: HuddleLesson[] }) =>
     this.req<HuddleMessage>("POST", `${this.h(slug, hid)}/messages`, { text, kind, ...status }, this.as(c));
-  huddleStatus = (slug: string, hid: string, status: HuddleStatusChange, reason: string | undefined, c: HuddleCaller) =>
-    this.req<HuddleParticipantInfo>("POST", `${this.h(slug, hid)}/status`, { status, reason }, this.as(c));
+  /** lessons (status done): proposed for the user to review as role notes. */
+  huddleStatus = (slug: string, hid: string, status: HuddleStatusChange, reason: string | undefined, c: HuddleCaller, lessons?: HuddleLesson[]) =>
+    this.req<HuddleParticipantInfo>("POST", `${this.h(slug, hid)}/status`, { status, reason, ...(lessons?.length ? { lessons } : {}) }, this.as(c));
   huddleCloseRequest = (slug: string, hid: string, reason: string, c: HuddleCaller) =>
     this.req<HuddleInfo>("POST", `${this.h(slug, hid)}/close-request`, { reason }, this.as(c));
   huddleMode = (slug: string, hid: string, handle: string, mode: HuddleMode, c: HuddleCaller) =>

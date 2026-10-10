@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
-import { api, type Huddle, type HuddleMessage, type HuddleMode, type HuddleParticipant, type Ticket } from "./api";
+import { api, type Huddle, type HuddleLearning, type HuddleMessage, type HuddleMode, type HuddleParticipant, type HuddlePreset, type Ticket } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { draftKey } from "./drafts";
 import {
@@ -131,6 +131,8 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
   const [confirm, setConfirm] = useState<"stop" | "close" | null>(null);
   const [adding, setAdding] = useState(false);
   const log = useRef<HTMLDivElement>(null);
+  const learningsRef = useRef<HTMLDivElement>(null);
+  const pending = (h.learnings ?? []).filter((l) => l.status === "pending");
   const now = useNow();
   const closed = h.status === "closed";
   const run = (p: Promise<unknown>) => p.catch((e) => onError((e as Error).message));
@@ -141,7 +143,8 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
   const brake = h.status === "stopped" && h.stopReason ? h.stopReason : null;
   const plainFirst = !!brake && brake !== "budget" && !overBudget;
   const quiet = h.status === "live" && !!h.quiet;
-  const forYou = closed ? 0 : h.forYou ?? 0;
+  // Messages that tag you (the pending learnings count in forYou too, but have their own section).
+  const forYou = closed ? 0 : (h.forYou ?? 0) - (h.learningsPending ?? 0);
   const invitable = tickets.filter((t) => !h.participants.some((p) => p.ticketId === t.id));
   const handles = h.participants.map((p) => p.handle).concat("all");
   const resume = (add?: number) => run(api.huddleAction(slug, h.id, "resume", add));
@@ -239,6 +242,7 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
           <b>@{h.closeRequest.by}</b> asks to close the huddle: {h.closeRequest.reason}. The summary is in the ticket's outputs (huddle-summary.md).
         </div>
       )}
+      <Learnings slug={slug} huddle={h} boxRef={learningsRef} onError={onError} />
       {adding && !closed && <AddAgent slug={slug} huddle={h} onDone={() => setAdding(false)} onError={onError} />}
       <div className="huddle-body">
         <div className="huddle-feed">
@@ -261,8 +265,150 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
         <ConfirmDialog title="Close the huddle?" confirmLabel="Close huddle" busyLabel="Closing…" onCancel={() => setConfirm(null)}
           onConfirm={async () => { await api.huddleAction(slug, h.id, "close"); setConfirm(null); }}>
           <p>The huddle's runs stop and it becomes read-only; its history stays here. The ticket's own run keeps going. Clean agent worktrees are removed.</p>
+          {pending.length > 0 && (
+            <div className="hd-close-learnings">
+              <p>
+                <b>{pending.length} learning{pending.length === 1 ? "" : "s"} still to review.</b> They stay here after closing, but agents of these roles
+                won't get them until you save them:
+              </p>
+              <ul>{pending.map((l) => <li key={l.id}><span className="muted">@{l.from}:</span> {l.text}</li>)}</ul>
+              <button className="btn small primary" onClick={() => {
+                setConfirm(null);
+                requestAnimationFrame(() => learningsRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+              }}>Review them first</button>
+            </div>
+          )}
         </ConfirmDialog>
       )}
+    </div>
+  );
+}
+
+/** A preset name from a role label, as the daemon makes it ("UX critic" -> "ux-critic"). */
+const presetName = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
+const ALL_ROLES = "_all";
+
+/** Where a learning can go: its own role first (or every role for an ad-hoc agent), a new role from an ad-hoc one, other roles. */
+function targetOptions(l: HuddleLearning, presets: HuddlePreset[]): { value: string; label: string }[] {
+  const roles = presets.filter((p) => p.name !== "main");
+  const own = l.preset ? roles.find((p) => p.name === l.preset) : undefined;
+  const fresh = !l.preset && presetName(l.role) && !roles.some((p) => p.name === presetName(l.role));
+  return [
+    ...(own ? [{ value: own.name, label: `${own.role} (this role)` }] : []),
+    { value: ALL_ROLES, label: "All roles" },
+    ...(fresh ? [{ value: "new", label: `+ New role "${l.role}"` }] : []),
+    ...roles.filter((p) => p !== own).map((p) => ({ value: p.name, label: p.role })),
+  ];
+}
+
+/**
+ * Learnings to review: lessons agents proposed when they turned done. Nothing is saved until the user picks a scope and
+ * where it goes and presses Save; saved ones go into every future agent of that role's instructions.
+ */
+function Learnings({ slug, huddle: h, boxRef, onError }: { slug: string; huddle: Huddle; boxRef: RefObject<HTMLDivElement>; onError: (m: string) => void }) {
+  const presets = usePresets(slug);
+  const shown = (h.learnings ?? []).filter((l) => l.status !== "discarded");
+  if (!shown.length) return null;
+  const pending = shown.filter((l) => l.status === "pending");
+  const adhoc = pending.some((l) => !l.preset);
+  return (
+    <section className="hd-learnings" ref={boxRef} aria-label="Learnings to review">
+      <div className="hd-learnings-head">
+        <span aria-hidden>🎓</span> Learnings to review
+        {pending.length > 0 && <span className="for-you-pill">{pending.length}</span>}
+        <span className="spacer" />
+        <span className="muted small">proposed by agents when they turned done · nothing is saved until you choose</span>
+      </div>
+      <div className="hd-learnings-list">
+        {shown.map((l) => <Learning key={l.id} slug={slug} huddle={h} l={l} presets={presets ?? []} onError={onError} />)}
+      </div>
+      {adhoc && <div className="hd-learnings-foot muted small">Ad-hoc roles disappear with the huddle unless you save a lesson as a new role. Close huddle asks about learnings still pending.</div>}
+    </section>
+  );
+}
+
+function Learning({ slug, huddle: h, l, presets, onError }: { slug: string; huddle: Huddle; l: HuddleLearning; presets: HuddlePreset[]; onError: (m: string) => void }) {
+  const [edit, setEdit] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const act = async (p: Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await p;
+      return true;
+    } catch (e) {
+      onError((e as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const roleLabel = (name: string) => (name === ALL_ROLES ? "All roles" : presets.find((p) => p.name === name)?.role ?? name);
+  const where = l.scope === "general" ? "all repos" : `${slug} notes`;
+  const options = targetOptions(l, presets);
+  const target = options.some((o) => o.value === l.target) ? l.target : options[0]?.value ?? ALL_ROLES;
+  const save = async () => {
+    const text = edit?.trim();
+    if (await act(api.saveLearning(slug, h.id, l.id, { ...(text && text !== l.text ? { text } : {}), target }))) setEdit(null);
+  };
+  return (
+    <div className={`hd-learning ${l.status}`}>
+      <div className="hd-learning-who">
+        <b>@{l.from}</b>
+        <span>{l.role}{!l.preset && <span className="hd-adhoc">ad-hoc</span>}</span>
+      </div>
+      <div className="hd-learning-main">
+        {edit !== null ? (
+          <textarea rows={2} value={edit} maxLength={400} disabled={busy} autoFocus aria-label="Lesson"
+            onChange={(e) => setEdit(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { e.stopPropagation(); setEdit(null); }
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                const text = edit.trim();
+                if (text && text !== l.text) act(api.editLearning(slug, h.id, l.id, { text })).then((ok) => ok && setEdit(null));
+                else setEdit(null);
+              }
+            }} />
+        ) : (
+          <div className="hd-learning-rule">{l.text}</div>
+        )}
+        {l.evidence && <div className="hd-learning-ev">Evidence: {l.evidence}</div>}
+        <div className="hd-learning-row">
+          Scope
+          <span className="hd-scope" role="radiogroup" aria-label="Scope">
+            {(["general", "repo"] as const).map((s) => (
+              <button key={s} type="button" role="radio" aria-checked={l.scope === s} className={l.scope === s ? "on" : undefined}
+                disabled={busy || l.status !== "pending"} title={s === "general" ? "Every repo" : `Only the ${slug} board`}
+                onClick={() => l.scope !== s && act(api.editLearning(slug, h.id, l.id, { scope: s }))}>
+                {s === "general" ? "General" : "This repo"}
+              </button>
+            ))}
+          </span>
+          {l.status === "pending" && (
+            <>
+              Save to
+              <Select ariaLabel="Save to" className="roster-select hd-save-to" value={target} options={options} menuMaxHeight={240}
+                onChange={(v) => v !== l.target && act(api.editLearning(slug, h.id, l.id, { target: v }))} />
+            </>
+          )}
+        </div>
+      </div>
+      <div className="hd-learning-acts">
+        {l.status === "saved" ? (
+          <span className="hd-learning-saved">✓ {l.newRole ? `Saved as new role "${l.role}"` : `Saved to ${roleLabel(l.target)}`} · {where}</span>
+        ) : edit !== null ? (
+          <>
+            <button className="btn small" onClick={() => setEdit(null)} disabled={busy}>Cancel</button>
+            <button className="btn small ok" onClick={save} disabled={busy || !edit.trim()}>Save</button>
+          </>
+        ) : (
+          <>
+            <button className="btn small" onClick={() => setEdit(l.text)} disabled={busy}>Edit</button>
+            <button className="btn small" onClick={() => act(api.discardLearning(slug, h.id, l.id))} disabled={busy}>Discard</button>
+            <button className="btn small ok" onClick={save} disabled={busy}>Save</button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

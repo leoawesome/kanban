@@ -38,13 +38,16 @@ import {
   deletePreset, type HuddlePreset, type HuddlePresetView, MAIN_PRESET, mergePresets, presetName, savePreset,
 } from "./huddle-presets";
 import {
+  ALL_ROLES, cleanLessons, cleanNotes, type HuddleNote, lessonsSection, type LessonInput, NOTE_MAX, noteRole, noteText, type NoteScope, type RoleNotes,
+} from "./huddle-notes";
+import {
   deleteTemplate, type HuddleTemplate, type HuddleTemplateView, mergeTemplates, saveTemplate, templateBrief,
 } from "./huddle-templates";
 import { huddleAgentPrompt, huddleAgentSystemPrompt, huddleDigest, huddleMainPrompt } from "./prompts";
 import { buildArgs, MONITOR_IDLE_MS, startRun, type RunHandle } from "./runner";
 import type { Store } from "./store";
 import type {
-  Huddle, HuddleFinding, HuddleMessage, HuddleMessageKind, HuddleMode, HuddleParticipant, HuddleSource, HuddleStopReason, Profile, Ticket,
+  Huddle, HuddleFinding, HuddleLearning, HuddleMessage, HuddleMessageKind, HuddleMode, HuddleParticipant, HuddleSource, HuddleStopReason, Profile, Ticket,
 } from "./types";
 import { newId, nowIso } from "./util";
 
@@ -70,6 +73,8 @@ export const AGENT_ONLY_MAX = 30;
 /** Messages in a row going back and forth between the same two participants. */
 export const PING_PONG = 6;
 const BUDGET_WARN = 0.8;
+/** Lessons one participant can have waiting for the user's review. */
+const MAX_PENDING = 3;
 
 /** What the huddle spent so far: every participant's runs (agents) and huddle replies (@main and invited tickets). */
 export const huddleCost = (h: Huddle) => h.participants.reduce((s, p) => s + (p.costUsd ?? 0), 0);
@@ -86,11 +91,15 @@ export type ParticipantView = Omit<HuddleParticipant, "token"> & { running: bool
 /**
  * quiet: live, nobody working, no unanswered tags and no open findings (a sign it can be wrapped up);
  * idleSince: when the last message or turn was. forYou: messages tagging @you since the user last posted or acted
- * (forYouSince: that seq).
+ * (forYouSince: that seq), plus the learnings waiting for the user's review (learningsPending).
  */
 export type HuddleView = Omit<Huddle, "participants"> & {
   participants: ParticipantView[]; hostTitle: string | null; quiet: boolean; idleSince: string | null; forYou: number; forYouSince: number;
+  learningsPending: number;
 };
+
+/** Lessons waiting for the user to save or discard them. */
+export const pendingLearnings = (h: Huddle) => (h.learnings ?? []).filter((l) => l.status === "pending");
 
 /** The seq the user has seen up to: their last post or action (Stop, Resume, restart…). */
 export function userSeenSeq(h: Huddle, msgs: HuddleMessage[]): number {
@@ -249,6 +258,8 @@ export class Huddles {
     // Paused, stopped or closed only changes through the board (Resume, close), not by editing the file.
     h.status = was.status;
     h.stopReason = was.stopReason;
+    // Proposed lessons only change through the board: an agent can't reword or save one by editing the file.
+    h.learnings = was.learnings;
     for (const k of ["posts", "sinceUser"] as const) {
       if ((was[k] ?? 0) > (h[k] ?? 0)) h[k] = was[k];
     }
@@ -260,7 +271,7 @@ export class Huddles {
     // Not from inside this read: it may be part of an update that saves after it.
     queueMicrotask(() => {
       if (this.store.getHuddle(slug, h.id)) {
-        this.system(slug, h.id, "Huddle file edited outside the board. Changes there to lead, canEdit, the limits, the status, the costs or the participants were ignored; only the board changes them.");
+        this.system(slug, h.id, "Huddle file edited outside the board. Changes there to lead, canEdit, the limits, the status, the costs, the participants or the learnings were ignored; only the board changes them.");
       }
     });
     return h;
@@ -289,6 +300,7 @@ export class Huddles {
   view(slug: string, h: Huddle): HuddleView {
     const msgs = h.status === "closed" ? [] : this.store.readHuddleMessages(slug, h.id);
     const since = userSeenSeq(h, msgs);
+    const learningsPending = pendingLearnings(h).length;
     return {
       ...h,
       hostTitle: this.store.getTicket(slug, h.hostTicket)?.title ?? null,
@@ -299,8 +311,9 @@ export class Huddles {
         return { ...p, status, running };
       }),
       ...this.quiet(slug, h, msgs),
-      forYou: msgs.filter((m) => isForYou(m, since)).length,
+      forYou: msgs.filter((m) => isForYou(m, since)).length + learningsPending,
       forYouSince: since,
+      learningsPending,
     };
   }
 
@@ -436,6 +449,128 @@ export class Huddles {
     }
     this.store.saveHuddleTemplates(slug, r.board);
     return { reset: r.reset, templates: this.templates(slug) };
+  }
+
+  // ---- Role notes (huddle-notes.ts): only the user writes them ----
+
+  /** Every role's notes that exist on disk, general and this board's repo notes. */
+  notes(slug: string): Record<string, RoleNotes> {
+    if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
+    const out: Record<string, RoleNotes> = {};
+    for (const role of this.store.huddleNoteRoles(slug)) {
+      if (noteRole(role) !== role) continue;
+      out[role] = { general: this.store.readHuddleNotes(slug, role, "general"), repo: this.store.readHuddleNotes(slug, role, "repo") };
+    }
+    return out;
+  }
+
+  /** Replace a role's notes in one scope (the user added, edited or deleted lines in board settings). */
+  setNotes(slug: string, role: string, scope: string, notes: unknown): HuddleNote[] {
+    if (!this.store.getProfile(slug)) throw new HuddleError(404, `board ${slug} not found`);
+    const r = noteRole(role);
+    if (!r) throw new HuddleError(400, `"${role}" is not a role name`);
+    if (scope !== "general" && scope !== "repo") throw new HuddleError(400, "scope must be general or repo");
+    let ns: HuddleNote[];
+    try {
+      ns = cleanNotes(notes);
+    } catch (e) {
+      throw new HuddleError(400, (e as Error).message);
+    }
+    this.store.writeHuddleNotes(slug, r, scope, ns);
+    return this.store.readHuddleNotes(slug, r, scope);
+  }
+
+  /** The "Lessons from past huddles" section for a new agent of `preset` (or an ad-hoc one: All-roles notes only). */
+  lessonsFor(slug: string, preset: string | null): string {
+    const read = (role: string): RoleNotes => ({ general: this.store.readHuddleNotes(slug, role, "general"), repo: this.store.readHuddleNotes(slug, role, "repo") });
+    const role = preset && noteRole(preset) && preset !== ALL_ROLES ? preset : null;
+    return lessonsSection(read(ALL_ROLES), role ? read(role) : null, role);
+  }
+
+  private addLearnings(slug: string, hid: string, p: HuddleParticipant, lessons: LessonInput[]) {
+    const presets = this.presetMap(slug);
+    // Default target: the agent's own role when it has one, else every role.
+    const target = p.preset && p.preset !== MAIN_PRESET && presets.has(p.preset) ? p.preset : ALL_ROLES;
+    const at = nowIso();
+    this.update(slug, hid, (x) => {
+      x.learnings ??= [];
+      for (const l of lessons) {
+        x.learnings.push({ id: `l${x.learnings.length + 1}`, from: p.handle, role: p.role, preset: p.preset ?? null, ...l, status: "pending", target, at });
+      }
+    });
+  }
+
+  private learning(h: Huddle, id: string): HuddleLearning {
+    const l = (h.learnings ?? []).find((x) => x.id === id);
+    if (!l) throw new HuddleError(404, `no learning ${id} in huddle ${h.id}`);
+    if (l.status !== "pending") throw new HuddleError(409, `learning ${id} was already ${l.status}`);
+    return l;
+  }
+
+  /** A pending learning with the user's changes (text, scope, target) applied and checked. */
+  private patched(slug: string, l: HuddleLearning, patch: { text?: unknown; scope?: unknown; target?: unknown }): HuddleLearning {
+    const out = { ...l };
+    if (patch.text !== undefined) {
+      const t = noteText(String(patch.text ?? ""));
+      if (!t) throw new HuddleError(400, "the lesson's text is empty");
+      if (t.length > NOTE_MAX) throw new HuddleError(400, `the lesson is ${t.length} characters, over the limit of ${NOTE_MAX}`);
+      out.text = t;
+    }
+    if (patch.scope !== undefined) {
+      if (patch.scope !== "general" && patch.scope !== "repo") throw new HuddleError(400, "scope must be general or repo");
+      out.scope = patch.scope;
+    }
+    if (patch.target !== undefined) {
+      const t = String(patch.target);
+      if (t !== ALL_ROLES && t !== "new" && (t === MAIN_PRESET || !this.presetMap(slug).has(t))) {
+        throw new HuddleError(400, `save to must be ${ALL_ROLES} (all roles), a role preset of this board, or new`);
+      }
+      if (t === "new" && l.preset) throw new HuddleError(400, `@${l.from} already has a role preset (${l.preset}); save to it instead`);
+      out.target = t;
+    }
+    return out;
+  }
+
+  /** The user changes a pending learning before saving it: its text, scope or where it goes. */
+  editLearning(slug: string, hid: string, id: string, patch: { text?: unknown; scope?: unknown; target?: unknown }): HuddleLearning {
+    const next = this.patched(slug, this.learning(this.get(slug, hid), id), patch);
+    this.update(slug, hid, (x) => void Object.assign(this.learning(x, id), next));
+    return next;
+  }
+
+  /**
+   * The user saves a learning as a role note: at the top of the target's notes file (general: every repo; repo: this
+   * board), with where it came from. Target "new" first makes a board preset from the agent's ad-hoc role (its label
+   * and prompt). Only the user gets here (the HTTP route refuses runs and huddle agents).
+   */
+  saveLearning(slug: string, hid: string, id: string, patch: { text?: unknown; scope?: unknown; target?: unknown } = {}): HuddleLearning {
+    const h = this.get(slug, hid);
+    const l = this.patched(slug, this.learning(h, id), patch);
+    let role = l.target;
+    if (role === "new") {
+      const p = h.participants.find((x) => x.handle === l.from);
+      const name = presetName(l.role);
+      if (!p || !name) throw new HuddleError(400, `can't make a role from "${l.role}"`);
+      if (this.presetMap(slug).has(name)) throw new HuddleError(409, `a role "${name}" already exists; save the lesson to it instead`);
+      this.savePreset(slug, { name, role: l.role, prompt: p.prompt, model: p.model, mode: p.mode, workspace: p.workspace, lead: false, canEdit: p.canEdit });
+      role = name;
+    }
+    const scope: NoteScope = l.scope;
+    const note: HuddleNote = { text: l.text, by: l.from, date: nowIso().slice(0, 10), huddle: h.id };
+    this.store.writeHuddleNotes(slug, role, scope, [note, ...this.store.readHuddleNotes(slug, role, scope)]);
+    const saved: HuddleLearning = { ...l, status: "saved", target: role, ...(l.target === "new" ? { newRole: true } : {}) };
+    this.update(slug, hid, (x) => void Object.assign(this.learning(x, id), saved));
+    return saved;
+  }
+
+  /** The user discards a learning: it is never saved. */
+  discardLearning(slug: string, hid: string, id: string): HuddleLearning {
+    this.learning(this.get(slug, hid), id);
+    let out!: HuddleLearning;
+    this.update(slug, hid, (x) => {
+      out = Object.assign(this.learning(x, id), { status: "discarded" as const });
+    });
+    return out;
   }
 
   // ---- Changing ----
@@ -673,8 +808,8 @@ export class Huddles {
    * (reason) with this message, as with setStatus.
    */
   post(
-    slug: string, hid: string, by: HuddleParticipant, text: string, kind: HuddleMessageKind = "message", status?: { status: StatusChange; reason?: string },
-    source?: HuddleSource,
+    slug: string, hid: string, by: HuddleParticipant, text: string, kind: HuddleMessageKind = "message",
+    status?: { status: StatusChange; reason?: string; lessons?: unknown }, source?: HuddleSource,
   ): HuddleMessage {
     const h = this.get(slug, hid);
     this.assertOpen(h);
@@ -686,11 +821,12 @@ export class Huddles {
     }
     if (kind !== "message" && kind !== "finding") throw new HuddleError(400, "kind must be message or finding");
     if (by.status === "stopped" && by.kind !== "human") throw new HuddleError(409, `@${by.handle} was stopped by the user`);
+    if (status) this.checkLessons(h, by, status.status, status.lessons);
     if (status) this.checkStatus(by, status.status, status.reason);
     const m = this.append(slug, hid, by.handle, text.trim(), kind, h.participants.map((p) => p.handle), canManage(h, by), source);
     // Stopped: the log keeps it; Resume wakes whoever it tags (wakeIfOwed).
     if (h.status === "live" && this.brakes(slug, hid, by, m)) this.route(slug, hid, m);
-    if (status) this.setStatus(slug, hid, by, status.status, status.reason);
+    if (status) this.setStatus(slug, hid, by, status.status, status.reason, status.lessons);
     return m;
   }
 
@@ -713,13 +849,33 @@ export class Huddles {
     if (status === "blocked" && !reason?.trim()) throw new HuddleError(400, "say what blocks you (reason)");
   }
 
+  /** Lessons proposed with a status change, checked: only an agent turning done, at most MAX_LESSONS, each a short rule. */
+  private checkLessons(h: Huddle, by: HuddleParticipant, status: StatusChange, lessons: unknown): LessonInput[] {
+    let out: LessonInput[];
+    try {
+      out = cleanLessons(lessons);
+    } catch (e) {
+      throw new HuddleError(400, `${(e as Error).message}. Nothing was changed.`);
+    }
+    if (!out.length) return out;
+    if (status !== "done") throw new HuddleError(400, "lessons go with status done, when your job is finished");
+    if (by.kind !== "agent") throw new HuddleError(400, "only huddle agents propose lessons");
+    const waiting = pendingLearnings(h).filter((l) => l.from === by.handle).length;
+    if (waiting + out.length > MAX_PENDING) {
+      throw new HuddleError(400, `you already have ${waiting} lesson${waiting === 1 ? "" : "s"} waiting for the user; at most ${MAX_PENDING} can wait at once. Nothing was changed.`);
+    }
+    return out;
+  }
+
   /**
    * A participant says it is done (only a lead, @main or the user wakes it again), blocked on something (@main is
-   * tagged; @you when @main itself is blocked), or active again.
+   * tagged; @you when @main itself is blocked), or active again. lessons (agents turning done): proposed for the
+   * user to review; they become role notes only when the user saves them.
    */
-  setStatus(slug: string, hid: string, by: HuddleParticipant, status: StatusChange, reason?: string): HuddleParticipant {
+  setStatus(slug: string, hid: string, by: HuddleParticipant, status: StatusChange, reason?: string, lessons?: unknown): HuddleParticipant {
     const h = this.get(slug, hid);
     this.assertOpen(h);
+    const proposed = this.checkLessons(h, by, status, lessons);
     this.checkStatus(by, status, reason);
     const p = h.participants.find((x) => x.handle === by.handle)!;
     if (p.status === "stopped") throw new HuddleError(409, `@${p.handle} was stopped by the user`);
@@ -730,7 +886,10 @@ export class Huddles {
       this.system(slug, hid, `@${p.handle} is active again.`);
     } else {
       this.updateP(slug, hid, p.handle, { status, statusReason: why });
-      if (status === "done") this.system(slug, hid, `@${p.handle} is done${why ? `: ${why}` : "."}`);
+      if (proposed.length) this.addLearnings(slug, hid, p, proposed);
+      const n = proposed.length;
+      const learned = n ? `${why ? "." : ""} It proposed ${n} lesson${n === 1 ? "" : "s"} for future huddles; the user reviews ${n === 1 ? "it" : "them"} under Learnings.` : "";
+      if (status === "done") this.system(slug, hid, `@${p.handle} is done${why ? `: ${why}` : "."}${learned}`);
       else this.system(slug, hid, `@${p.handle} is blocked: ${why}`, [isCoordinator(h, p) ? USER_HANDLE : MAIN_HANDLE]);
     }
     return this.get(slug, hid).participants.find((x) => x.handle === p.handle)!;
@@ -1074,7 +1233,7 @@ export class Huddles {
     const resume = !!p.sessionStarted && this.sessionExists(sessionId);
     if (!p.sessionId) this.updateP(slug, hid, handle, { sessionId });
     const outputDir = this.store.huddleOutputsDir(slug, h.hostTicket, handle);
-    const system = huddleAgentSystemPrompt(h, p, host as Ticket, outputDir, dir, profile.baseBranch);
+    const system = huddleAgentSystemPrompt(h, p, host as Ticket, outputDir, dir, profile.baseBranch, this.lessonsFor(slug, p.preset));
     const args = [
       ...buildArgs(sessionId, resume, p.model ?? profile.model, "bypassPermissions", mcpConfig(), system),
       ...(p.canEdit ? [] : ["--disallowedTools", NO_EDIT_TOOLS]),

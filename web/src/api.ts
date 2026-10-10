@@ -526,10 +526,39 @@ export interface Huddle {
   brief?: { text: string; by: string; at: string } | null;
   /** Template it was started from. */
   template?: string | null;
+  /** Lessons agents proposed when they turned done; only the user saves them as role notes. */
+  learnings?: HuddleLearning[];
+  /** Learnings waiting for review (they count in forYou). */
+  learningsPending?: number;
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
 }
+
+/** A lesson an agent proposed (src/server/types.ts). target: "_all", a preset name, or "new" (a preset from the ad-hoc role). */
+export interface HuddleLearning {
+  id: string;
+  from: string;
+  role: string;
+  preset: string | null;
+  text: string;
+  evidence: string;
+  scope: "general" | "repo";
+  status: "pending" | "saved" | "discarded";
+  target: string;
+  at: string;
+  newRole?: boolean;
+}
+
+/** A role note (src/server/huddle-notes.ts): by "you" or the agent's handle. */
+export interface HuddleNote {
+  text: string;
+  by: string;
+  date: string | null;
+  huddle: string | null;
+}
+
+export type HuddleNotes = Record<string, { general: HuddleNote[]; repo: HuddleNote[] }>;
 
 export interface HuddleMessage {
   id: string;
@@ -729,6 +758,16 @@ export const api = {
     req<Huddle>("POST", `${hud(slug, id)}/${action}`, addBudgetUsd ? { addBudgetUsd } : undefined),
   /** The user viewed the huddle up to message seq: the "for you" count clears up to there. */
   huddleSeen: (slug: string, id: string, seq: number) => req<Huddle>("POST", `${hud(slug, id)}/seen`, { seq }),
+  /** Change a pending learning (text, scope, where it goes) before saving it. */
+  editLearning: (slug: string, id: string, lid: string, patch: Partial<Pick<HuddleLearning, "text" | "scope" | "target">>) =>
+    req<HuddleLearning>("PATCH", `${hud(slug, id)}/learnings/${encodeURIComponent(lid)}`, patch),
+  saveLearning: (slug: string, id: string, lid: string, patch: Partial<Pick<HuddleLearning, "text" | "scope" | "target">> = {}) =>
+    req<HuddleLearning>("POST", `${hud(slug, id)}/learnings/${encodeURIComponent(lid)}/save`, patch),
+  discardLearning: (slug: string, id: string, lid: string) => req<HuddleLearning>("POST", `${hud(slug, id)}/learnings/${encodeURIComponent(lid)}/discard`, {}),
+  /** Every role's notes (general and this board's repo notes); cap: lines per file that go into instructions. */
+  huddleNotes: (slug: string) => req<{ notes: HuddleNotes; cap: number }>("GET", `/api/profiles/${encodeURIComponent(slug)}/huddle-notes`),
+  setHuddleNotes: (slug: string, role: string, scope: "general" | "repo", notes: HuddleNote[]) =>
+    req<HuddleNote[]>("PUT", `/api/profiles/${encodeURIComponent(slug)}/huddle-notes/${encodeURIComponent(role)}/${scope}`, { notes }),
   inviteToHuddle: (slug: string, id: string, ticketId: string) => req<HuddleParticipant>("POST", `${hud(slug, id)}/invite`, { ticketId }),
   huddleFindings: (slug: string, id: string, action: "add" | "resolve", arg: { text?: string; id?: string }) =>
     req<HuddleFinding[]>("POST", `${hud(slug, id)}/findings`, { action, ...arg }),

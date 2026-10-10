@@ -1517,6 +1517,28 @@ button.pill:hover { color: var(--text); }
 .hp-checks { display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; }
 .hp-checks label.check-row { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
 .hp-checks label.check-row input { width: auto; flex: none; margin: 0; }
+.hp-row.hp-all .hp-name { font-style: italic; }
+/* Board settings: a huddle role's notes (HuddleRoles RoleNotes) */
+.hn { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px 10px; }
+.hn-roles { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.hn-roles button[role="tab"] { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 99px; border: none; background: var(--surface-2); color: var(--text); cursor: pointer; }
+.hn-roles button[role="tab"].on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.hn-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 640px) { .hn-cols { grid-template-columns: 1fr; } }
+.hn-col { min-width: 0; }
+.hn-col-head { display: flex; align-items: baseline; gap: 2px 8px; margin-bottom: 4px; flex-wrap: wrap; }
+.hn-col h4 { flex-basis: 100%; margin: 0; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.hn-cap { font-size: 11px; color: var(--muted); }
+.hn-cap.over { color: var(--warn); }
+.hn-col ul { margin: 0; padding-left: 18px; font-size: 13px; max-height: 260px; overflow-y: auto; }
+.hn-col li { margin: 3px 0; overflow-wrap: anywhere; }
+.hn-col li.past-cap .hn-text { color: var(--muted); text-decoration: line-through dotted; }
+.hn-src { color: var(--muted); font-size: 11px; }
+.hn-acts { display: inline-flex; gap: 6px; margin-left: 6px; font-size: 11px; opacity: 0; }
+.hn-col li:hover .hn-acts, .hn-col li:focus-within .hn-acts { opacity: 1; }
+.hn-acts .link-btn { font-size: 11px; }
+.hn-edit input, .hn-col li input { width: 100%; font-size: 13px; }
+.hn-edit { margin-bottom: 4px; }
 .hp-roster { display: flex; flex-direction: column; gap: 4px; }
 .hp-roster .roster { border: 1px solid var(--border); border-radius: 8px; overflow-x: auto; }
 
@@ -1584,6 +1606,42 @@ div.huddle { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .hd-banner.brake { background: var(--err-soft); color: var(--err); }
 .hd-banner.quiet { background: var(--ok-soft); color: var(--ok); }
 .hd-banner .btn.small:not(.primary) { color: var(--text); }
+/* Learnings to review (HuddlePanel Learnings): lessons agents proposed when done; only the user saves them as role notes. */
+.hd-learnings { margin: 10px 24px 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; flex: none; max-height: 40%; display: flex; flex-direction: column; }
+.hd-learnings-head { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 13.5px; flex-wrap: wrap; }
+.hd-learnings-head .muted { font-weight: 400; font-size: 12px; }
+.hd-learnings-list { overflow-y: auto; min-height: 0; }
+.hd-learning { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border); align-items: start; }
+.hd-learning:first-child { border-top: none; }
+.hd-learning.saved .hd-learning-rule { color: var(--muted); }
+.hd-learning-who { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.hd-learning-who b { color: var(--text); }
+.hd-adhoc { margin-left: 4px; font-size: 10px; background: var(--surface-2); border-radius: 99px; padding: 0 6px; white-space: nowrap; }
+.hd-learning-rule { font-size: 13.5px; font-weight: 550; overflow-wrap: anywhere; }
+.hd-learning-main textarea { width: 100%; font-size: 13px; resize: vertical; }
+.hd-learning-ev { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.hd-learning-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+.hd-scope { display: inline-flex; }
+.hd-scope button { font: inherit; font-size: 11px; padding: 1px 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; }
+.hd-scope button + button { border-left: none; }
+.hd-scope button:first-child { border-radius: 99px 0 0 99px; }
+.hd-scope button:last-child { border-radius: 0 99px 99px 0; }
+.hd-scope button.on { background: var(--info-soft); color: var(--info); border-color: var(--info); }
+.hd-scope button.on + button { border-left: 1px solid var(--border); }
+.hd-scope button:disabled { cursor: default; }
+.hd-save-to { font-size: 11px; }
+.hd-learning-acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.hd-learning-saved { color: var(--ok); font-size: 12px; }
+.btn.small.ok { background: var(--ok); color: #fff; border-color: var(--ok); }
+.btn.small.ok:hover:not(:disabled) { filter: brightness(1.08); }
+.hd-learnings-foot { padding: 8px 14px; border-top: 1px solid var(--border); }
+.hd-close-learnings { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: var(--info-soft); font-size: 13px; }
+.hd-close-learnings p { margin: 0 0 6px; }
+.hd-close-learnings ul { margin: 0 0 8px; padding-left: 18px; max-height: 140px; overflow-y: auto; }
+@media (max-width: 720px) {
+  .hd-learning { grid-template-columns: minmax(0, 1fr); }
+  .hd-learning-acts { justify-content: flex-start; }
+}
 .huddle-close-ask { padding: 7px 24px; border-bottom: 1px solid var(--border); background: var(--info-soft); font-size: 12.5px; }
 .huddle-bar .btn.small { color: var(--text); }
 .btn.hd-danger { color: var(--err); border-color: var(--err-soft); }
@@ -1658,3 +1716,4 @@ button.hd-mode:disabled { cursor: default; }
 .hd-add-finding { width: 100%; font-size: 12.5px; padding: 4px 8px; margin-top: 4px; }
 @container (max-width: 760px) { .huddle-side { width: 230px; } }
 @media (max-width: 900px) { .huddle-body { flex-direction: column; } .huddle-side { width: auto; border-left: 0; border-top: 1px solid var(--border); max-height: 40%; } }
+.hn-acts .link-btn.danger { color: var(--err); }

@@ -15,6 +15,7 @@ import { SnippetError, Snippets } from "./snippets";
 import { QuestionError, Questions } from "./questions";
 import { HuddleError, Huddles, type Caller } from "./huddle";
 import { HUDDLE_HEADER, SOURCE_HEADER } from "./huddle-roster";
+import { NOTES_CAP } from "./huddle-notes";
 import { ticketAttention, userWaitReason } from "./attention";
 import { isComplete, MAX_RETRIES, planActive } from "./plan";
 import { BugReportError, draftReport, submitReport, type BugBlockId, type BugSource, type GhRunner } from "./bugreport";
@@ -654,6 +655,15 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
 
+    // /profiles/:p/huddle-notes[/:role/:scope] — role notes from past huddles (huddle-notes.ts). Anyone reads; only the
+    // user writes them, so no agent can change what future agents are told.
+    if (parts[2] === "huddle-notes") {
+      if (parts.length === 3 && m === "GET") return json({ notes: huddles.notes(slug), cap: NOTES_CAP });
+      if (req.headers.get(RUN_HEADER) || req.headers.get(HUDDLE_HEADER)) throw new HttpError(403, "only the user changes huddle role notes (board settings)");
+      if (parts.length === 5 && m === "PUT") return json(huddles.setNotes(slug, parts[3], parts[4], (await body(req))?.notes));
+      throw new HttpError(404, "not found");
+    }
+
     // /profiles/:p/huddles — shared rooms where several Claude sessions work on a ticket (see huddle.ts)
     if (parts[2] === "huddles") return huddleApi(req, url, slug, parts.slice(3));
 
@@ -1022,7 +1032,7 @@ export function createServer(deps: ServerDeps) {
     if (m === "POST" && action === "messages" && !handle) {
       const b = await body(req);
       const kind = b.kind === "finding" ? "finding" : "message";
-      const status = b.status ? { status: b.status, reason: typeof b.reason === "string" ? b.reason : undefined } : undefined;
+      const status = b.status ? { status: b.status, reason: typeof b.reason === "string" ? b.reason : undefined, lessons: b.lessons } : undefined;
       const src = req.headers.get(SOURCE_HEADER);
       return json(huddles.post(slug, h.id, me, String(b.text ?? ""), kind, status, src === "ui" || src === "mcp" ? src : "none"), 201);
     }
@@ -1034,7 +1044,7 @@ export function createServer(deps: ServerDeps) {
     // A participant's own status: done, blocked (reason) or active again.
     if (m === "POST" && action === "status" && !handle) {
       const b = await body(req);
-      const { token: _t, ...p } = huddles.setStatus(slug, h.id, me, b.status, typeof b.reason === "string" ? b.reason : undefined);
+      const { token: _t, ...p } = huddles.setStatus(slug, h.id, me, b.status, typeof b.reason === "string" ? b.reason : undefined, b.lessons);
       return json(p);
     }
     // @main or a lead asks the user to close the huddle (only the user closes it).
@@ -1076,6 +1086,23 @@ export function createServer(deps: ServerDeps) {
       userOnly("mark the huddle seen");
       const b = await body(req);
       return json(huddles.view(slug, huddles.markSeen(slug, h.id, Number(b?.seq))));
+    }
+    // Lessons agents proposed: only the user edits, saves (as role notes) or discards them.
+    if (action === "learnings" && handle) {
+      userOnly("save, edit or discard learnings");
+      if (m === "POST" && sub === "discard") return json(huddles.discardLearning(slug, h.id, handle));
+      const patch = async () => {
+        const raw = await req.text();
+        let b: any = {};
+        try {
+          if (raw.trim()) b = JSON.parse(raw) ?? {};
+        } catch {
+          throw new HttpError(400, "invalid JSON body");
+        }
+        return { text: b.text, scope: b.scope, target: b.target };
+      };
+      if (m === "PATCH" && !sub) return json(huddles.editLearning(slug, h.id, handle, await patch()));
+      if (m === "POST" && sub === "save") return json(huddles.saveLearning(slug, h.id, handle, await patch()));
     }
     if (m === "POST" && action === "invite" && !handle) {
       const b = await body(req);

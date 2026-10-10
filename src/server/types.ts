@@ -369,9 +369,30 @@ export interface Huddle {
   brief?: { text: string; by: string; at: string } | null;
   /** Template the huddle was started from (see huddle-templates.ts). */
   template?: string | null;
+  /** Lessons agents proposed when they turned done; only the user saves them as role notes (see huddle-notes.ts). */
+  learnings?: HuddleLearning[];
   createdAt: string;
   updatedAt: string;
   closedAt?: string | null;
+}
+
+/**
+ * A lesson an agent proposed with huddle_status done. target: where it goes when saved, "_all" (every role), a preset
+ * name, or "new" (a new board preset made from the agent's ad-hoc role); once saved, the preset it went to.
+ */
+export interface HuddleLearning {
+  id: string;
+  from: string;
+  role: string;
+  preset: string | null;
+  text: string;
+  evidence: string;
+  scope: "general" | "repo";
+  status: "pending" | "saved" | "discarded";
+  target: string;
+  at: string;
+  /** Saved as the first note of a new preset made from the ad-hoc role. */
+  newRole?: boolean;
 }
 
 export type HuddleMessageKind = "message" | "finding" | "system";

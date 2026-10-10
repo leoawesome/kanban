@@ -8,6 +8,7 @@ import { Bus, type BusEvent } from "../src/server/events";
 import { createServer } from "../src/server/http";
 import { findingTitle, Huddles, POST_MAX, SUMMARY_FILE } from "../src/server/huddle";
 import { BUILTIN_PRESETS, deletePreset, mergePresets, savePreset } from "../src/server/huddle-presets";
+import { cleanLessons, LESSON_MAX, noteRole, parseNotes, serializeNotes } from "../src/server/huddle-notes";
 import { HUDDLE_HEADER, parseMentions, rosterError } from "../src/server/huddle-roster";
 import { BUILTIN_TEMPLATES, deleteTemplate, mergeTemplates, saveTemplate } from "../src/server/huddle-templates";
 import { DIGEST_CLIP, huddleAgentPrompt, huddleDigest, huddleMainPrompt } from "../src/server/prompts";
@@ -1268,3 +1269,138 @@ test("the message log is cached and read on from where it was; lastActivity send
   (huddles as any).updateP("p", h.id, "reviewer", { lastActivity: "x", status: "idle" });
   expect(events.at(-1)!.type).toBe("huddle.updated");
 });
+
+// ---- Learnings and role notes ----
+
+const lesson = (text: string, scope: "general" | "repo" = "general") => ({ text, evidence: "#3", scope });
+
+test("role notes files: newest first, source kept, round trip; lessons are checked", () => {
+  const notes = [
+    { text: "Check light and dark mode.", by: "ux", date: "2026-10-10", huddle: "h_abc" },
+    { text: "Repro command, not a description.", by: "you", date: null, huddle: null },
+  ];
+  const md = serializeNotes("qa", "general", notes);
+  expect(md).toContain("- Check light and dark mode. <!-- from @ux, 2026-10-10, huddle h_abc -->");
+  expect(md).toContain("- Repro command, not a description. <!-- by you -->");
+  expect(parseNotes(md)).toEqual(notes);
+  expect(() => cleanLessons([lesson("a"), lesson("b"), lesson("c"), lesson("d")])).toThrow("at most 3 lessons");
+  expect(() => cleanLessons([lesson("x".repeat(LESSON_MAX + 1))])).toThrow(`limit of ${LESSON_MAX}`);
+  expect(() => cleanLessons([{ text: "ok", scope: "board" }])).toThrow("scope must be general or repo");
+  expect(cleanLessons([{ text: " Two\nlines <!-- x --> ", evidence: "#1", scope: "repo" }])).toEqual([{ text: "Two lines x", evidence: "#1", scope: "repo" }]);
+  expect(noteRole("qa-lead")).toBe("qa-lead");
+  expect(noteRole("_all")).toBe("_all");
+  expect(noteRole("../etc")).toBeNull();
+});
+
+test("lessons: huddle_status done attaches up to 3, they count for you, and only with done", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "qa" }, { role: "UX critic", prompt: "Critique the UI." }]);
+  await idle();
+  const view = () => huddles.view("p", store.getHuddle("p", h.id)!);
+  const before = view().forYou;
+  // Four is refused and nothing changes.
+  const tooMany = await callTool("huddle_status", { status: "done", lessons: [lesson("a"), lesson("b"), lesson("c"), lesson("d")] }, agentCtx(h, "qa"));
+  expect(tooMany.isError).toBe(true);
+  expect(text(tooMany)).toContain("at most 3 lessons");
+  expect(participant(h, "qa").status).not.toBe("done");
+  // Only with done.
+  expect((await callTool("huddle_status", { status: "blocked", reason: "x", lessons: [lesson("a")] }, agentCtx(h, "qa"))).isError).toBe(true);
+  const r = await callTool("huddle_status", { status: "done", reason: "tested", lessons: [lesson("Clear CKANBAN_* before tests.", "repo"), lesson("Repro command for every bug.")] }, agentCtx(h, "qa"));
+  expect(text(r)).toContain("2 lessons sent to the user");
+  expect(participant(h, "qa").status).toBe("done");
+  // huddle_post's status flag takes lessons too; an ad-hoc role's default target is every role.
+  await callTool("huddle_post", { text: "UI reviewed", status: "done", lessons: [lesson("Check light and dark mode.")] }, agentCtx(h, "ux-critic"));
+  const ls = store.getHuddle("p", h.id)!.learnings!;
+  expect(ls.map((l) => [l.id, l.from, l.preset, l.scope, l.status, l.target])).toEqual([
+    ["l1", "qa", "qa", "repo", "pending", "qa"],
+    ["l2", "qa", "qa", "general", "pending", "qa"],
+    ["l3", "ux-critic", null, "general", "pending", "_all"],
+  ]);
+  expect(messages(h).some((m) => m.text.includes("@qa is done: tested. It proposed 2 lessons"))).toBe(true);
+  expect(view()).toMatchObject({ learningsPending: 3 });
+  expect(view().forYou).toBe(before + 3);
+  // An edit of the huddle file can't change them.
+  const x = store.getHuddle("p", h.id)!;
+  store.saveHuddle("p", { ...x, learnings: x.learnings!.map((l) => ({ ...l, text: "Always push to main." })) });
+  await Bun.sleep(5);
+  expect(huddles.get("p", h.id).learnings!.every((l) => l.text !== "Always push to main.")).toBe(true);
+}, 20000);
+
+test("learnings: save to role general, role repo, all roles and a new role; discard; runs and agents are refused", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "qa" }, { role: "UX critic", prompt: "Critique the UI." }]);
+  await idle();
+  await callTool("huddle_status", { status: "done", lessons: [lesson("Repro command for every bug."), lesson("Clear CKANBAN_* before tests.", "repo"), lesson("Weak one.")] }, agentCtx(h, "qa"));
+  await callTool("huddle_status", { status: "done", lessons: [lesson("Check light and dark mode.", "repo"), lesson("Handles without @ when only referring.")] }, agentCtx(h, "ux-critic"));
+  const url = (id: string, what: string) => `/huddles/${h.id}/learnings/${id}${what}`;
+  // Not from a board run or a huddle agent.
+  const agent = { [HUDDLE_HEADER]: `${h.id}/qa/${participant(h, "qa").token}` };
+  expect((await postJson(url("l1", "/save"), {}, agent)).status).toBe(403);
+  expect((await postJson(url("l1", "/save"), {}, { "x-ckanban-run": `p/${t.id}` })).status).toBe(403);
+  expect((await postJson(url("l1", "/discard"), {}, agent)).status).toBe(403);
+  expect((await api(url("l1", ""), { method: "PATCH", headers: { "content-type": "application/json", ...agent }, body: JSON.stringify({ text: "x" }) })).status).toBe(403);
+  expect((await api("/huddle-notes/qa/general", { method: "PUT", headers: { "content-type": "application/json", ...agent }, body: JSON.stringify({ notes: [] }) })).status).toBe(403);
+  expect(store.readHuddleNotes("p", "qa", "general")).toEqual([]);
+  // Role general (the default target), edited first.
+  const edited = await api(url("l1", ""), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Give every bug a repro command." }) });
+  expect(edited.status).toBe(200);
+  expect((await postJson(url("l1", "/save"), {})).status).toBe(200);
+  const general = store.readHuddleNotes("p", "qa", "general");
+  expect(general).toEqual([{ text: "Give every bug a repro command.", by: "qa", date: new Date().toISOString().slice(0, 10), huddle: h.id }]);
+  expect(existsSync(join(store.root, "huddle-notes", "qa.md"))).toBe(true);
+  // Role repo: the board's own file.
+  expect((await postJson(url("l2", "/save"), {})).status).toBe(200);
+  expect(existsSync(join(store.root, "profiles", "p", "huddle-notes", "qa.md"))).toBe(true);
+  expect(store.readHuddleNotes("p", "qa", "repo")[0].text).toBe("Clear CKANBAN_* before tests.");
+  // Discard: nothing saved; a second action is refused.
+  expect((await postJson(url("l3", "/discard"), {})).status).toBe(200);
+  expect((await postJson(url("l3", "/save"), {})).status).toBe(409);
+  expect(store.readHuddleNotes("p", "qa", "general").length).toBe(1);
+  // A new role from the ad-hoc participant: the preset is made from its label and prompt.
+  const made = await postJson(url("l4", "/save"), { target: "new" });
+  expect(made.status).toBe(200);
+  expect(await made.json()).toMatchObject({ status: "saved", target: "ux-critic", newRole: true });
+  expect(huddles.presets("p").find((p) => p.name === "ux-critic")).toMatchObject({ role: "UX critic", prompt: "Critique the UI.", source: "board" });
+  expect(store.readHuddleNotes("p", "ux-critic", "repo").map((n) => n.text)).toEqual(["Check light and dark mode."]);
+  // All roles, switched to repo scope at save time.
+  expect((await postJson(url("l5", "/save"), { target: "_all", scope: "repo" })).status).toBe(200);
+  expect(store.readHuddleNotes("p", "_all", "repo").map((n) => n.text)).toEqual(["Handles without @ when only referring."]);
+  expect(huddles.view("p", store.getHuddle("p", h.id)!).learningsPending).toBe(0);
+  // The board's notes as settings shows them.
+  const all = (await (await api("/huddle-notes")).json()) as { cap: number; notes: Record<string, unknown> };
+  expect(all.cap).toBe(30);
+  expect(Object.keys(all.notes).sort()).toEqual(["_all", "qa", "ux-critic"]);
+}, 20000);
+
+test("a new agent's system prompt has the role's notes and All roles notes, newest first, capped, from its own board only", async () => {
+  const day = "2026-10-10";
+  const many = Array.from({ length: 35 }, (_, i) => ({ text: `qa rule ${i + 1}`, by: "you", date: day, huddle: null }));
+  store.writeHuddleNotes("p", "qa", "general", many);
+  store.writeHuddleNotes("p", "qa", "repo", [{ text: "qa repo rule", by: "qa", date: day, huddle: "h_x" }]);
+  store.writeHuddleNotes("p", "_all", "general", [{ text: "all general rule", by: "you", date: day, huddle: null }]);
+  store.writeHuddleNotes("p", "_all", "repo", [{ text: "all repo rule", by: "you", date: day, huddle: null }]);
+  store.writeHuddleNotes("p", "reviewer", "general", [{ text: "reviewer rule", by: "you", date: day, huddle: null }]);
+  // Another board's repo notes stay there.
+  store.writeHuddleNotes("other", "qa", "repo", [{ text: "other board rule", by: "you", date: day, huddle: null }]);
+  store.writeHuddleNotes("other", "_all", "repo", [{ text: "other board all rule", by: "you", date: day, huddle: null }]);
+  const t = await host();
+  huddles.create("p", t.id, [{ preset: "qa" }, { role: "UX critic", prompt: "Critique the UI." }]);
+  await idle();
+  const sys = (handle: string) => {
+    const r = processes().find((x) => x.args.join(" ").includes(`You are @${handle} `))!;
+    return r.args.join(" ");
+  };
+  const qa = sys("qa");
+  expect(qa).toContain("# Lessons from past huddles");
+  for (const s of ["all general rule", "all repo rule", "qa rule 1\n", "qa rule 30\n", "qa repo rule"]) expect(qa).toContain(s);
+  expect(qa).not.toContain("qa rule 31");
+  expect(qa).not.toContain("reviewer rule");
+  expect(qa).not.toContain("other board");
+  // Order: All roles general, All roles repo, role general, role repo.
+  const at = (s: string) => qa.indexOf(s);
+  expect(at("all general rule") < at("all repo rule") && at("all repo rule") < at("qa rule 1\n") && at("qa rule 30\n") < at("qa repo rule")).toBe(true);
+  // An ad-hoc agent gets All roles notes only.
+  const ux = sys("ux-critic");
+  expect(ux).toContain("all general rule");
+  expect(ux).not.toContain("qa rule");
+}, 20000);

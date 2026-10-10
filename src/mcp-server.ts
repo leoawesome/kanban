@@ -659,6 +659,24 @@ export function huddlePageText(p: HuddlePage, since?: number): string {
   return lines.join("\n");
 }
 
+/** Lessons an agent may propose when it turns done (huddle-notes.ts); the user alone saves them as role notes. */
+const LESSONS = {
+  type: "array",
+  maxItems: 3,
+  description:
+    "Optional, with status done: up to 3 lessons worth reusing in future huddles of your role. Each is a short rule (max 200 characters), " +
+    "with evidence (a message #n or a file) and scope general (any repo) or repo (this repo only). The user reviews them; only the user saves them. None is fine.",
+  items: {
+    type: "object",
+    properties: {
+      text: { type: "string", description: "The rule, e.g. \"Check UI changes in light and dark mode.\"" },
+      evidence: { type: "string", description: "Why: a message #n or a file." },
+      scope: { type: "string", enum: ["general", "repo"] },
+    },
+    required: ["text", "evidence", "scope"],
+  },
+};
+
 const HUDDLE_TOOLS: Tool[] = [
   {
     name: "huddle_post",
@@ -674,6 +692,7 @@ const HUDDLE_TOOLS: Tool[] = [
         kind: { type: "string", enum: ["message", "finding"], description: "Default message." },
         status: { type: "string", enum: ["done", "blocked"], description: "Optional: with this message you are done (your job is finished) or blocked (give reason). Same as huddle_status." },
         reason: { type: "string", description: "status: why (required for blocked)." },
+        lessons: LESSONS,
         huddle: HUDDLE, profile: PROFILE,
       },
       required: ["text"],
@@ -682,7 +701,7 @@ const HUDDLE_TOOLS: Tool[] = [
     allowInRun: true,
     async run(args, ctx) {
       const slug = await slugFor(args, ctx);
-      const status = args?.status === "done" || args?.status === "blocked" ? { status: args.status, reason: str(args, "reason", false) } : undefined;
+      const status = args?.status === "done" || args?.status === "blocked" ? { status: args.status, reason: str(args, "reason", false), ...(args?.lessons ? { lessons: args.lessons } : {}) } : undefined;
       const m = await ctx.client.huddlePost(slug, huddleId(args, ctx), str(args, "text")!, args?.kind === "finding" ? "finding" : "message", huddleCaller(ctx.env), status);
       return `Posted #${m.seq} as @${m.from}${m.mentions.length ? `; woke ${m.mentions.map((x) => `@${x}`).join(", ")}` : ""}.${status ? ` You are now ${status.status}.` : ""}`;
     },
@@ -697,6 +716,7 @@ const HUDDLE_TOOLS: Tool[] = [
       properties: {
         status: { type: "string", enum: ["done", "blocked", "active"] },
         reason: { type: "string", description: "What you finished, or what blocks you (required for blocked)." },
+        lessons: LESSONS,
         huddle: HUDDLE, profile: PROFILE,
       },
       required: ["status"],
@@ -707,8 +727,10 @@ const HUDDLE_TOOLS: Tool[] = [
       const status = args?.status === "done" || args?.status === "blocked" || args?.status === "active" ? args.status : null;
       if (!status) throw new ClientError("status must be done, blocked or active");
       const slug = await slugFor(args, ctx);
-      const p = await ctx.client.huddleStatus(slug, huddleId(args, ctx), status, str(args, "reason", false), huddleCaller(ctx.env));
-      return `@${p.handle} is now ${p.status}${p.statusReason ? ` (${p.statusReason})` : ""}.`;
+      const lessons = Array.isArray(args?.lessons) ? args.lessons : undefined;
+      const p = await ctx.client.huddleStatus(slug, huddleId(args, ctx), status, str(args, "reason", false), huddleCaller(ctx.env), lessons);
+      const n = lessons?.length ?? 0;
+      return `@${p.handle} is now ${p.status}${p.statusReason ? ` (${p.statusReason})` : ""}.${n ? ` ${n} lesson${n === 1 ? "" : "s"} sent to the user for review.` : ""}`;
     },
   },
   {

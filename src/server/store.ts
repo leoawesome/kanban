@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import { cleanPresets, type HuddlePreset } from "./huddle-presets";
 import { cleanTemplates, type HuddleTemplate } from "./huddle-templates";
+import { type HuddleNote, type NoteScope, parseNotes, serializeNotes } from "./huddle-notes";
 import { newId, newTicketId, nowIso } from "./util";
 
 const DEFAULT_CONFIG: Config = { port: 7777, prPollMinutes: 5 };
@@ -339,6 +340,27 @@ export class Store {
 
   saveHuddleTemplates(slug: string, ts: HuddleTemplate[]): void {
     atomicWrite(join(this.profileDir(slug), "huddle-templates.json"), JSON.stringify(ts, null, 2) + "\n");
+  }
+
+  /** A role's notes file: general ones are global (<home>/huddle-notes), repo ones the board's. role: "_all" or a preset name. */
+  huddleNotesPath(slug: string, role: string, scope: NoteScope): string {
+    return join(scope === "general" ? this.root : this.profileDir(slug), "huddle-notes", `${role}.md`);
+  }
+
+  /** A role's notes, newest first. */
+  readHuddleNotes(slug: string, role: string, scope: NoteScope): HuddleNote[] {
+    const file = this.huddleNotesPath(slug, role, scope);
+    return existsSync(file) ? parseNotes(readFileSync(file, "utf8")) : [];
+  }
+
+  writeHuddleNotes(slug: string, role: string, scope: NoteScope, notes: HuddleNote[]): void {
+    atomicWrite(this.huddleNotesPath(slug, role, scope), serializeNotes(role, scope, notes));
+  }
+
+  /** Roles with a notes file (general or this board's repo notes). */
+  huddleNoteRoles(slug: string): string[] {
+    const names = (dir: string) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)) : []);
+    return [...new Set([...names(join(this.root, "huddle-notes")), ...names(join(this.profileDir(slug), "huddle-notes"))])].sort();
   }
 
   private huddlesDir(slug: string) {

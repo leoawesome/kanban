@@ -437,8 +437,13 @@ const HUDDLE_TOOLS = `- \`huddle_post\`: post a message. Tag who should act with
 - \`huddle_close\`: leads and @main, once the work is done: write outputs/huddle-summary.md in the host ticket's outputs first; it asks the user, who alone closes the huddle.
 (ckanban MCP tools; if they are deferred, load them with ToolSearch first.)`;
 
-/** System prompt of a huddle agent's run: who it is, the room's rules, and what it may change. */
-export function huddleAgentSystemPrompt(h: Huddle, p: HuddleParticipant, host: Ticket, outputDir: string, workdir: string, baseBranch?: string): string {
+/**
+ * System prompt of a huddle agent's run: who it is, the room's rules, and what it may change. lessons: the notes the
+ * user saved from past huddles for this role (see lessonsSection), "" when there are none.
+ */
+export function huddleAgentSystemPrompt(
+  h: Huddle, p: HuddleParticipant, host: Ticket, outputDir: string, workdir: string, baseBranch?: string, lessons = "",
+): string {
   const snap = p.snapshot;
   const edit = p.canEdit
     ? `You work in your own git worktree (${workdir}) on branch ${p.branch ?? "(your branch)"}: edit and commit there. Never push to or edit the host ticket's worktree.`
@@ -462,6 +467,7 @@ ${p.prompt}${p.focus ? `\n\nFocus: ${p.focus}` : ""}
 - When a lead asks several of you to agree on something, the owner the lead named posts it; the others reply only to object.
 - Stay in your focus. If someone already said what you would, +1 it by number (e.g. "+1 #12") instead of repeating it.
 - Don't tag @main for small things; leads collect findings and send @main one consolidated list.
+- Lessons: when you turn done (\`huddle_status\` or \`huddle_post\` with status done), you may add \`lessons\`: up to 3 \`{text, evidence, scope}\` worth reusing in future huddles of your role. Write each as a short rule (max 200 characters), give evidence (a message #n or a file), and set scope general (any repo) or repo (only this one). The user reviews them and alone decides what future agents are told; none is fine, and better than a weak one.
 
 ## Tools
 ${HUDDLE_TOOLS}
@@ -469,7 +475,7 @@ ${HUDDLE_TOOLS}
 ## Participants
 ${rosterLines(h)}
 
-Huddle id: ${h.id}. Working folder: ${workdir}`;
+${lessons ? `${lessons}\n\n` : ""}Huddle id: ${h.id}. Working folder: ${workdir}`;
 }
 
 /** First message of a huddle agent's run, or the messages that woke it. */
