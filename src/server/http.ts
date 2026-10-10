@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, normalize } from "node:path";
 import { runArtifactJob, type ArtifactJob, type ArtifactOutcome } from "./artifact";
-import { ConflictError, type Board } from "./board";
+import { ConflictError, recoveryFor, type Board } from "./board";
 import { claudeDefaults, listClaudeProjects, listSessions, liveSessionMatch, pickFolder, processCommands } from "./claude";
 import type { Bus, BusEvent } from "./events";
 import { listCommands } from "./commands";
@@ -221,6 +221,8 @@ export function createServer(deps: ServerDeps) {
       canCopyFile: canCopyFile() || !!process.env.CKANBAN_OSASCRIPT_BIN,
       /** Linked session is open in a terminal right now (board chat still works, UI warns). */
       terminalOpen: deps.terminals?.isOpen(p.slug, t.id) ?? false,
+      /** The last run's error has a one-click fix (Start fresh session / Take over here). */
+      recovery: running ? null : recoveryFor(t.error),
       /** Ticket.needs: holds them now, or which ones another ticket holds while this one would start. */
       resources: board.resourceState(p.slug, t),
       /** A plan child waiting on the user (never started by the plan until then). */
@@ -974,6 +976,18 @@ export function createServer(deps: ServerDeps) {
       try {
         const r = await board.branchTicket(slug, id);
         return json({ ticket: view(profile, r.ticket), warning: r.warning }, 201);
+      } catch (e) {
+        if (e instanceof ConflictError) throw e;
+        throw new HttpError(400, (e as Error).message);
+      }
+    }
+    // One-click recovery: the session is gone (fresh-session) or open in a terminal (take-over). The user's call.
+    if (m === "POST" && (action === "fresh-session" || action === "take-over")) {
+      if (req.headers.get(RUN_HEADER)) throw new HttpError(403, "session recovery is the user's call, not a run's");
+      try {
+        if (action === "fresh-session") return json({ ticket: view(profile, board.startFresh(slug, id)), external: false });
+        const r = await board.takeOver(slug, id);
+        return json({ ticket: view(profile, r.ticket), external: r.external });
       } catch (e) {
         if (e instanceof ConflictError) throw e;
         throw new HttpError(400, (e as Error).message);

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { mcpConfig } from "./agents";
 import { helperArgv } from "./artifact";
+import { liveSessionMatch } from "./claude";
+import { run } from "./git";
 import { withUtf8Locale } from "./locale";
 
 /** Bun ≥ 1.3.5 can spawn processes on a pseudo-terminal (`Bun.spawn({ terminal })`). */
@@ -80,6 +83,10 @@ export class Shell {
     return this.exitCode !== undefined;
   }
 
+  get pid(): number {
+    return this.proc.pid;
+  }
+
   /** Recent output, oldest first. */
   scrollback(): Uint8Array {
     const out = new Uint8Array(this.bytes);
@@ -119,6 +126,84 @@ export class Shell {
     } catch {}
     this.proc.terminal?.close();
   }
+}
+
+/** One row of the process table. */
+export interface ProcRow {
+  pid: number;
+  ppid: number;
+  args: string;
+}
+
+export async function processTable(): Promise<ProcRow[]> {
+  const r = await run(["ps", "-axo", "pid=,ppid=,args="], homedir());
+  if (r.code !== 0) return [];
+  return r.stdout.split("\n").flatMap((line) => {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), args: m[3] }] : [];
+  });
+}
+
+/** The claude process with this session open that runs under one of `roots` (itself or a descendant), if any. */
+export function sessionProcessUnder(rows: ProcRow[], roots: number[], sessionId: string): ProcRow | null {
+  const parent = new Map(rows.map((r) => [r.pid, r.ppid]));
+  const under = (pid: number) => {
+    for (let p: number | undefined = pid, hops = 0; p && hops < 64; p = parent.get(p), hops++) if (roots.includes(p)) return true;
+    return false;
+  };
+  return rows.find((r) => liveSessionMatch([r.args], { id: sessionId, title: null }) && under(r.pid)) ?? null;
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Waits until `pid` is gone; false after `ms`. */
+async function exitedWithin(pid: number, ms: number, isAlive: (pid: number) => boolean): Promise<boolean> {
+  const until = Date.now() + ms;
+  while (isAlive(pid)) {
+    if (Date.now() >= until) return false;
+    await Bun.sleep(100);
+  }
+  return true;
+}
+
+/** A ticket's Claude session open in one of the board's own PTYs (the dock terminal). */
+export interface OwnedSession {
+  pid: number;
+  /** Ends it gracefully (/exit), then by signal after a timeout. True once the process is gone. */
+  close(): Promise<boolean>;
+}
+
+export interface CloseOptions {
+  /** How long /exit gets before SIGTERM (and SIGTERM before SIGKILL). */
+  graceMs?: number;
+  isAlive?: (pid: number) => boolean;
+  signal?: (pid: number, sig: NodeJS.Signals) => void;
+}
+
+/** Types /exit into Claude's prompt in the PTY, then signals the process if it is still there. */
+export async function closeSession(shell: Pick<Shell, "write">, pid: number, o: CloseOptions = {}): Promise<boolean> {
+  const grace = o.graceMs ?? 5000;
+  const isAlive = o.isAlive ?? alive;
+  const signal = o.signal ?? ((p, sig) => process.kill(p, sig));
+  // Ctrl+U clears anything typed in Claude's prompt; Enter goes separately so it isn't taken as part of a paste.
+  shell.write("\x15/exit");
+  await Bun.sleep(150);
+  shell.write("\r");
+  if (await exitedWithin(pid, grace, isAlive)) return true;
+  for (const sig of ["SIGTERM", "SIGKILL"] as const) {
+    try {
+      signal(pid, sig);
+    } catch {}
+    if (await exitedWithin(pid, sig === "SIGTERM" ? grace : 1000, isAlive)) return true;
+  }
+  return false;
 }
 
 export interface SpawnRequest {
@@ -187,6 +272,18 @@ export class ShellManager {
       this.shells.get(this.key(slug, k))?.kill();
       this.shells.delete(this.key(slug, k));
     }
+  }
+
+  /** A Claude session running in one of the board's PTYs (e.g. `claude --resume <id>` typed into the dock shell). */
+  async findSession(sessionId: string, procs: () => Promise<ProcRow[]> = processTable): Promise<OwnedSession | null> {
+    const live = [...this.shells.values()].filter((s) => !s.exited);
+    if (!live.length) return null;
+    const rows = await procs();
+    for (const s of live) {
+      const p = sessionProcessUnder(rows, [s.pid], sessionId);
+      if (p) return { pid: p.pid, close: () => closeSession(s, p.pid) };
+    }
+    return null;
   }
 
   killAll() {

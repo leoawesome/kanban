@@ -11,7 +11,7 @@ import { forkSessionFile } from "./fork";
 import { saveMockups } from "./mockups";
 import { type HostHuddle, ticketAttention, userWaitReason } from "./attention";
 import type { SessionSummary } from "./session";
-import { chatPrompt, firstRunPrompt, interruptedPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
+import { chatPrompt, firstRunPrompt, freshSessionPrompt, interruptedPrompt, orchestratorPrompt, planningCommand, planningPrompt, resumePrompt, steerPrompt, type ChatMode, type PlanWake } from "./prompts";
 import {
   childrenOf, DEFAULT_MAX_CONCURRENT, findCycle, isComplete, normalizeNeeds, planActive, planProblem, planStep, planTable, resolveDeps, wakeupCap,
 } from "./plan";
@@ -21,6 +21,7 @@ import { DraftTracker } from "./draft";
 import { buildArgs, startRun, type RunHandle } from "./runner";
 import { BOARD_COMMANDS, commandText, listCommands, MODEL_HELP, parseSlash, REFUSED_COMMANDS, rememberInit, slashMessage, useBundledFile, validModel, type SlashCommand } from "./commands";
 import { mcpConfig } from "./agents";
+import type { OwnedSession } from "./shell";
 import type { Store } from "./store";
 import type { Interrupted, Plan, PrStatus, Profile, QueuedMessage, Status, Ticket, TicketMode } from "./types";
 import { CLEANUP_TIMEOUT_MS, prepareWorktree, runShell, withSetup, type SetupResult } from "./worktree-setup";
@@ -32,6 +33,8 @@ export interface BoardOptions {
   sessionExists?: (sessionId: string) => boolean;
   /** Whether an interactive claude process currently has this session open. */
   isSessionLive?: (sessionId: string, title: string | null) => Promise<boolean>;
+  /** The ticket's session open in one of the board's own terminals (the dock), which the board can close (Take over here). */
+  findOwnedSession?: (sessionId: string) => Promise<OwnedSession | null>;
   /** Tells the user something needs them while they're away (default: a macOS notification). */
   notify?: (title: string, body: string) => void;
   /** Child events that arrive within this window wake the planner once (default 3s). */
@@ -150,6 +153,21 @@ export function sessionMissing(error: string, events: any[]): boolean {
   const re = /No conversation found with session ID/i;
   return re.test(error) || events.some((e) => e?.type === "result" && Array.isArray(e.errors) && e.errors.some((m: unknown) => typeof m === "string" && re.test(m)));
 }
+
+export const SESSION_OPEN_MSG = "This ticket's Claude session is still open in a terminal. Exit it there (Ctrl+D or /exit), then try again.";
+
+/** Run errors the board offers a one-click fix for: Start fresh session, or Take over here. */
+export type Recovery = "session_missing" | "session_open";
+
+export function recoveryFor(error: string | null | undefined): Recovery | null {
+  if (!error) return null;
+  if (sessionMissing(error, [])) return "session_missing";
+  if (error === SESSION_OPEN_MSG) return "session_open";
+  return null;
+}
+
+/** Board comments that aren't Claude's result (a fresh session's prompt skips them for "Last result"). */
+const BOARD_NOTE_RE = /^(Run failed|Could not start|Run stopped|Planner stopped|Started a fresh session|Took over the session|This ticket's Claude session is still open)/;
 
 export class ConflictError extends Error {}
 
@@ -585,7 +603,7 @@ export class Board {
       const t0 = this.store.getTicket(slug, id)!;
       const title = t0.workdir ? sessionTitle(t0.workdir, session.sessionId) : null;
       if (await this.isSessionLive(session.sessionId, title)) {
-        const msg = "This ticket's Claude session is still open in a terminal. Exit it there (Ctrl+D or /exit), then try again.";
+        const msg = SESSION_OPEN_MSG;
         this.store.addComment(slug, id, "ai", msg);
         this.patch(slug, id, { ...this.endStatus(run), outcome: "blocked", error: msg, lastActivity: null });
         return;
@@ -605,10 +623,14 @@ export class Board {
     const runNo = t.runCount + 1;
     const newComments = this.store.listComments(slug, id).filter((c) => c.author === "user" && (!t.lastRunAt || c.at > t.lastRunAt));
     const outputDir = this.store.outputsDir(slug, id);
+    // Start fresh session: a work run in a new session that picks up from the branch (until that session exists).
+    const fresh = !!t.freshSession && !run.chat;
     let prompt = withSetup(localizeImages(run.chat?.raw
       ? run.chat.text
       : run.chat
       ? chatPrompt(t, run.chat.text, run.chat.mode, outputDir)
+      : fresh
+      ? this.freshPrompt(slug, t, session.isGit, outputDir)
       : t.runCount === 0 || !session.existed
       ? firstRunPrompt(t, {
         isGit: session.isGit, linked: !!t.workdir, comments: t.workdir || t.runCount > 0 ? newComments : [], outputDir,
@@ -715,6 +737,7 @@ export class Board {
     const base: Partial<Ticket> = {
       ...this.endStatus(run),
       sessionStarted: started,
+      ...(fresh && started ? { freshSession: false } : {}),
       ...(refine || quiet ? {} : { lastRunAt: startedAt, runCount: runNo }),
       lastActivity: pendingActivity ?? this.store.getTicket(slug, id)?.lastActivity ?? null,
     };
@@ -733,8 +756,10 @@ export class Board {
         this.patch(slug, id, { sessionId: crypto.randomUUID(), sessionStarted: false, error: null });
         return this.executeOnce(run, true);
       }
-      this.store.addComment(slug, id, "ai", `Run failed (exit ${out.code}): ${error.split("\n").slice(-3).join("\n")}`);
-      this.patch(slug, id, { ...base, outcome: "failed", error });
+      // Claude reports a lost session only in its result event: keep it in the error so the UI offers Start fresh session.
+      const shown = sessionMissing(error, out.events) && !sessionMissing(error, []) ? `No conversation found with session ID: ${session.sessionId}` : error;
+      this.store.addComment(slug, id, "ai", `Run failed (exit ${out.code}): ${shown.split("\n").slice(-3).join("\n")}`);
+      this.patch(slug, id, { ...base, outcome: "failed", error: shown });
       return;
     }
     if (refine || quiet) {
@@ -850,7 +875,7 @@ export class Board {
       dir: t.workdir ?? t.worktree ?? profile.path,
       sessionId,
       // Only a saved session can be resumed (a run stopped in its first second leaves none); a linked one is the user's.
-      existed: !!t.workdir || this.sessionExists(sessionId),
+      existed: (!!t.workdir && !t.freshSession) || this.sessionExists(sessionId),
       isGit,
     };
   }
@@ -1390,6 +1415,66 @@ export class Board {
       this.store.deleteTicket(slug, t.id);
       throw e;
     }
+  }
+
+  // ---- One-click recovery from a lost or busy session ----
+
+  /** The first prompt of a fresh session: ticket, last result, recent comments, and where to look for the work so far. */
+  private freshPrompt(slug: string, t: Ticket, isGit: boolean, outputDir: string): string {
+    const comments = this.store.listComments(slug, t.id);
+    const last = comments.findLast((c) => c.author === "ai" && !BOARD_NOTE_RE.test(c.text));
+    const recent = comments.filter((c) => !BOARD_NOTE_RE.test(c.text) && c !== last).slice(-10);
+    return freshSessionPrompt(t, {
+      isGit, linked: !!t.workdir, baseBranch: this.store.getProfile(slug)?.baseBranch || "main",
+      lastResult: last?.text ?? null, comments: recent, outputDir,
+    });
+  }
+
+  /** Queues the ticket's work run: it starts now if a slot is free (dispatch), otherwise when one frees up. */
+  private requeue(slug: string, id: string): Ticket {
+    this.patch(slug, id, { status: "ready", outcome: null, error: null });
+    this.dispatch(slug);
+    return this.store.getTicket(slug, id)!;
+  }
+
+  private recoverable(slug: string, id: string): Ticket {
+    const t = this.store.getTicket(slug, id);
+    if (!t) throw new Error(`ticket ${id} not found`);
+    if (t.error?.startsWith("corrupt")) throw new Error("ticket file is corrupt");
+    if (this.isRunning(slug, id)) throw new ConflictError("Claude is already working on this ticket");
+    return t;
+  }
+
+  /**
+   * Start fresh session: drops the ticket's Claude session (its conversation can't be resumed) but keeps the
+   * worktree and branch, then queues a work run whose prompt tells Claude to continue from the branch's state.
+   */
+  startFresh(slug: string, id: string): Ticket {
+    this.recoverable(slug, id);
+    this.patch(slug, id, { sessionId: crypto.randomUUID(), sessionStarted: false, freshSession: true });
+    this.store.addComment(slug, id, "ai", "Started a fresh session: the previous conversation is gone, so Claude continues from the ticket, its last result and the branch as it is now.");
+    return this.requeue(slug, id);
+  }
+
+  /**
+   * Take over here: the ticket's session is open in a terminal. If that's the board's own (dock) terminal, it is
+   * closed and the run resumes here; one in an external terminal can't be closed (external: the UI offers
+   * Start fresh session instead).
+   */
+  async takeOver(slug: string, id: string): Promise<{ ticket: Ticket; external: boolean }> {
+    const t = this.recoverable(slug, id);
+    if (t.sessionId) {
+      const owned = await this.opts.findOwnedSession?.(t.sessionId) ?? null;
+      if (owned) {
+        if (!(await owned.close())) throw new Error("Couldn't close the session in the board's terminal. Exit it there (Ctrl+D or /exit), then try again.");
+        this.store.addComment(slug, id, "ai", "Took over the session: closed it in the board's terminal and resumed the run here.");
+        return { ticket: this.requeue(slug, id), external: false };
+      }
+      const title = t.workdir ? sessionTitle(t.workdir, t.sessionId) : null;
+      if (await this.isSessionLive(t.sessionId, title)) return { ticket: t, external: true };
+    }
+    this.store.addComment(slug, id, "ai", "Took over the session: it was no longer open in a terminal, so the run resumed here.");
+    return { ticket: this.requeue(slug, id), external: false };
   }
 
   addComment(slug: string, id: string, text: string) {

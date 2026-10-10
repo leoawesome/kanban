@@ -148,6 +148,8 @@ body.show-hints .sortable-card:not(:focus) .key-hint.card-keys { display: none; 
 .banner.inline { border-radius: 8px; border: 0; margin: 0 20px 12px; cursor: default; display: block; }
 .banner.inline.load-error { margin: 0; }
 .banner.inline.notice { display: flex; align-items: flex-start; }
+.banner.inline.recovery { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.banner.inline.recovery > span:first-child { flex: 0 1 auto; }
 .banner.inline pre { margin: 0; white-space: pre-wrap; max-height: 140px; overflow: auto; }
 
 .empty { margin: auto; text-align: center; color: var(--muted); padding: 40px; }

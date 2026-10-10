@@ -171,6 +171,8 @@ export interface Ticket {
   running?: boolean;
   /** Linked session currently open in a terminal. */
   terminalOpen?: boolean;
+  /** The last run's error has a one-click fix: Start fresh session (session_missing) or Take over here (session_open). */
+  recovery?: "session_missing" | "session_open" | null;
   resumeCommand?: string | null;
   session?: SessionSummary | null;
   /** Why the ticket is waiting on you ("Your turn"), computed by the server. */
@@ -894,6 +896,9 @@ export const api = {
   quickChat: (slug: string) => req<QuickChat>("GET", `/api/profiles/${encodeURIComponent(slug)}/claude/session`),
   sessions: (slug: string) => req<ClaudeSession[]>("GET", `/api/profiles/${encodeURIComponent(slug)}/sessions`),
   branchTicket: (slug: string, id: string) => req<{ ticket: Ticket; warning: string | null }>("POST", `${t(slug, id)}/branch`),
+  /** external: the session is open in a terminal the board can't close (nothing changed). */
+  freshSession: (slug: string, id: string) => req<{ ticket: Ticket; external: boolean }>("POST", `${t(slug, id)}/fresh-session`),
+  takeOver: (slug: string, id: string) => req<{ ticket: Ticket; external: boolean }>("POST", `${t(slug, id)}/take-over`),
   linkSession: (slug: string, id: string, sessionId: string | null) =>
     req<Ticket>("POST", `${t(slug, id)}/link-session`, { sessionId }),
   outputs: (slug: string, id: string) => req<OutputFile[]>("GET", `${t(slug, id)}/outputs`),

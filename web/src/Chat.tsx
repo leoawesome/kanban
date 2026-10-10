@@ -19,6 +19,7 @@ import { NewTicketsCard } from "./NewTicketsCard";
 import { KeyHint } from "./KeyHint";
 import { ProposalCard } from "./ProposalCard";
 import { QuestionsForm } from "./QuestionsForm";
+import { RecoveryBanner } from "./RecoveryBanner";
 import { SetupRow } from "./SetupRow";
 import { useSnippetPicker } from "./SnippetPicker";
 import { useSlashCommands, useSlashPicker } from "./SlashPicker";
@@ -737,7 +738,8 @@ export function Chat({ slug, ticket, tickets, onOpenTicket, onOpenOutput, onErro
             )}
           </div>
         ))}
-        {!running && ticket.error && !ticket.error.startsWith("corrupt") && (
+        {!running && ticket.recovery && <RecoveryBanner slug={slug} ticket={ticket} onError={onError} />}
+        {!running && !ticket.recovery && ticket.error && !ticket.error.startsWith("corrupt") && (
           <div className="banner error inline"><pre>{ticket.error}</pre></div>
         )}
         {ticket.notice && (

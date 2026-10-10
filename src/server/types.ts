@@ -52,6 +52,8 @@ export interface Ticket {
   interviewed?: boolean;
   /** True once any claude run used this ticket's sessionId (so later runs must --resume). */
   sessionStarted?: boolean;
+  /** The next run starts a new session that picks up from the worktree (Start fresh session after a lost session). */
+  freshSession?: boolean;
   /** True once a refine conversation began (auto-start on entering Planning happens only once). */
   refineStarted?: boolean;
   order: number;

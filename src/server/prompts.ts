@@ -245,6 +245,60 @@ ${artifactRule()}
 ${RESULT_RULE}`);
 }
 
+/** Where a fresh session picks up: the old session is gone, the worktree and branch are not. */
+export interface FreshContext {
+  isGit: boolean;
+  /** Runs in the user's own folder (a linked session), not the ticket's worktree. */
+  linked: boolean;
+  baseBranch: string;
+  /** The last result Claude reported on this ticket, if any. */
+  lastResult: string | null;
+  /** Recent ticket comments, oldest first. */
+  comments: Comment[];
+  outputDir: string;
+}
+
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+
+/** First prompt of a new session on a ticket whose previous session can't be resumed (Start fresh session). */
+export function freshSessionPrompt(t: Ticket, ctx: FreshContext): string {
+  const comments = ctx.comments.length
+    ? ctx.comments.map((c) => `- ${c.author === "user" ? "User" : "Claude"} (${c.at.slice(0, 16).replace("T", " ")}): ${clip(c.text.trim(), 1500).replace(/\n/g, "\n  ")}`).join("\n")
+    : "- (none)";
+  const state = ctx.isGit
+    ? `Earlier work on this ticket is in ${ctx.linked ? "this folder" : "this worktree"}${ctx.linked ? "" : ` on its branch`}. Before doing anything else, see where it stands: \`git status\`, \`git log --oneline ${ctx.baseBranch}..HEAD\` and \`git diff ${ctx.baseBranch}...HEAD\` (and any uncommitted changes). Continue from that state; don't redo work that is already there.`
+    : `Earlier work on this ticket is in this folder (not a git repository). Look at the files before doing anything else and continue from their current state.`;
+  return context("Board started a fresh session on the ticket", `You are continuing a kanban ticket in a new Claude session: the previous session's conversation is no longer available, so you don't have its history. Pick up where it left off.
+
+# Ticket: ${t.title}
+
+${t.body.trim() || "(no description)"}
+
+# Last result
+${ctx.lastResult?.trim() || "(no result reported yet)"}
+
+# Recent comments
+${comments}
+
+# Where things stand
+${state}
+
+${t.mode === "interview" && !t.interviewed ? `${INTERVIEW.replace("In this first run:", "Before continuing, in this run:")}\n\n` : ""}# Rules
+- If it changes files and this is a git repo with a GitHub remote: commit your changes, push the branch and open a pull request with \`gh pr create\` (if one already exists, push new commits to the same branch to update it), and include the PR URL in the result line.${ctx.linked ? `
+- You are working in the main checkout of this project (not an isolated worktree): use a feature branch, never commit directly to the default branch.` : ""}
+- Update deliverables in ${ctx.outputDir} rather than creating duplicates.
+
+${PEERS_RULE}
+
+${CHROME_RULE}
+
+${targetDesignRule(ctx.outputDir)}${deliverableRule(ctx.outputDir)}
+
+${artifactRule()}
+
+${RESULT_RULE}`);
+}
+
 /** Ticket chats can file ckanban bugs on the user's request (report_bug tool or the CLI). */
 export function bugReportRule(t: Ticket): string {
   return `If the user asks to report a bug in ckanban itself (this board app, not their project): draft a title and a markdown description (what happened, numbered steps to reproduce, expected vs actual), show it and wait for their yes, then file it with the ckanban \`report_bug\` tool (ticketId "${t.id}") or \`${helperCommand()} ticket report-bug ${t.id} --title "<title>" --body-file -\` (description on stdin), and reply with the issue URL or the fallback link it prints.`;
