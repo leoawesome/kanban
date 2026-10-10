@@ -86,3 +86,86 @@ export function draftError(d: Draft<any, any>, max = DEFAULT_MAX): string | null
   if (draftSize(d) > max) return `That's ${draftSize(d)} participants with @main, over the limit of ${max}.`;
   return null;
 }
+
+// ---- Board: card badges and the dock's Huddles list ----
+
+interface BoardHuddleLike extends HuddleLike {
+  id: string;
+  hostTitle?: string | null;
+  seq: number;
+  updatedAt: string;
+  invited?: string[];
+  participants: (ParticipantLike & { ticketId?: string | null })[];
+}
+
+/** Tickets other than the host that take part (invited ticket sessions). */
+export function guestTickets(h: BoardHuddleLike): string[] {
+  const ids = new Set(h.invited ?? []);
+  for (const p of h.participants) if (p.ticketId) ids.add(p.ticketId);
+  ids.delete(h.hostTicket);
+  return [...ids];
+}
+
+/** The last part of a ticket id (t_20261009_k2pm: k2pm). */
+export const shortTicketId = (id: string) => id.split("_").pop() || id;
+
+export interface CardHuddleBadge {
+  huddleId: string;
+  /** The ticket whose Huddle tab the badge opens (the host's, for an invited ticket). */
+  openTicket: string;
+  label: string;
+  title: string;
+  state: "live" | "stopped" | "closed" | "guest";
+}
+
+/**
+ * What a card says about huddles: its own open huddle (`Huddle · 8 · 3 working`), else an open one it was
+ * invited to (`in huddle of k2pm`), else its newest closed one (`Huddle · closed · 31 msgs`).
+ */
+export function cardHuddleBadge(list: BoardHuddleLike[], ticketId: string): CardHuddleBadge | null {
+  const open = list.find((h) => h.hostTicket === ticketId && h.status !== "closed");
+  if (open) {
+    const agents = open.participants.filter((p) => p.kind !== "human");
+    const working = agents.filter((p) => p.status === "working").length;
+    const live = open.status === "live";
+    return {
+      huddleId: open.id, openTicket: ticketId, state: live ? "live" : "stopped",
+      label: `Huddle · ${agents.length} · ${live ? `${working} working` : "stopped"}`,
+      title: `${agents.length} in this ticket's huddle${live ? `, ${working} working` : ", stopped"}. Click to open it.`,
+    };
+  }
+  const guest = list.find((h) => h.status !== "closed" && h.hostTicket !== ticketId && guestTickets(h).includes(ticketId));
+  if (guest) {
+    return {
+      huddleId: guest.id, openTicket: guest.hostTicket, state: "guest",
+      label: `in huddle of ${shortTicketId(guest.hostTicket)}`,
+      title: `Invited to the huddle of ${guest.hostTitle ? `"${guest.hostTitle}"` : guest.hostTicket}. Click to open it.`,
+    };
+  }
+  const closed = pickHuddle(list, ticketId);
+  if (closed) {
+    return {
+      huddleId: closed.id, openTicket: ticketId, state: "closed",
+      label: `Huddle · closed · ${closed.seq} ${closed.seq === 1 ? "msg" : "msgs"}`,
+      title: "This ticket's huddle is closed. Click to read it.",
+    };
+  }
+  return null;
+}
+
+/** The dock's list: live first, then stopped, then closed; newest activity first within each. `limit` caps the closed ones. */
+export function sortHuddles<H extends BoardHuddleLike>(list: H[], limit = 20): H[] {
+  const rank = (h: H) => (h.status === "live" ? 0 : h.status === "stopped" ? 1 : 2);
+  const sorted = [...list].sort((a, b) => rank(a) - rank(b) || b.updatedAt.localeCompare(a.updatedAt));
+  const open = sorted.filter((h) => h.status !== "closed");
+  return [...open, ...sorted.filter((h) => h.status === "closed").slice(0, limit)];
+}
+
+/** Insert or replace a huddle by id (huddle.updated events). */
+export function upsertHuddle<H extends { id: string }>(list: H[], h: H): H[] {
+  const i = list.findIndex((x) => x.id === h.id);
+  if (i < 0) return [...list, h];
+  const next = list.slice();
+  next[i] = h;
+  return next;
+}

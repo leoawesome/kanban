@@ -232,6 +232,10 @@ body.show-hints .sortable-card:not(:focus) .key-hint.card-keys { display: none; 
 .badge.failed { background: var(--err-soft); color: var(--err); }
 .badge.stopped { background: var(--surface-2); color: var(--muted); }
 .badge.pr { background: var(--info-soft); color: var(--info); }
+button.badge.huddle { border: 0; font: inherit; font-size: 11px; font-weight: 560; cursor: pointer; background: var(--info-soft); color: var(--info); }
+button.badge.huddle:hover { filter: brightness(0.96); text-decoration: underline; }
+button.badge.huddle.closed { background: var(--surface-2); color: var(--muted); }
+.badge.huddle .live-dot { color: var(--ok); }
 .badge .spinner { width: 9px; height: 9px; border-width: 1.5px; flex: none; }
 .badge-time { font-weight: 450; opacity: 0.85; font-variant-numeric: tabular-nums; }
 
@@ -961,6 +965,19 @@ textarea.drop-target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--
 .dock-body { flex: 1; min-height: 0; position: relative; }
 .dock-pane { position: absolute; inset: 0; display: flex; }
 .dock-pane[hidden] { display: none; }
+.dock-huddles { flex: 1; overflow: auto; padding: 8px 14px; display: flex; flex-direction: column; gap: 6px; }
+.dock-huddles .empty { padding: 24px; font-size: 13px; }
+.huddle-row {
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto auto; gap: 14px; align-items: center; text-align: left;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.huddle-row:hover, .huddle-row:focus-visible { border-color: var(--accent); }
+.huddle-row .hr-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); justify-self: center; }
+.huddle-row.live .hr-dot { background: var(--ok); }
+.huddle-row.stopped .hr-dot { background: var(--warn); }
+.huddle-row .hr-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.huddle-row.closed .hr-title { font-weight: 500; }
+.huddle-row .hr-meta { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* Padding lives on the view, not the host: FitAddon sizes rows from the host's computed height, which includes padding under border-box. */
 .terminal-view { flex: 1; min-width: 0; position: relative; display: flex; padding: 6px 0 0 10px; }

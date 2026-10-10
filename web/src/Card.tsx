@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { safeHref, waitsForSlot, type Ticket } from "./api";
+import type { CardHuddleBadge } from "./huddleText";
 import { ClockIcon } from "./icons";
 import { KeyHint } from "./KeyHint";
 import { ResourceChip, resourceWait } from "./Needs";
@@ -38,8 +39,26 @@ export function outcomeBadge(t: Ticket) {
   }
 }
 
-/** queued: 1-based place in the queue for a free run slot (status `ready`, or a reply waiting for one). held: a pending daemon restart holds it. */
-export function Card({ ticket, onClick, dragging, queued, held }: { ticket: Ticket; onClick?: () => void; dragging?: boolean; queued?: number; held?: boolean }) {
+/** The card's huddle chip; clicking it opens that ticket's Huddle tab instead of the card. */
+function HuddleBadge({ badge, onOpen }: { badge: CardHuddleBadge; onOpen?: (ticketId: string) => void }) {
+  return (
+    <button type="button" className={`badge huddle ${badge.state}`} title={badge.title}
+      onClick={(e) => { e.stopPropagation(); onOpen?.(badge.openTicket); }}
+      onKeyDown={(e) => e.stopPropagation()}>
+      {badge.state === "live" && <span className="live-dot" />}
+      <span aria-hidden>🗣</span> {badge.label}
+    </button>
+  );
+}
+
+/**
+ * queued: 1-based place in the queue for a free run slot (status `ready`, or a reply waiting for one). held: a pending daemon restart holds it.
+ * huddle: what the card says about huddles; onOpenHuddle opens a ticket's Huddle tab.
+ */
+export function Card({ ticket, onClick, dragging, queued, held, huddle, onOpenHuddle }: {
+  ticket: Ticket; onClick?: () => void; dragging?: boolean; queued?: number; held?: boolean;
+  huddle?: CardHuddleBadge | null; onOpenHuddle?: (ticketId: string) => void;
+}) {
   const working = (ticket.status === "in_progress" && !waitsForSlot(ticket)) || !!ticket.running;
   const att = working ? null : ticket.attention ?? null;
   const waitFor = resourceWait(ticket);
@@ -74,7 +93,7 @@ export function Card({ ticket, onClick, dragging, queued, held }: { ticket: Tick
           {plainPreview(last.text)}
         </div>
       )}
-      {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session || ticket.scheduleId || ticket.plan || ticket.needs?.length) && (
+      {(badge || ticket.prUrl || ticket.runCount > 0 || ticket.workdir || ticket.session || ticket.scheduleId || ticket.plan || ticket.needs?.length || huddle) && (
         <div className="card-meta">
           {ticket.plan && ticket.plan.state !== "done" && (
             <span className={`badge plan ${ticket.plan.state}`} title="This ticket runs a plan of child tickets">
@@ -88,6 +107,7 @@ export function Card({ ticket, onClick, dragging, queued, held }: { ticket: Tick
           )}
           {ticket.needs?.map((n) => <ResourceChip key={n} name={n} held={!!ticket.resources?.holding} />)}
           {badge}
+          {huddle && <HuddleBadge badge={huddle} onOpen={onOpenHuddle} />}
           {ticket.prUrl && (
             <a className="badge pr" href={safeHref(ticket.prUrl)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
               PR #{ticket.prUrl.split("/").pop()}

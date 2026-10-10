@@ -23,6 +23,7 @@ import { TicketDrawer } from "./TicketDrawer";
 import { toast, Toaster } from "./toast";
 
 import type { DockTab } from "./Dock";
+import { useBoardHuddles } from "./huddle";
 
 // xterm.js and highlight.js only load once the panel is opened. After an upgrade the old chunk is gone:
 // reload once to get the new build instead of blanking the whole page.
@@ -235,6 +236,14 @@ export function App() {
     setOpenId(id);
   }, [slug]);
 
+  // A huddle badge or the dock's Huddles list: open the ticket on its Huddle tab.
+  const [huddleTab, setHuddleTab] = useState<{ id: string; n: number } | null>(null);
+  const openHuddle = useCallback((id: string) => {
+    setHuddleTab({ id, n: Date.now() });
+    if (id !== openId) openTicket(id);
+  }, [openId, openTicket]);
+  const huddles = useBoardHuddles(slug);
+
   const closeTicket = useCallback(() => {
     if (pushedOpen.current && pushedFrom.current === slug) history.back();
     else {
@@ -425,6 +434,10 @@ export function App() {
 
   const profile = useMemo(() => profiles?.find((p) => p.slug === slug) ?? null, [profiles, slug]);
   const open = tickets.find((t) => t.id === openId) ?? null;
+  // The drawer has taken the Huddle tab request (as its first tab, or switched to it): forget it.
+  useEffect(() => {
+    if (huddleTab && open?.id === huddleTab.id) setHuddleTab(null);
+  }, [huddleTab, open?.id]);
   const q = query.trim().toLowerCase();
   const activeFilters = FILTERS.filter((f) => filters.has(f.id));
   const shownTickets = tickets.filter((t) =>
@@ -681,14 +694,16 @@ export function App() {
               </span>
             )}
           </div>
-          <Board tickets={shownTickets} filtered={filtering} onOpen={(id) => openTicket(id)} onMove={move} onAdd={() => setNewTicket(true)} restartPending={restart.pending} />
+          <Board tickets={shownTickets} filtered={filtering} onOpen={(id) => openTicket(id)} onMove={move} onAdd={() => setNewTicket(true)} restartPending={restart.pending}
+            huddles={huddles} onOpenHuddle={openHuddle} />
         </>
       )}
 
       {dockOpen && profile && (
         <Suspense fallback={null}>
           <Dock profile={profile} pty={health?.pty ?? true} onClose={() => setDockOpen(false)} command={dockCommand}
-            onCommandSent={() => setDockCommand(null)} tabRequest={dockTab} onTabChange={setDockShown} onOpenTicket={(id) => openTicket(id)} />
+            onCommandSent={() => setDockCommand(null)} tabRequest={dockTab} onTabChange={setDockShown} onOpenTicket={(id) => openTicket(id)}
+            huddles={huddles} onOpenHuddle={openHuddle} />
         </Suspense>
       )}
 
@@ -716,7 +731,8 @@ export function App() {
       )}
       {snippetsOpen && profile && <SnippetsDialog profile={profile} onClose={() => setSnippetsOpen(false)} />}
       {open && profile && <TicketDrawer key={open.id} profile={profile} ticket={open} tickets={tickets} onOpenTicket={openTicket} onClose={closeTicket}
-        nav={{ prev: prevId, next: nextId, go: stepTicket }} slideIn={!stepped.current} />}
+        nav={{ prev: prevId, next: nextId, go: stepTicket }} slideIn={!stepped.current}
+        tabRequest={huddleTab?.id === open.id ? { tab: "huddle", n: huddleTab.n } : null} />}
       {profileDialog && (
         <ProfileDialog
           profile={profileDialog === "edit" ? profile : null}

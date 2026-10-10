@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type Profile, type QuickChat } from "./api";
+import { api, type Huddle, type Profile, type QuickChat } from "./api";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { FilesView } from "./FilesView";
+import { guestTickets, huddleCost, members, sortHuddles } from "./huddle";
 import { CloseIcon, RefreshIcon } from "./icons";
 import { TerminalView } from "./TerminalView";
+import { fullTime, timeAgo, useNow } from "./time";
 import { toast } from "./toast";
+import { costText } from "./usage";
 
-export type DockTab = "terminal" | "files" | "claude";
+export type DockTab = "terminal" | "files" | "claude" | "huddles";
 const TAB_KEY = "ckanban.dock.tab";
 const HEIGHT_KEY = "ckanban.dock.height";
 const MIN_HEIGHT = 140;
@@ -24,7 +27,7 @@ function store(key: string, value: string) {
   } catch {}
 }
 
-const TABS: [DockTab, string][] = [["terminal", "Terminal"], ["files", "Files"], ["claude", "Claude"]];
+const TABS: [DockTab, string][] = [["terminal", "Terminal"], ["files", "Files"], ["claude", "Claude"], ["huddles", "Huddles"]];
 const isTab = (v: string | null): v is DockTab => TABS.some(([t]) => t === v);
 
 const clampHeight = (h: number) => Math.round(Math.max(MIN_HEIGHT, Math.min(window.innerHeight - 120, h)));
@@ -34,7 +37,7 @@ const clampHeight = (h: number) => Math.round(Math.max(MIN_HEIGHT, Math.min(wind
  * quick Claude chat (interactive `claude`, no ticket). Closing it only hides it; the shell and the chat
  * keep running on the server and reattach next time.
  */
-export default function Dock({ profile, pty, onClose, command, onCommandSent, tabRequest, onTabChange, onOpenTicket }: {
+export default function Dock({ profile, pty, onClose, command, onCommandSent, tabRequest, onTabChange, onOpenTicket, huddles = [], onOpenHuddle }: {
   profile: Profile;
   pty: boolean;
   onClose: () => void;
@@ -46,6 +49,10 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
   /** The visible tab, so the header buttons can show which one is open. */
   onTabChange?: (tab: DockTab) => void;
   onOpenTicket?: (id: string) => void;
+  /** The board's huddles (kept live by the App), for the Huddles tab. */
+  huddles?: Huddle[];
+  /** Open a ticket's Huddle tab. */
+  onOpenHuddle?: (ticketId: string) => void;
 }) {
   const [tab, setTab] = useState<DockTab>(() => {
     const t = stored(TAB_KEY);
@@ -60,6 +67,7 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
   const [chat, setChat] = useState<QuickChat | null>(null);
   const [makingTicket, setMakingTicket] = useState(false);
   const drag = useRef<{ y: number; h: number } | null>(null);
+  const liveCount = huddles.filter((h) => h.status === "live").length;
 
   useEffect(() => {
     store(TAB_KEY, tab);
@@ -128,7 +136,10 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
       <div className="dock-head">
         <div className="tabs" role="tablist" aria-label="Panel">
           {TABS.map(([id, label]) => (
-            <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>
+            <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
+              {label}
+              {id === "huddles" && liveCount > 0 && <span className="tab-count ok" title={`${liveCount} live`}>{liveCount} live</span>}
+            </button>
           ))}
         </div>
         <span className="dock-path" title={profile.path}>{profile.path.replace(/^\/Users\/[^/]+/, "~")}</span>
@@ -174,6 +185,9 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
         <div className="dock-pane" hidden={tab !== "files"}>
           <FilesView key={profile.slug} slug={profile.slug} refreshSignal={refresh} />
         </div>
+        <div className="dock-pane" hidden={tab !== "huddles"}>
+          {tab === "huddles" && <HuddleList huddles={huddles} onOpen={onOpenHuddle} />}
+        </div>
       </div>
       {confirmNewChat && (
         <ConfirmDialog title="Start a new chat?" confirmLabel="New chat" busyLabel="Starting…"
@@ -188,6 +202,37 @@ export default function Dock({ profile, pty, onClose, command, onCommandSent, ta
         </ConfirmDialog>
       )}
     </section>
+  );
+}
+
+/** The Huddles tab: live and recent huddles on this board; a row opens its host ticket's Huddle tab. */
+function HuddleList({ huddles, onOpen }: { huddles: Huddle[]; onOpen?: (ticketId: string) => void }) {
+  useNow();
+  const list = sortHuddles(huddles);
+  if (!list.length) {
+    return <div className="dock-huddles"><div className="empty">No huddles on this board yet. Start one from a ticket's Huddle tab.</div></div>;
+  }
+  return (
+    <div className="dock-huddles" role="list">
+      {list.map((h) => {
+        const agents = members(h).length;
+        const tickets = 1 + guestTickets(h).length;
+        return (
+          <button key={h.id} role="listitem" className={`huddle-row ${h.status}`} onClick={() => onOpen?.(h.hostTicket)}
+            title={`Open the huddle of ${h.hostTitle ?? h.hostTicket}`}>
+            <span className="hr-dot" aria-label={h.status} />
+            <span className="hr-title">{h.hostTitle ?? h.hostTicket}</span>
+            <span className="hr-meta">
+              {agents} {agents === 1 ? "agent" : "agents"} · {h.status === "closed" ? "closed" : `${tickets} ${tickets === 1 ? "ticket" : "tickets"}`}
+            </span>
+            <time className="hr-meta" dateTime={h.updatedAt} title={`Last activity ${fullTime(h.updatedAt)} · ${h.seq} ${h.seq === 1 ? "message" : "messages"}`}>
+              {h.status === "live" ? `last msg ${timeAgo(h.updatedAt)}` : timeAgo(h.updatedAt)}
+            </time>
+            <span className="hr-meta" title="What the huddle's agents have spent">{costText(huddleCost(h))}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

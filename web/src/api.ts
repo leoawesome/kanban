@@ -651,6 +651,8 @@ export const api = {
   /** Deletes a board preset, or resets an overridden built-in. */
   deleteHuddlePreset: (slug: string, name: string) =>
     req<{ reset: boolean; presets: HuddlePreset[] }>("DELETE", `/api/profiles/${encodeURIComponent(slug)}/huddle-presets/${encodeURIComponent(name)}`),
+  /** Every huddle on the board (live, stopped and closed). */
+  boardHuddles: (slug: string) => req<Huddle[]>("GET", hud(slug)),
   /** Huddles the ticket hosts or takes part in. */
   huddles: (slug: string, ticketId: string) => req<Huddle[]>("GET", `${hud(slug)}?ticket=${encodeURIComponent(ticketId)}`),
   /** A huddle and its newest messages (`before`: the page before that seq; `since`: the ones after it). */

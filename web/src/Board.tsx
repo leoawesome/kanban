@@ -5,9 +5,10 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useMemo, useState } from "react";
-import { BOARD_COLUMNS, type Status, type Ticket } from "./api";
+import { BOARD_COLUMNS, type Huddle, type Status, type Ticket } from "./api";
 import { Card } from "./Card";
 import { groupByColumn } from "./columns";
+import { cardHuddleBadge } from "./huddleText";
 import { CollapseIcon, PlusIcon, SparkIcon } from "./icons";
 
 const COLLAPSED_KEY = "ckanban.collapsedColumns";
@@ -29,10 +30,17 @@ interface Props {
   restartPending?: boolean;
   /** A search or filter is active (empty columns say "no match" instead of the usual hint). */
   filtered?: boolean;
+  /** The board's huddles, for the card badges. */
+  huddles?: Huddle[];
+  /** Open a ticket's Huddle tab (a card's huddle badge). */
+  onOpenHuddle?: (id: string) => void;
 }
 
+/** Card props shared down the columns. */
+interface CardCtx { huddles: Huddle[]; onOpenHuddle?: (id: string) => void }
+
 /** Drag with the mouse, or focus a card: Enter opens it, Space picks it up (arrows move, Space drops, Esc cancels). */
-function SortableCard({ ticket, onOpen, queued, held }: { ticket: Ticket; onOpen: (id: string) => void; queued?: number; held?: boolean }) {
+function SortableCard({ ticket, onOpen, queued, held, ctx }: { ticket: Ticket; onOpen: (id: string) => void; queued?: number; held?: boolean; ctx: CardCtx }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: ticket.id,
     data: { status: ticket.status },
@@ -55,7 +63,8 @@ function SortableCard({ ticket, onOpen, queued, held }: { ticket: Ticket; onOpen
         listeners?.onKeyDown?.(e);
       }}
     >
-      <Card ticket={ticket} onClick={() => onOpen(ticket.id)} queued={queued} held={held} />
+      <Card ticket={ticket} onClick={() => onOpen(ticket.id)} queued={queued} held={held}
+        huddle={cardHuddleBadge(ctx.huddles, ticket.id)} onOpenHuddle={ctx.onOpenHuddle} />
     </div>
   );
 }
@@ -72,14 +81,14 @@ const EMPTY_HINT: Record<Status, string> = {
 const DONE_LIMIT = 10;
 const CLAUDE_TAG = "Claude starts automatically when a card is here";
 
-function Column({ id, label, hint, claude, tickets, queue = [], held = false, onOpen, onAdd, collapsed, onCollapse, filtered }: {
+function Column({ id, label, hint, claude, tickets, queue = [], held = false, onOpen, onAdd, collapsed, onCollapse, filtered, ctx }: {
   id: Status; label: string; hint: string; claude: boolean; tickets: Ticket[];
   /** In Progress only: tickets waiting for a free run slot, in start order. */
   queue?: Ticket[];
   /** A pending daemon restart holds the queue. */
   held?: boolean;
   onOpen: (id: string) => void; onAdd: (s: Status) => void;
-  collapsed: boolean; onCollapse: (v: boolean) => void; filtered: boolean;
+  collapsed: boolean; onCollapse: (v: boolean) => void; filtered: boolean; ctx: CardCtx;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${id}`, data: { status: id } });
   const all = [...tickets, ...queue];
@@ -122,11 +131,11 @@ function Column({ id, label, hint, claude, tickets, queue = [], held = false, on
       <SortableContext items={[...shown, ...queue].map((t) => t.id)} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className="column-body">
           {shown.map((t) => (
-            <SortableCard key={t.id} ticket={t} onOpen={onOpen} />
+            <SortableCard key={t.id} ticket={t} onOpen={onOpen} ctx={ctx} />
           ))}
           {queue.length > 0 && <div className="queue-sep" title="These start in this order as run slots free up">Queued</div>}
           {queue.map((t, i) => (
-            <SortableCard key={t.id} ticket={t} onOpen={onOpen} queued={i + 1} held={held} />
+            <SortableCard key={t.id} ticket={t} onOpen={onOpen} queued={i + 1} held={held} ctx={ctx} />
           ))}
           {id === "done" && tickets.length > DONE_LIMIT && (
             <button className="btn ghost small show-all" onClick={() => setShowAll((v) => !v)}>
@@ -172,7 +181,10 @@ const collision: CollisionDetection = (args) => {
   return closestCenter(args);
 };
 
-export function Board({ tickets, onOpen, onMove, onAdd, filtered = false, restartPending = false }: Props) {
+const NO_HUDDLES: Huddle[] = [];
+
+export function Board({ tickets, onOpen, onMove, onAdd, filtered = false, restartPending = false, huddles = NO_HUDDLES, onOpenHuddle }: Props) {
+  const ctx = useMemo(() => ({ huddles, onOpenHuddle }), [huddles, onOpenHuddle]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     // Enter is kept for opening the card, so only Space picks up / drops.
@@ -237,11 +249,11 @@ export function Board({ tickets, onOpen, onMove, onAdd, filtered = false, restar
     <DndContext sensors={sensors} collisionDetection={collision} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragId(null)}>
       <main className="board">
         {BOARD_COLUMNS.map((c) => (
-          <Column key={c.id} {...c} tickets={byColumn.get(c.id) ?? []} queue={c.id === "in_progress" ? byColumn.get("ready") : undefined} held={restartPending} onOpen={onOpen} onAdd={onAdd} filtered={filtered}
+          <Column key={c.id} {...c} tickets={byColumn.get(c.id) ?? []} queue={c.id === "in_progress" ? byColumn.get("ready") : undefined} held={restartPending} onOpen={onOpen} onAdd={onAdd} filtered={filtered} ctx={ctx}
             collapsed={collapsed.has(c.id)} onCollapse={(v) => setColumnCollapsed(c.id, v)} />
         ))}
       </main>
-      <DragOverlay>{dragging ? <Card ticket={dragging} dragging /> : null}</DragOverlay>
+      <DragOverlay>{dragging ? <Card ticket={dragging} dragging huddle={cardHuddleBadge(huddles, dragging.id)} /> : null}</DragOverlay>
     </DndContext>
   );
 }

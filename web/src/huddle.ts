@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, onReconnect, subscribe, type Huddle, type HuddleMessage } from "./api";
 import { AVATAR_COLORS } from "./avatar";
-import { mergeMessages, pickHuddle } from "./huddleText";
+import { mergeMessages, pickHuddle, upsertHuddle } from "./huddleText";
 
+export { cardHuddleBadge, guestTickets, sortHuddles, type CardHuddleBadge } from "./huddleText";
 export { handleInitials, mentionCandidates, mentionQuery, participantActivity } from "./huddleText";
 
 /** Participants that count toward the cap (everyone but the user). */
@@ -99,4 +100,22 @@ export function useHuddle(slug: string, ticketId: string): HuddleState {
   }, [slug, messages]);
 
   return { huddle, messages, hasMore, loaded, error, reload, loadEarlier };
+}
+
+/** Every huddle on the board, kept live from huddle.updated events (card badges and the dock's Huddles list). */
+export function useBoardHuddles(slug: string | null): Huddle[] {
+  const [list, setList] = useState<Huddle[]>([]);
+  const reload = useCallback(() => {
+    if (!slug) return;
+    api.boardHuddles(slug).then((hs) => setList(hs)).catch(() => {});
+  }, [slug]);
+  useEffect(() => {
+    setList([]);
+    reload();
+  }, [reload]);
+  useEffect(() => subscribe((e) => {
+    if (e.type === "huddle.updated" && e.profile === slug) setList((hs) => upsertHuddle(hs, e.huddle));
+  }), [slug]);
+  useEffect(() => onReconnect(reload), [reload]);
+  return list;
 }

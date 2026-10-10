@@ -185,7 +185,7 @@ function usePanelWidth(fit: number) {
 }
 
 /** Ticket view: details on the left, the chat with Claude filling the right side. */
-export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, nav, slideIn = true }: {
+export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, nav, slideIn = true, tabRequest }: {
   profile: Profile;
   ticket: Ticket;
   /** The board's tickets, for the planner/child links. */
@@ -196,6 +196,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   nav?: { prev: string | null; next: string | null; go: (id: string) => void };
   /** Slide in when opened; off when stepping from the neighbouring ticket. */
   slideIn?: boolean;
+  /** Show this tab (e.g. a card's huddle badge); `n` changes for each new request. */
+  tabRequest?: { tab: "huddle"; n: number } | null;
 }) {
   // Errors from actions in this ticket show here, next to what failed, not in the page's top strip.
   const [panelError, setPanelError] = useState<string | null>(null);
@@ -215,7 +217,10 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
   const bodyInput = useRef<HTMLTextAreaElement>(null);
   // Body the current edit started from; the server rejects the save if the file changed meanwhile.
   const [baseBody, setBaseBody] = useState(ticket.body);
-  const [tabPick, setTab] = useState<"chat" | "plan" | "changes" | "huddle" | "outputs" | "usage">("chat");
+  const [tabPick, setTab] = useState<"chat" | "plan" | "changes" | "huddle" | "outputs" | "usage">(tabRequest?.tab ?? "chat");
+  useEffect(() => {
+    if (tabRequest) setTab(tabRequest.tab);
+  }, [tabRequest?.n]);
   const huddleState = useHuddle(slug, ticket.id);
   const huddle = huddleState.huddle;
   // The Plan tab exists only while the ticket has children; Changes only while it has a worktree.
