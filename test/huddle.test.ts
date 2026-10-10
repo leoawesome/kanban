@@ -6,7 +6,7 @@ import { callTool, type ToolContext } from "../src/mcp-server";
 import { Board } from "../src/server/board";
 import { Bus, type BusEvent } from "../src/server/events";
 import { createServer } from "../src/server/http";
-import { findingTitle, Huddles, POST_MAX, SUMMARY_FILE } from "../src/server/huddle";
+import { findingTitle, HUDDLE_IDLE_MS, Huddles, POST_MAX, SUMMARY_FILE } from "../src/server/huddle";
 import { BUILTIN_PRESETS, deletePreset, mergePresets, presetSourceText, savePreset } from "../src/server/huddle-presets";
 import { huddleUsage } from "../src/server/huddle-usage";
 import { cleanLessons, LESSON_MAX, noteRole, parseNotes, serializeNotes } from "../src/server/huddle-notes";
@@ -1601,3 +1601,139 @@ test("usage stats: per teammate and template, from every board's huddles, closed
   const r = (await (await fetch(`http://127.0.0.1:${server.port}/api/team-usage`)).json()) as { teammates: Record<string, any> };
   expect(r.teammates.security).toMatchObject({ huddles: 1, costUsd: 0.3, recent: [{ board: "p", huddle: "h_3", title: "Login page" }] });
 });
+
+test("leads watch: the facilitator preset and a lead entry without a mode are monitor; an explicit mode wins", async () => {
+  expect(BUILTIN_PRESETS.find((p) => p.name === "facilitator")!.mode).toBe("monitor");
+  // A preset saved as a lead without a mode watches too.
+  expect(savePreset([], { name: "boss", prompt: "Lead", lead: true }).preset.mode).toBe("monitor");
+  expect(savePreset([], { name: "boss", prompt: "Lead", lead: true, mode: "tagged" }).preset.mode).toBe("tagged");
+  const t = await host();
+  const h = huddles.create("p", t.id, [
+    { preset: "facilitator" }, { preset: "reviewer", handle: "lead-r", lead: true }, { preset: "reviewer", handle: "tagged-lead", lead: true, mode: "tagged" },
+    { preset: "reviewer" },
+  ]);
+  expect(participant(h, "facilitator")).toMatchObject({ lead: true, mode: "monitor" });
+  expect(participant(h, "lead-r")).toMatchObject({ lead: true, mode: "monitor" });
+  expect(participant(h, "tagged-lead")).toMatchObject({ lead: true, mode: "tagged" });
+  expect(participant(h, "reviewer")).toMatchObject({ lead: false, mode: "tagged" });
+  await huddles.stopAll("p", h.id);
+}, 20000);
+
+test("a done lead wakes on a worker's tag (tagged) or report (monitor); @all from a worker doesn't wake it", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [
+    { preset: "reviewer", handle: "lead", lead: true, mode: "tagged" }, { preset: "reviewer", handle: "mon", lead: true }, { preset: "reviewer", handle: "w" },
+  ]);
+  await idle();
+  for (const l of ["lead", "mon"]) await callTool("huddle_status", { status: "done", reason: "waiting for findings" }, agentCtx(h, l));
+  await idle();
+  const [l0, m0] = [heardBy("lead").length, heardBy("mon").length];
+  // @all from a worker reaches nobody: no tag, and the tagged lead stays done.
+  expect(huddles.post("p", h.id, participant(h, "w"), "@all status update").mentions).toEqual([]);
+  await idle();
+  expect(heardBy("lead").length).toBe(l0);
+  expect(participant(h, "lead").status).toBe("done");
+  // ...but the monitor lead watches every worker report.
+  expect(heardBy("mon").length).toBe(m0 + 1);
+  expect(participant(h, "mon").status).not.toBe("done");
+  // A worker's tag wakes the done tagged lead.
+  huddles.post("p", h.id, participant(h, "w"), "@lead report ready");
+  await idle();
+  expect(heardBy("lead").length).toBe(l0 + 1);
+  expect(heardBy("lead").at(-1)).toContain("@w: @lead report ready");
+  expect(participant(h, "lead").status).not.toBe("done");
+  // The monitor lead, done again, wakes on an untagged report.
+  await callTool("huddle_status", { status: "done" }, agentCtx(h, "mon"));
+  await idle();
+  const m1 = heardBy("mon").length;
+  huddles.post("p", h.id, participant(h, "w"), "found 3 issues, see outputs/report.md");
+  await idle();
+  expect(heardBy("mon").length).toBe(m1 + 1);
+  expect(participant(h, "mon").status).not.toBe("done");
+  // No "wasn't woken" note for any of it.
+  expect(messages(h).some((m) => m.text.includes("wasn't woken"))).toBe(false);
+}, 30000);
+
+test("a tag that wakes nobody is never dropped: one note tags @main per target and sender until the target wakes", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer", handle: "a" }, { preset: "reviewer", handle: "b" }]);
+  await idle();
+  await callTool("huddle_status", { status: "done" }, agentCtx(h, "a"));
+  await idle();
+  const a0 = heardBy("a").length;
+  const notes = () => messages(h).filter((m) => m.kind === "system" && m.text.includes("wasn't woken"));
+  huddles.post("p", h.id, participant(h, "b"), "@a did you check logout?");
+  await until(() => !!store.getTicket("p", t.id)!.sessionStarted);
+  await idle();
+  expect(heardBy("a").length).toBe(a0);
+  expect(participant(h, "a").status).toBe("done");
+  expect(notes().length).toBe(1);
+  expect(notes()[0].text).toBe("@a is done and wasn't woken by @b's tag; @main or a lead can wake it.");
+  expect(notes()[0].mentions).toEqual(["main"]);
+  // @main was woken by the note.
+  expect(heardBy(store.getTicket("p", t.id)!.sessionId!).join("\n")).toContain("wasn't woken by @b");
+  // A second tag from b: no second note.
+  huddles.post("p", h.id, participant(h, "b"), "@a ping");
+  await idle();
+  expect(notes().length).toBe(1);
+  // Once a wakes, the next unwoken tag is noted again.
+  huddles.post("p", h.id, you(h), "@a check logout");
+  await idle();
+  expect(heardBy("a").length).toBe(a0 + 1);
+  await callTool("huddle_status", { status: "done" }, agentCtx(h, "a"));
+  huddles.post("p", h.id, participant(h, "b"), "@a one more");
+  await idle();
+  expect(notes().length).toBe(2);
+}, 30000);
+
+test("idle watchdog: wakes @main once after 5 minutes of nobody working; not while working, not twice, not when stopped or closed", async () => {
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer", handle: "w" }, { preset: "reviewer", handle: "lead", lead: true, mode: "tagged" }]);
+  await idle();
+  await callTool("huddle_status", { status: "done" }, agentCtx(h, "lead"));
+  await callTool("huddle_post", { text: "my part is finished", status: "done" }, agentCtx(h, "w"));
+  await idle();
+  const nudges = () => messages(h).filter((m) => m.kind === "system" && m.text.startsWith("Huddle idle"));
+  const last = messages(h).findLast((m) => m.kind !== "system")!;
+  const at = Date.parse(store.getHuddle("p", h.id)!.updatedAt);
+  // Not yet 5 minutes.
+  huddles.idleSweep(at + HUDDLE_IDLE_MS - 1000);
+  expect(nudges().length).toBe(0);
+  // Someone working: no nudge.
+  process.env.FAKE_STEP_MS = "1500";
+  huddles.post("p", h.id, you(h), "@w one more look please");
+  await until(() => participant(h, "w").status === "working");
+  const lastW = messages(h).findLast((m) => m.kind !== "system")!;
+  huddles.idleSweep(Date.now() + HUDDLE_IDLE_MS * 2);
+  expect(nudges().length).toBe(0);
+  await idle();
+  delete process.env.FAKE_STEP_MS;
+  // @you had the last word: no nudge.
+  huddles.idleSweep(Date.now() + HUDDLE_IDLE_MS * 2);
+  expect(nudges().length).toBe(0);
+  expect(lastW.from).toBe("you");
+  // A worker speaks last, then nothing happens for 5 minutes: @main is woken once.
+  await callTool("huddle_post", { text: "still looks fine" }, agentCtx(h, "w"));
+  await idle();
+  const report = messages(h).findLast((m) => m.kind !== "system")!;
+  expect(report.seq).toBeGreaterThan(last.seq);
+  huddles.idleSweep(Date.now() + HUDDLE_IDLE_MS + 1000);
+  expect(nudges().length).toBe(1);
+  expect(nudges()[0].text).toBe(`Huddle idle for 5 min since #${report.seq} (last: @w). Check who should act, or ask the user to close it.`);
+  expect(nudges()[0].mentions).toEqual(["main"]);
+  await until(() => !!store.getTicket("p", t.id)!.sessionStarted);
+  await idle();
+  // Not again without a new message.
+  huddles.idleSweep(Date.now() + HUDDLE_IDLE_MS * 3);
+  expect(nudges().length).toBe(1);
+  // Stopped: no nudge even after a new worker message.
+  await callTool("huddle_post", { text: "another note" }, agentCtx(h, "w"));
+  await idle();
+  huddles.stopAll("p", h.id);
+  huddles.idleSweep(Date.now() + HUDDLE_IDLE_MS * 3);
+  expect(nudges().length).toBe(1);
+  // Closed: none either.
+  huddles.close("p", h.id);
+  huddles.idleSweep(Date.now() + HUDDLE_IDLE_MS * 3);
+  expect(nudges().length).toBe(1);
+}, 40000);

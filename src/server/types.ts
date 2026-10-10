@@ -374,6 +374,10 @@ export interface Huddle {
   budgetWarned?: boolean;
   /** Two participants who kept answering each other: they no longer wake each other until a lead, @main or the user tags them, or Resume. */
   held?: string[] | null;
+  /** Tags that didn't wake their target (done, blocked or stopped), noted once each: target handle -> senders. Cleared when the target wakes. */
+  unwoken?: Record<string, string[]>;
+  /** Seq of the last non-system message the idle watchdog already woke @main about. */
+  idleNudged?: number;
   stopReason?: HuddleStopReason | null;
   /** @main or a lead asked the user to close the huddle (huddle_close); only the user closes it. */
   closeRequest?: { by: string; at: string; reason: string } | null;

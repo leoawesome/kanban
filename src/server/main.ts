@@ -40,6 +40,7 @@ export async function startDaemon(): Promise<void> {
   console.log(`ckanban v${VERSION} listening on http://localhost:${server.port} (data: ${store.root})`);
   board.recover();
   huddles.recover();
+  huddles.startWatchdog();
   void board.sweepWorktrees();
   void detectMissing(store, (profile) => bus.emit({ type: "profile.updated", slug: profile.slug, profile }));
   const stopPoller = startPoller(board, store, config.prPollMinutes);

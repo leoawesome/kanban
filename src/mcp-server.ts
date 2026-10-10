@@ -445,7 +445,7 @@ const PRESET_FIELDS = {
   prompt: { type: "string", description: "What this role does in a huddle: its job, what to look at, how to report." },
   role: { type: "string", description: "Label shown in the huddle, e.g. \"Accessibility tester\". Default: from the name." },
   model: { type: "string", description: "Default model, e.g. sonnet. Empty: the board's." },
-  mode: { type: "string", enum: ["tagged", "monitor"], description: "tagged: sleeps until @mentioned. monitor: gets every new message. Default tagged." },
+  mode: { type: "string", enum: ["tagged", "monitor"], description: "tagged: sleeps until @mentioned. monitor: gets every new message. Default tagged; monitor for a lead." },
   lead: { type: "boolean", description: "May add participants and manage the findings list. Default false." },
   canEdit: { type: "boolean", description: "May edit tracked files (only in its own worktree). Default: true for workspace own." },
   workspace: { type: "string", enum: ["shared", "own"], description: "shared: read-only in the host ticket's worktree. own: its own worktree and branch. Default shared." },
@@ -657,7 +657,7 @@ const ROSTER_ENTRY = {
     count: { type: "integer", minimum: 1, maximum: 8, description: "How many of this role (handles get -1, -2, ...). Default 1." },
     focus: { type: "string", description: "What exactly this participant should look at." },
     model: { type: "string", description: "Model, e.g. sonnet. Default: the board's." },
-    mode: { type: "string", enum: ["tagged", "monitor"], description: "tagged: sleeps until @mentioned. monitor: gets every new message. Default: the preset's." },
+    mode: { type: "string", enum: ["tagged", "monitor"], description: "tagged: sleeps until @mentioned. monitor: gets every new message. Default: the preset's; monitor when this entry sets lead true (leads watch every message and wake on any tag)." },
     workspace: {
       type: "string", enum: ["shared", "own"],
       description: "shared: works in the host ticket's worktree, read-only (review, QA). own: a new git worktree off the host's branch where it may edit (several agents writing code in parallel).",
@@ -737,7 +737,7 @@ const HUDDLE_TOOLS: Tool[] = [
       properties: {
         text: { type: "string", description: "The message, with @mentions." },
         kind: { type: "string", enum: ["message", "finding"], description: "Default message." },
-        status: { type: "string", enum: ["done", "blocked"], description: "Optional: with this message you are done (your job is finished) or blocked (give reason). Same as huddle_status." },
+        status: { type: "string", enum: ["done", "blocked"], description: "Optional: with this message you are done or blocked (give reason). Same as huddle_status. done means your job is finished. Don't mark yourself done while you wait for others; just end your turn. Leads are woken by any tag." },
         reason: { type: "string", description: "status: why (required for blocked)." },
         lessons: LESSONS,
         huddle: HUDDLE, profile: PROFILE,
@@ -756,7 +756,7 @@ const HUDDLE_TOOLS: Tool[] = [
   {
     name: "huddle_status",
     description:
-      "Set your own huddle status. done: your job is finished; you sleep until a lead, @main or the user tags you. " +
+      "Set your own huddle status. done: your job is finished; you sleep until a lead, @main or the user tags you. Don't mark yourself done while you wait for others; just end your turn. Leads are woken by any tag. " +
       "blocked: you can't go on (give reason); @main is told (the user, when you are @main). active: back at work.",
     inputSchema: {
       type: "object",

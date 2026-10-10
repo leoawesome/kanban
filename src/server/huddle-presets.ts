@@ -14,7 +14,7 @@ export interface HuddlePreset {
   /** Default model, e.g. sonnet; null: the board's. */
   model: string | null;
   mode: HuddleMode;
-  /** May add participants and manage the findings list. */
+  /** May add participants and manage the findings list. A lead defaults to monitor mode and wakes on any tag, even when done. */
   lead: boolean;
   /** May edit tracked files (only ever in its own worktree; a shared-workspace agent never edits). */
   canEdit: boolean;
@@ -48,7 +48,8 @@ export const BUILTIN_PRESETS: HuddlePreset[] = [
   {
     name: "qa-lead", role: "QA lead", model: null, mode: "monitor", lead: true, canEdit: false, workspace: "shared",
     prompt: "Lead the QA testers: split the areas to test between them, check and de-duplicate what they find, and keep the pinned findings list current " +
-      "with huddle_findings. When testing is done, send @main one consolidated list of what needs fixing, most severe first.",
+      "with huddle_findings. When testing is done, send @main one consolidated list of what needs fixing, most severe first. " +
+      "Only mark done after you have sent your final consolidated list to @main.",
   },
   {
     name: "engineer", role: "Engineer", model: null, mode: "tagged", lead: false, canEdit: true, workspace: "own",
@@ -70,10 +71,11 @@ export const BUILTIN_PRESETS: HuddlePreset[] = [
       "Propose concrete changes (what, where, why), ranked by user impact; prefer removing over adding.",
   },
   {
-    name: "facilitator", role: "Facilitator", model: null, mode: "tagged", lead: true, canEdit: false, workspace: "shared",
+    name: "facilitator", role: "Facilitator", model: null, mode: "monitor", lead: true, canEdit: false, workspace: "shared",
     prompt: "Drive a study with several critics: make sure every participant posts, challenge weak or duplicate findings, ask follow-ups and settle disagreements. " +
       "Keep the pinned findings list with huddle_findings: de-duplicate, tag each MUST / SHOULD / COULD with effort S/M/L. Don't add participants unless a clear gap appears. " +
-      "When the work is done, tag @main once with one ranked list (about 12 items at most).",
+      "When the work is done, tag @main once with one ranked list (about 12 items at most). " +
+      "Only mark done after you have sent your final consolidated list to @main.",
   },
 ];
 
@@ -110,7 +112,9 @@ export function presetFromInput(input: any, base?: HuddlePreset): HuddlePreset {
   const prompt = text("prompt") || base?.prompt;
   if (!prompt) throw new Error("prompt is required: what this role does in the huddle");
   if (prompt.length > MAX_PROMPT) throw new Error(`prompt is too long (max ${MAX_PROMPT} characters)`);
-  const mode = input.mode ?? base?.mode ?? "tagged";
+  const lead = flag("lead") ?? base?.lead ?? false;
+  // A lead watches every message unless a mode is given: a new lead, or one just made a lead, starts in monitor mode.
+  const mode = input.mode ?? (lead && !base?.lead ? "monitor" : base?.mode ?? "tagged");
   if (mode !== "tagged" && mode !== "monitor") throw new Error("mode must be tagged or monitor");
   const workspace = input.workspace ?? base?.workspace ?? "shared";
   if (workspace !== "shared" && workspace !== "own") throw new Error("workspace must be shared or own");
@@ -119,7 +123,7 @@ export function presetFromInput(input: any, base?: HuddlePreset): HuddlePreset {
   const role = text("role") || base?.role || name.split("-").map((w, i) => (i ? w : w[0].toUpperCase() + w.slice(1))).join(" ");
   return {
     name, role, prompt, model, mode, workspace,
-    lead: flag("lead") ?? base?.lead ?? false,
+    lead,
     canEdit: flag("canEdit") ?? base?.canEdit ?? workspace === "own",
   };
 }

@@ -438,7 +438,7 @@ const HUDDLE_TOOLS = `- \`huddle_post\`: post a message. Tag who should act with
 - \`huddle_brief\`: leads and @main keep the pinned brief (goal, decisions so far) current; it heads every digest, so keep it short.
 - \`huddle_findings\`: the pinned findings list (leads and @main add and resolve; everyone can list).
 - \`huddle_add_participant\`: leads and @main only, capped; if the huddle is full, ask the user instead of working around it.
-- \`huddle_status\`: say you are done (you then sleep until a lead, @main or the user tags you) or blocked (with the reason); \`huddle_post\` takes the same status with your last message.
+- \`huddle_status\`: say you are done (you then sleep until a lead, @main or the user tags you) or blocked (with the reason); \`huddle_post\` takes the same status with your last message. done means your job is finished. Don't mark yourself done while you wait for others; just end your turn. Leads are woken by any tag.
 - \`huddle_close\`: leads and @main, once the work is done: write outputs/huddle-summary.md in the host ticket's outputs first; it asks the user, who alone closes the huddle.
 (ckanban MCP tools; if they are deferred, load them with ToolSearch first.)`;
 
@@ -468,7 +468,7 @@ ${p.prompt}${p.focus ? `\n\nFocus: ${p.focus}` : ""}
 - The board stamps each message with the sender of the huddle_post call. Post only through huddle_post, as yourself; your shell runs as the user, so never post through the board's HTTP API or CLI.
 - ${DIGEST_RULE}
 - Don't post only to acknowledge or agree. Tag only who must act on your message.
-- One result post per wake: when your part is done, post your result once, tag who needs it (usually your lead or @main), and end your turn. When your whole job is finished, post it with status done; when you can't go on, set status blocked with the reason. You are woken again when someone tags you${p.mode === "monitor" ? ", and in monitor mode new messages also arrive between your turns" : ""}.
+- One result post per wake: when your part is done, post your result once, tag who needs it (usually your lead or @main), and end your turn. When your whole job is finished, post it with status done; when you can't go on, set status blocked with the reason. Done means your job is finished. Don't mark yourself done while you wait for others; just end your turn. Leads are woken by any tag. You are woken again when someone tags you${p.mode === "monitor" ? ", and in monitor mode new messages also arrive between your turns" : ""}.
 - When a lead asks several of you to agree on something, the owner the lead named posts it; the others reply only to object.
 - Stay in your focus. If someone already said what you would, +1 it by number (e.g. "+1 #12") instead of repeating it.
 - Don't tag @main for small things; leads collect findings and send @main one consolidated list.

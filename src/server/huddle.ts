@@ -6,10 +6,19 @@
 //
 // Routing: an @mentioned participant is woken (steered if it is running, else its session resumes with what it
 // hasn't read). Monitor-mode participants get every new message at their next turn boundary; tagged ones sleep until
-// mentioned. Nobody gets their own messages. System messages are context only and wake nobody, except the brakes'
-// warnings to the leads. Only leads, @main and the user can wake everyone with @all. A participant that is done
-// sleeps until a lead, @main or the user tags it; a blocked one until someone tags it. Wakes owed while the huddle
-// was stopped or the daemon was down are delivered on Resume and after a restart (see wakeIfOwed).
+// mentioned. Nobody gets their own messages. System messages are context only and wake nobody, except the ones that
+// tag someone (the brakes' warnings, the notes below). Only leads, @main and the user can wake everyone with @all.
+// Leads (monitor mode unless their roster or preset says otherwise) always watch: a done lead still wakes on any
+// direct tag and, in monitor mode, on a non-lead's report. A done non-lead sleeps until a lead, @main or the user tags
+// it (so workers can't loop); a blocked one until someone tags it. A tag that wakes nobody because its target is done,
+// blocked or stopped is never dropped silently: a system note tags @main, once per target and sender until the
+// target wakes. Wakes owed while the huddle was stopped or the daemon was down are delivered on Resume and after a
+// restart (see wakeIfOwed).
+//
+// Idle watchdog: a live huddle where nobody (@main included) has worked and no wake was queued or owed for
+// HUDDLE_IDLE_MS, and @main or the user didn't have the last word, wakes @main once with a system note; again only
+// after a new message. It is a sweep from the huddle's times, so it carries over a daemon restart, and it pauses while
+// the daemon shuts down or a restart is pending.
 //
 // Lifecycle: @main or a lead writes outputs/huddle-summary.md and asks the user to close (huddle_close); only the
 // user closes, or the host ticket moving to Done does. Closing removes the agents' clean own worktrees and the
@@ -80,6 +89,10 @@ const BUDGET_WARN = 0.8;
 const MAX_PENDING = 3;
 /** Teammates one agent may have waiting for the user's review at once. */
 const MAX_PENDING_TEAMMATES = 2;
+/** A live huddle with nobody working and nothing owed for this long wakes @main (see idleSweep). */
+export const HUDDLE_IDLE_MS = 5 * 60_000;
+/** How often the idle watchdog looks at the open huddles. */
+const IDLE_SWEEP_MS = 30_000;
 
 /** What the huddle spent so far: every participant's runs (agents) and huddle replies (@main and invited tickets). */
 export const huddleCost = (h: Huddle) => h.participants.reduce((s, p) => s + (p.costUsd ?? 0), 0);
@@ -166,6 +179,7 @@ export class Huddles {
   private chores = new Set<Promise<void>>();
   /** Each huddle as this board last saved it, with its file's stamp, by "<slug>/<huddle>" (see guard). */
   private saved = new Map<string, { stamp: string | null; h: Huddle }>();
+  private sweeper: ReturnType<typeof setInterval> | null = null;
 
   constructor(private store: Store, private board: Board, private bus: Bus, private opts: HuddleOptions) {
     this.sessionExists = opts.sessionExists ?? claudeSessionExists;
@@ -265,7 +279,7 @@ export class Huddles {
     h.stopReason = was.stopReason;
     // Proposed lessons only change through the board: an agent can't reword or save one by editing the file.
     h.learnings = was.learnings;
-    for (const k of ["posts", "sinceUser"] as const) {
+    for (const k of ["posts", "sinceUser", "idleNudged"] as const) {
       if ((was[k] ?? 0) > (h[k] ?? 0)) h[k] = was[k];
     }
     for (const k of ["maxParticipants", "maxCostUsd", "maxMessages"] as const) {
@@ -754,7 +768,8 @@ export class Huddles {
   }
 
   /** Participants made from one roster entry, with handles not in `taken`. */
-  private expand(e: RosterEntry, taken: string[], presets: Map<string, HuddlePreset>): HuddleParticipant[] {
+  /** grant: the user is adding them, so the entry's lead and canEdit apply (see addParticipants). */
+  private expand(e: RosterEntry, taken: string[], presets: Map<string, HuddlePreset>, grant = true): HuddleParticipant[] {
     const preset = e.preset ? presets.get(e.preset.trim()) : undefined;
     const count = e.count ?? 1;
     const base = handleBase(e.handle?.trim() || e.preset?.trim() || e.role!);
@@ -768,13 +783,16 @@ export class Huddles {
       }
       used.add(handle);
       const workspace = e.workspace ?? preset?.workspace ?? "shared";
+      const lead = grant && (e.lead ?? preset?.lead ?? false);
+      // Leads watch every message: an entry made a lead without a mode is monitor; an explicit mode wins.
+      const mode = e.mode ?? (lead && e.lead ? "monitor" : preset?.mode ?? (lead ? "monitor" : "tagged"));
       out.push({
         handle, role: e.role?.trim() || preset?.role || base, preset: e.preset?.trim() ?? null,
         prompt: [preset?.prompt, e.prompt?.trim()].filter(Boolean).join("\n\n") || `Help with the ticket as ${e.role}.`,
         ...(e.focus?.trim() ? { focus: e.focus.trim() } : {}),
-        model: e.model?.trim() || preset?.model || null, mode: e.mode ?? preset?.mode ?? "tagged", lead: e.lead ?? preset?.lead ?? false,
+        model: e.model?.trim() || preset?.model || null, mode, lead,
         // Only an agent in its own worktree may edit: the shared worktree is the coordinator's.
-        canEdit: workspace === "own" && (e.canEdit ?? preset?.canEdit ?? true), workspace, sessionId: null, status: "idle", kind: "agent", cursor: 0, joinedAt: nowIso(), token: newId() + newId(),
+        canEdit: grant && workspace === "own" && (e.canEdit ?? preset?.canEdit ?? true), workspace, sessionId: null, status: "idle", kind: "agent", cursor: 0, joinedAt: nowIso(), token: newId() + newId(),
       });
     }
     return out;
@@ -802,9 +820,8 @@ export class Huddles {
       throw new HuddleError(409, `the huddle is full: ${this.nonHuman(h)} of ${h.maxParticipants} participants${room > 0 ? `, room for ${room} more` : ""}. ` +
         "Don't work around the limit: ask the user (tag @you) to raise it or stop someone.");
     }
-    const added = this.expand(e, h.participants.map((p) => p.handle), presets);
     // Only the user hands out rights: participants an agent or @main adds can't manage the huddle or edit files.
-    if (by.kind !== "human") for (const p of added) Object.assign(p, { lead: false, canEdit: false });
+    const added = this.expand(e, h.participants.map((p) => p.handle), presets, by.kind === "human");
     this.update(slug, hid, (x) => {
       x.participants.push(...added);
     });
@@ -943,7 +960,7 @@ export class Huddles {
   }
 
   /**
-   * A participant says it is done (only a lead, @main or the user wakes it again), blocked on something (@main is
+   * A participant says it is done (only a lead, @main or the user wakes it again; a lead wakes on any tag), blocked on something (@main is
    * tagged; @you when @main itself is blocked), or active again. lessons (agents turning done): proposed for the
    * user to review; they become role notes only when the user saves them.
    */
@@ -1061,15 +1078,38 @@ export class Huddles {
 
   private route(slug: string, hid: string, m: HuddleMessage) {
     const h = this.get(slug, hid);
+    const unwoken: HuddleParticipant[] = [];
     for (const p of h.participants) {
       const w = this.wakes(h, p, m);
       if (w) this.wake(slug, h, p, w === "mention");
+      else if (m.mentions.includes(p.handle) && p.kind !== "human" && p.handle !== m.from) unwoken.push(p);
     }
+    for (const p of unwoken) this.noteUnwoken(slug, hid, p, m.from);
+  }
+
+  /**
+   * A tag didn't wake its target because it is done, blocked or stopped: say so in a system note that tags @main (the
+   * user, when the target is @main), once per target and sender until the target wakes. A held pair already has a note.
+   */
+  private noteUnwoken(slug: string, hid: string, p: HuddleParticipant, from: string) {
+    const h = this.get(slug, hid);
+    const cur = h.participants.find((x) => x.handle === p.handle);
+    if (!cur || (!settled(cur) && cur.status !== "stopped") || from === USER_HANDLE) return;
+    if (h.held?.includes(p.handle) && h.held.includes(from)) return;
+    if (h.unwoken?.[p.handle]?.includes(from)) return;
+    this.update(slug, hid, (x) => {
+      x.unwoken ??= {};
+      x.unwoken[p.handle] = [...(x.unwoken[p.handle] ?? []), from];
+    });
+    const to = p.handle === MAIN_HANDLE ? USER_HANDLE : MAIN_HANDLE;
+    const who = cur.status === "stopped" ? "only the user can restart it" : `@${to} or a lead can wake it`;
+    this.system(slug, hid, `@${p.handle} is ${cur.status} and wasn't woken by @${from}'s tag; ${who}.`, [to]);
   }
 
   /**
    * Whether a message wakes a participant: "mention" (tagged, or a system message naming it), "monitor" (it sees
-   * every message) or null. Done: only a tag from a lead, @main or the user (or the brakes). Blocked: only a tag.
+   * every message) or null. Done: a lead wakes on a direct tag from anyone and, in monitor mode, on a non-lead's
+   * message; anyone else only on a tag from a lead, @main or the user (or the brakes). Blocked: only a tag.
    */
   private wakes(h: Huddle, p: HuddleParticipant, m: HuddleMessage): "mention" | "monitor" | null {
     if (p.kind === "human" || m.from === p.handle || p.status === "stopped") return null;
@@ -1080,16 +1120,67 @@ export class Huddles {
     if (m.kind === "system") return mentioned ? "mention" : null;
     if (p.status === "done") {
       const from = h.participants.find((x) => x.handle === m.from);
-      return mentioned && from && canManage(h, from) ? "mention" : null;
+      // @all only reaches mentions when a lead, @main or the user sent it.
+      if (mentioned && from && canManage(h, from)) return "mention";
+      if (!p.lead) return null;
+      if (m.mentions.includes(p.handle)) return "mention";
+      return p.mode === "monitor" && from && !canManage(h, from) ? "monitor" : null;
     }
     if (mentioned) return "mention";
     return p.mode === "monitor" && p.status !== "blocked" ? "monitor" : null;
   }
 
-  /** Wake a participant; being woken ends done or blocked. */
+  /** Wake a participant; being woken ends done or blocked, and its unwoken-tag notes start over. */
   private wake(slug: string, h: Huddle, p: HuddleParticipant, mentioned: boolean) {
     if (settled(p)) this.updateP(slug, h.id, p.handle, { status: "idle", statusReason: null });
+    if (this.get(slug, h.id).unwoken?.[p.handle]) this.update(slug, h.id, (x) => void delete x.unwoken![p.handle]);
     this.deliver(slug, h, p, mentioned);
+  }
+
+  /**
+   * The idle watchdog (see the header): wakes @main in each live huddle that has sat idle for HUDDLE_IDLE_MS since
+   * someone other than @main or the user spoke last. now: for tests.
+   */
+  idleSweep(now = Date.now()): void {
+    if (this.shuttingDown || this.board.isRestartPending()) return;
+    for (const profile of this.store.listProfiles()) {
+      for (const h of this.store.listHuddles(profile.slug)) {
+        if (h.status === "live") this.idleCheck(profile.slug, h.id, now);
+      }
+    }
+  }
+
+  private idleCheck(slug: string, hid: string, now: number) {
+    const h = this.load(slug, hid);
+    if (!h || h.status !== "live") return;
+    const msgs = this.store.readHuddleMessages(slug, hid);
+    const last = msgs.findLast((m) => m.kind !== "system");
+    if (!last || last.from === MAIN_HANDLE || last.from === USER_HANDLE || last.seq <= (h.idleNudged ?? 0)) return;
+    const times = [h.updatedAt, msgs.at(-1)?.ts, ...h.participants.map((p) => p.idleAt)].filter((t): t is string => !!t).map((t) => Date.parse(t));
+    if (now - Math.max(...times) < HUDDLE_IDLE_MS) return;
+    const ps = h.participants.filter((p) => p.kind !== "human");
+    if (ps.some((p) => this.working(slug, h, p) || this.mainPending.has(this.key(slug, hid, p.handle)))) return;
+    for (const p of ps) {
+      const run = this.runs.get(this.key(slug, hid, p.handle));
+      if (run && (run.pending || run.again || run.refreshing)) return;
+      if (msgs.some((m) => m.seq > p.cursor && this.wakes(h, p, m))) return;
+    }
+    this.update(slug, hid, (x) => void (x.idleNudged = last.seq));
+    const mins = Math.round(HUDDLE_IDLE_MS / 60_000);
+    this.system(slug, hid, `Huddle idle for ${mins} min since #${last.seq} (last: @${last.from}). Check who should act, or ask the user to close it.`, [MAIN_HANDLE]);
+  }
+
+  /** Start the idle watchdog's sweep (the daemon, after recover()). */
+  startWatchdog(): void {
+    if (this.sweeper) return;
+    this.sweeper = setInterval(() => {
+      try {
+        this.idleSweep();
+      } catch (e) {
+        console.error("huddle idle sweep failed", e);
+      }
+    }, IDLE_SWEEP_MS);
+    this.sweeper.unref?.();
   }
 
   /**
@@ -1543,6 +1634,8 @@ export class Huddles {
   /** Daemon exiting: agents mid-turn are marked so recover() resumes them; every agent run is killed. */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    if (this.sweeper) clearInterval(this.sweeper);
+    this.sweeper = null;
     const runs = [...this.runs.entries()];
     for (const [key, run] of runs) {
       const [slug, hid, handle] = key.split("/");
