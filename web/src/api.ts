@@ -488,6 +488,42 @@ export interface HuddleParticipant {
   costUsd?: number;
   error?: string | null;
   running: boolean;
+  /** Read-only agent: the host branch and commit its snapshot shows. */
+  snapshot?: { branch: string | null; sha: string } | null;
+  sessionId?: string | null;
+}
+
+/** One step of a huddle participant's session (src/server/huddle-session.ts SessionStep). */
+export interface SessionStep {
+  i: number;
+  kind: "text" | "tool" | "post" | "wake";
+  text: string;
+  at: string | null;
+  id?: string;
+  out?: string;
+  error?: true;
+  pending?: true;
+  seq?: number;
+}
+
+/** A participant's own session for the read-only viewer (src/server/huddle-session.ts ParticipantSession). */
+export interface ParticipantSession {
+  handle: string;
+  kind: HuddleParticipant["kind"];
+  role: string;
+  model: string | null;
+  mode: HuddleMode;
+  status: HuddleParticipant["status"];
+  live: boolean;
+  costUsd: number;
+  sessionId: string | null;
+  snapshot: { branch: string | null; sha: string } | null;
+  ticketId: string | null;
+  file: string | null;
+  steps: SessionStep[];
+  total: number;
+  hasMore: boolean;
+  current: number | null;
 }
 
 export interface HuddleFinding {
@@ -572,6 +608,11 @@ export interface HuddleMessage {
   source?: "ui" | "mcp" | "none";
 }
 
+/** `?a=1&b=2` from the defined values ("" when none). */
+const query = (q: Record<string, number | undefined>) => {
+  const s = new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
+  return s ? `?${s}` : "";
+};
 const hud = (slug: string, id?: string) => `/api/profiles/${encodeURIComponent(slug)}/huddles${id ? `/${encodeURIComponent(id)}` : ""}`;
 
 export interface Schedule {
@@ -640,7 +681,8 @@ export type BusEvent =
   | { type: "restart.updated"; pending: boolean; waiting: number }
   | { type: "huddle.updated"; profile: string; huddle: Huddle }
   | { type: "huddle.message"; profile: string; huddleId: string; message: HuddleMessage }
-  | { type: "huddle.activity"; profile: string; huddleId: string; handle: string; lastActivity: string | null };
+  | { type: "huddle.activity"; profile: string; huddleId: string; handle: string; lastActivity: string | null }
+  | { type: "huddle.session"; profile: string; huddleId: string; handle: string };
 
 export interface InboxItem {
   profile: string;
@@ -732,7 +774,7 @@ export const api = {
   /** A huddle and its newest messages (`before`: the page before that seq; `since`: the ones after it). */
   huddle: (slug: string, id: string, q: { before?: number; since?: number; limit?: number } = {}) =>
     req<{ huddle: Huddle; you: string; messages: HuddleMessage[]; hasMore: boolean }>("GET",
-      `${hud(slug, id)}?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]))}`),
+      `${hud(slug, id)}${query(q)}`),
   /** template: a template's name (its roster when `roster` is empty, its budget unless given, its rules as the brief). */
   startHuddle: (slug: string, ticketId: string, roster: RosterEntry[], maxParticipants?: number, maxCostUsd?: number, template?: string) =>
     req<Huddle>("POST", hud(slug), { ticketId, roster, maxParticipants, maxCostUsd, template }),
@@ -756,6 +798,14 @@ export const api = {
   /** resume: addBudgetUsd raises the budget (needed once it is spent). */
   huddleAction: (slug: string, id: string, action: "stop" | "resume" | "close", addBudgetUsd?: number) =>
     req<Huddle>("POST", `${hud(slug, id)}/${action}`, addBudgetUsd ? { addBudgetUsd } : undefined),
+  /** A participant's session, read-only: newest steps last (`before`: older page; `since`: every step from that index). */
+  huddleSession: (slug: string, id: string, handle: string, q: { before?: number; since?: number; limit?: number } = {}) =>
+    req<ParticipantSession>("GET", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}/session${query(q)}`),
+  huddleSessionTool: (slug: string, id: string, handle: string, toolUseId: string) =>
+    req<ToolDetail>("GET", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}/session/tool/${encodeURIComponent(toolUseId)}`),
+  /** Show the participant's transcript file in Finder. */
+  revealHuddleSession: (slug: string, id: string, handle: string) =>
+    req<{ ok: true; file: string }>("POST", `${hud(slug, id)}/participants/${encodeURIComponent(handle)}/session/reveal`),
   /** The user viewed the huddle up to message seq: the "for you" count clears up to there. */
   huddleSeen: (slug: string, id: string, seq: number) => req<Huddle>("POST", `${hud(slug, id)}/seen`, { seq }),
   /** Change a pending learning (text, scope, where it goes) before saving it. */

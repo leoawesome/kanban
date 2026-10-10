@@ -12,6 +12,7 @@ import { CloseIcon } from "./icons";
 import { KeyHint } from "./KeyHint";
 import { Select } from "./Select";
 import { fullTime, useNow } from "./time";
+import { SessionPanel } from "./HuddleSession";
 import { Markdown } from "./Transcript";
 import { usePersistentState } from "./usePersistentState";
 
@@ -37,12 +38,15 @@ function Avatar({ handle, small }: { handle: string; small?: boolean }) {
 }
 
 /** The Huddle tab: the ticket's huddle (feed, roster, findings, composer), or a roster editor to start one. */
-export function HuddlePanel({ slug, ticket, tickets, state, onError }: {
+export function HuddlePanel({ slug, ticket, tickets, state, onError, onOpenChat, onOpenTicket }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
   state: HuddleState;
   onError: (m: string) => void;
+  /** The session viewer's link for @main (the ticket's own chat) and for invited tickets. */
+  onOpenChat: () => void;
+  onOpenTicket: (id: string) => void;
 }) {
   // Starting a new huddle after the last one closed (its history stays a click away).
   const [fresh, setFresh] = useState(false);
@@ -60,7 +64,8 @@ export function HuddlePanel({ slug, ticket, tickets, state, onError }: {
     return <StartHuddle slug={slug} ticket={ticket} tickets={tickets} onError={onError} onBack={h ? () => setFresh(false) : undefined}
       onStarted={() => state.reload()} />;
   }
-  return <HuddleRoom slug={slug} ticket={ticket} tickets={tickets} huddle={h} state={state} onError={onError} onNew={() => setFresh(true)} />;
+  return <HuddleRoom slug={slug} ticket={ticket} tickets={tickets} huddle={h} state={state} onError={onError} onNew={() => setFresh(true)}
+    onOpenChat={onOpenChat} onOpenTicket={onOpenTicket} />;
 }
 
 /** No huddle yet: pick a roster and start one by hand. */
@@ -119,7 +124,7 @@ function StartHuddle({ slug, ticket, tickets, onError, onBack, onStarted }: {
   );
 }
 
-function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }: {
+function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew, onOpenChat, onOpenTicket }: {
   slug: string;
   ticket: Ticket;
   tickets: Ticket[];
@@ -127,8 +132,21 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
   state: HuddleState;
   onError: (m: string) => void;
   onNew: () => void;
+  onOpenChat: () => void;
+  onOpenTicket: (id: string) => void;
 }) {
   const [confirm, setConfirm] = useState<"stop" | "close" | null>(null);
+  // The participant whose session is open beside the feed; Message @handle pre-fills the composer (n: each press).
+  const [viewing, setViewing] = useState<string | null>(null);
+  const [prefill, setPrefill] = useState<{ handle: string; n: number } | null>(null);
+  useEffect(() => setViewing(null), [h.id]);
+  const viewable = members(h);
+  const viewed = viewable.find((p) => p.handle === viewing) ?? null;
+  const stepViewing = (delta: 1 | -1) => {
+    const i = viewable.findIndex((p) => p.handle === viewing);
+    const next = viewable[(i + delta + viewable.length) % viewable.length];
+    if (next) setViewing(next.handle);
+  };
   const [adding, setAdding] = useState(false);
   const log = useRef<HTMLDivElement>(null);
   const learningsRef = useRef<HTMLDivElement>(null);
@@ -247,11 +265,15 @@ function HuddleRoom({ slug, ticket, tickets, huddle: h, state, onError, onNew }:
       <div className="huddle-body">
         <div className="huddle-feed">
           <Feed huddle={h} state={state} handles={handles} scroller={log} onSeen={(seq) => run(api.huddleSeen(slug, h.id, seq))} />
-          <Composer slug={slug} ticket={ticket} huddle={h} onError={onError} />
+          <Composer slug={slug} ticket={ticket} huddle={h} onError={onError} prefill={prefill} />
         </div>
+        {viewed && (
+          <SessionPanel slug={slug} huddle={h} participant={viewed} onClose={() => setViewing(null)} onStep={stepViewing}
+            onMessage={(handle) => setPrefill((x) => ({ handle, n: (x?.n ?? 0) + 1 }))} onOpenChat={onOpenChat} onOpenTicket={onOpenTicket} />
+        )}
         <aside className="huddle-side">
           <Brief slug={slug} huddle={h} handles={handles} onError={onError} />
-          <Roster slug={slug} huddle={h} onError={onError} />
+          <Roster slug={slug} huddle={h} onError={onError} viewing={viewing} onView={(handle) => setViewing((v) => (v === handle ? null : handle))} />
           <Findings slug={slug} huddle={h} handles={handles} onError={onError} />
         </aside>
       </div>
@@ -511,7 +533,9 @@ function MentionText({ text, handles }: { text: string; handles: string[] }) {
 }
 
 /** The user's message box, with @ autocomplete (@main, @all, handles). */
-function Composer({ slug, ticket, huddle: h, onError }: { slug: string; ticket: Ticket; huddle: Huddle; onError: (m: string) => void }) {
+function Composer({ slug, ticket, huddle: h, onError, prefill }: {
+  slug: string; ticket: Ticket; huddle: Huddle; onError: (m: string) => void; prefill: { handle: string; n: number } | null;
+}) {
   const [draft, setDraft] = usePersistentState(draftKey(slug, `${ticket.id}.huddle`), () => "", (v) => !v.trim(), (v) => typeof v === "string");
   const [sending, setSending] = useState(false);
   const [caret, setCaret] = useState(0);
@@ -525,6 +549,20 @@ function Composer({ slug, ticket, huddle: h, onError }: { slug: string; ticket: 
   const tooLong = draft.trim().length > POST_MAX;
   const hint = tooLong ? `${draft.trim().length} / ${POST_MAX} characters: too long to post. Shorten it or split it.` : h.status === "live" ? untaggedHint(draft, h) : null;
   useEffect(() => setActive(0), [q?.query, q?.start]);
+  // Message @handle (session viewer): the draft starts with the tag, and the box gets the focus.
+  useEffect(() => {
+    if (!prefill) return;
+    const tag = `@${prefill.handle} `;
+    const next = draft.startsWith(tag) ? draft : tag + draft.replace(/^\s+/, "");
+    setDraft(next);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(next.length, next.length);
+      setCaret(next.length);
+    });
+  }, [prefill?.n]);
 
   const pick = (handle: string) => {
     if (!q) return;
@@ -664,7 +702,10 @@ function Brief({ slug, huddle: h, handles, onError }: { slug: string; huddle: Hu
 }
 
 /** Participants: status (restart the failed and stopped), mode, what each spent; the cap counter. */
-function Roster({ slug, huddle: h, onError }: { slug: string; huddle: Huddle; onError: (m: string) => void }) {
+/** Clicking a participant opens its session beside the feed (onView); `viewing` is the one open. */
+function Roster({ slug, huddle: h, onError, viewing, onView }: {
+  slug: string; huddle: Huddle; onError: (m: string) => void; viewing: string | null; onView: (handle: string) => void;
+}) {
   const closed = h.status === "closed";
   const ps = [...h.participants.filter((p) => p.kind !== "human"), ...h.participants.filter((p) => p.kind === "human")];
   const fail = (e: Error) => onError(e.message);
@@ -677,9 +718,13 @@ function Roster({ slug, huddle: h, onError }: { slug: string; huddle: Huddle; on
         const st = ["working", "failed", "stopped", "done", "blocked"].includes(p.status) ? p.status : "idle";
         const restartable = !closed && !human && (p.status === "failed" || p.status === "stopped");
         return (
-          <div key={p.handle} className="hd-p">
+          <div key={p.handle} className={`hd-p${human ? "" : " viewable"}${viewing === p.handle ? " sel" : ""}`}>
             <Avatar handle={p.handle} small />
             <div className="hd-p-main">
+              {!human && (
+                <button className="hd-p-open" onClick={() => onView(p.handle)} aria-pressed={viewing === p.handle}
+                  aria-label={`${viewing === p.handle ? "Close" : "Open"} @${p.handle}'s session`} title={`@${p.handle}'s session (read-only)`} />
+              )}
               <div className="hd-p-name">
                 <b>@{p.handle}</b>
                 {p.handle === "main" && <span className="pill lead">coordinator</span>}

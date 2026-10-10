@@ -634,6 +634,11 @@ export class SessionCache {
     }
   }
 
+  /** The session's transcript file, wherever it is under the projects folder; null when there is none. */
+  file(sessionId: string): string | null {
+    return this.locate(sessionId);
+  }
+
   /** Cheap change marker for polling (subagent transcripts included); null when the session file doesn't exist. */
   version(sessionId: string): string | null {
     const f = this.locate(sessionId);

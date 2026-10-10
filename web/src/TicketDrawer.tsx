@@ -646,7 +646,8 @@ export function TicketDrawer({ profile, ticket, tickets, onOpenTicket, onClose, 
                 <PlanPanel slug={slug} ticket={ticket} children={children} onOpenTicket={onOpenTicket} onError={onError} />
               </div>
             ) : tab === "huddle" ? (
-              <HuddlePanel slug={slug} ticket={ticket} tickets={tickets} state={huddleState} onError={onError} />
+              <HuddlePanel slug={slug} ticket={ticket} tickets={tickets} state={huddleState} onError={onError}
+                onOpenChat={() => setTab("chat")} onOpenTicket={onOpenTicket} />
             ) : tab === "changes" ? (
               <Changes slug={slug} ticket={ticket} state={diffState} onSent={() => setTab("chat")} onError={onError} />
             ) : tab === "usage" ? (

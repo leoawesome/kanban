@@ -8,6 +8,7 @@ import { withUtf8Locale } from "./locale";
 import { McpManager } from "./mcp";
 import { startPoller } from "./prpoller";
 import { Scheduler } from "./scheduler";
+import { startHuddleSessionWatcher } from "./huddle-session";
 import { SessionCache, startSessionWatcher } from "./session";
 import { ShellManager } from "./shell";
 import { TerminalWatcher } from "./terminals";
@@ -45,6 +46,7 @@ export async function startDaemon(): Promise<void> {
   // After recover(): a missed run's ticket must not be mistaken for an interrupted one.
   const stopScheduler = scheduler.start();
   const stopWatcher = startSessionWatcher(store, bus, sessions);
+  const stopHuddleWatcher = startHuddleSessionWatcher(store, bus, (id) => sessions.version(id));
   const stopTerminals = terminals.start();
   const stopMcp = mcp.start();
 
@@ -53,6 +55,7 @@ export async function startDaemon(): Promise<void> {
     stopPoller();
     stopScheduler();
     stopWatcher();
+    stopHuddleWatcher();
     stopTerminals();
     shells.killAll();
     stopMcp();

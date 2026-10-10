@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   applyTemplate, brakeLabel, cardHuddleBadge, digestPreview, digestSenders, parseDigest, draftError, draftTags, idleFor, isForYou, untaggedHint, draftSize, guestTickets, handleInitials, mentionCandidates, mentionQuery, mergeMessages, participantActivity, pickHuddle, rosterDraft, rowHandle, shortTicketId, sortHuddles, sourceLabel, upsertHuddle, withActivity,
 } from "../web/src/huddleText";
+import { mergeSteps, modelLabel, sessionMeta, sessionState, shortSession, toolIcon } from "../web/src/sessionText";
 
 type P = { handle: string; role: string; kind: string; mode: string; status: string; statusReason?: string | null; lastActivity?: string | null; error?: string | null };
 type H = { id: string; hostTicket: string; status: string; createdAt: string; participants: P[] };
@@ -191,4 +192,26 @@ test("sourceLabel and withActivity", () => {
   expect(next.participants.find((x) => x.handle === "qa-1")!.lastActivity).toBe("Reading a.ts");
   expect(withActivity(next, "qa-1", "Reading a.ts")).toBe(next);
   expect(withActivity(h, "nobody", "x")).toBe(h);
+});
+
+test("session viewer helpers: model names, meta line, tool icons, merging a refreshed tail, footer state", () => {
+  expect(modelLabel("claude-sonnet-5-5")).toBe("Sonnet");
+  expect(modelLabel("opus")).toBe("Opus");
+  expect(modelLabel("gpt-x")).toBe("gpt-x");
+  expect(modelLabel(null)).toBe("default model");
+  expect(shortSession("7c1e5b2a-0000-4000-8000-0000000000a9")).toBe("7c1e…a9");
+  expect(sessionMeta({ role: "QA", model: "sonnet", mode: "tagged", costUsd: 1.237, sessionId: "7c1e5b2a-x-a9", snapshot: { sha: "4f2b9d1abc" }, kind: "agent" }))
+    .toBe("QA · Sonnet · tagged · $1.24 · session 7c1e…a9 · snapshot @4f2b9d1");
+  expect(sessionMeta({ role: "Coordinator", model: null, mode: "monitor", costUsd: 0, sessionId: null, snapshot: null, kind: "ticket-main" })).toBe("Coordinator · monitor · $0.00");
+  expect(toolIcon("Grep: join")).toBe("⌕");
+  expect(toolIcon("Bash: ls")).toBe("$");
+  expect(toolIcon("mcp__ckanban__huddle_read")).toBe("⚙");
+  const step = (i: number, text = "") => ({ i, text });
+  expect(mergeSteps([step(3), step(4, "old"), step(5)], [step(4, "new"), step(5), step(6)])).toEqual([step(3), step(4, "new"), step(5), step(6)]);
+  expect(mergeSteps([step(1)], [])).toEqual([step(1)]);
+  const agent = { kind: "agent", live: false, status: "stopped", sessionId: "s" };
+  expect(sessionState({ ...agent, live: true }, false)).toBe("Live");
+  expect(sessionState(agent, true)).toBe("Stopped · the huddle is closed; its steps stay viewable");
+  expect(sessionState({ ...agent, sessionId: null }, false)).toContain("No session yet");
+  expect(sessionState({ ...agent, kind: "ticket-main" }, false)).toContain("ticket's own chat");
 });

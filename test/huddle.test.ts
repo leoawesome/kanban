@@ -62,7 +62,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await Promise.all([board.shutdown(), huddles.shutdown()]);
   server.stop(true);
-  for (const k of ["FAKE_MODE", "FAKE_ARGS_FILE", "FAKE_HEARD_FILE", "FAKE_STEP_MS", "CLAUDE_CONFIG_DIR"]) delete process.env[k];
+  for (const k of ["FAKE_MODE", "FAKE_ARGS_FILE", "FAKE_HEARD_FILE", "FAKE_STEP_MS", "FAKE_TRANSCRIPT", "CLAUDE_CONFIG_DIR"]) delete process.env[k];
 }, 15000);
 
 async function until(cond: () => boolean, ms = 8000) {
@@ -1404,3 +1404,53 @@ test("a new agent's system prompt has the role's notes and All roles notes, newe
   expect(ux).toContain("all general rule");
   expect(ux).not.toContain("qa rule");
 }, 20000);
+
+test("session viewer: a participant's steps over HTTP, also after the huddle closed and its snapshot is gone; the user's alone", async () => {
+  process.env.FAKE_TRANSCRIPT = "1";
+  const t = await host();
+  const h = huddles.create("p", t.id, [{ preset: "reviewer" }]);
+  await idle();
+  const p = participant(h, "reviewer");
+  const url = (handle: string, rest = "") => `${client.url}/api/profiles/p/huddles/${h.id}/participants/${handle}/session${rest}`;
+  const get = async (handle = "reviewer", headers: Record<string, string> = {}, rest = "") => fetch(url(handle, rest), { headers });
+  const check = async () => {
+    const r = await get();
+    expect(r.status).toBe(200);
+    const s: any = await r.json();
+    expect(s).toMatchObject({ handle: "reviewer", kind: "agent", role: p.role, sessionId: p.sessionId, snapshot: p.snapshot, live: false, current: null, hasMore: false });
+    expect(s.file).toEndWith(`${p.sessionId}.jsonl`);
+    const kinds = s.steps.map((x: any) => x.kind);
+    expect(kinds[0]).toBe("wake");
+    expect(s.steps.find((x: any) => x.kind === "text")?.text).toBe("Checking how rows are built.");
+    expect(s.steps.find((x: any) => x.kind === "tool" && x.id === "tu_ls")).toMatchObject({ text: "Bash: ls src", out: "2 lines" });
+    expect(s.steps.find((x: any) => x.kind === "post")).toMatchObject({ id: "tu_post", text: "@main found it", seq: 7 });
+    expect(s.steps.some((x: any) => x.pending && x.id)).toBe(false);
+    expect(s.total).toBe(s.steps.length);
+    // Paging: newest last.
+    const page: any = await (await get("reviewer", {}, "?limit=2")).json();
+    expect(page.steps.map((x: any) => x.i)).toEqual([s.total - 2, s.total - 1]);
+    expect(page.hasMore).toBe(true);
+    const older: any = await (await get("reviewer", {}, `?before=${s.total - 2}&limit=2`)).json();
+    expect(older.steps.at(-1).i).toBe(s.total - 3);
+    // A tool call in full.
+    const tool: any = await (await get("reviewer", {}, "/tool/tu_ls")).json();
+    expect(tool).toMatchObject({ name: "Bash", input: { command: "ls src" }, output: "app.ts\nlib.ts" });
+    expect((await get("reviewer", {}, "/tool/nope")).status).toBe(404);
+  };
+  await check();
+  // @main's session is the ticket's chat: no steps, the ticket to link to.
+  expect(await (await get("main")).json()).toMatchObject({ kind: "ticket-main", ticketId: t.id, steps: [], file: null });
+  expect((await get("nobody")).status).toBe(404);
+  expect((await get("you")).status).toBe(404);
+  // Huddle agents (and runs) can't read anyone's session through the API.
+  const agent = { [HUDDLE_HEADER]: `${h.id}/reviewer/${p.token}` };
+  expect((await get("reviewer", agent)).status).toBe(403);
+  expect((await get("main", agent)).status).toBe(403);
+  expect((await get("reviewer", agent, "/tool/tu_ls")).status).toBe(403);
+  expect((await get("reviewer", { "x-ckanban-run": `p/${t.id}` })).status).toBe(403);
+  // Closed, snapshot removed: still readable.
+  huddles.close("p", h.id);
+  await idle();
+  expect(existsSync(p.worktree!)).toBe(false);
+  await check();
+}, 30000);

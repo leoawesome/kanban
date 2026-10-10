@@ -3,7 +3,8 @@ import { api, copy, type ToolDetail } from "./api";
 import { editDiff, mainInput } from "./toolView";
 
 /** One tool call as a row: its short label, plus the id its full input and output load by. */
-export type ToolItem = { key: string; label: string; toolUseId?: string; error?: boolean; current?: boolean };
+/** out: a short look at the output, shown under the label (the session viewer). */
+export type ToolItem = { key: string; label: string; toolUseId?: string; error?: boolean; current?: boolean; out?: string };
 
 /** Loaded details by ticket + tool_use id; only finished calls (with a result) are kept. */
 const loaded = new Map<string, ToolDetail>();
@@ -24,7 +25,10 @@ export function ToolRows({ slug, ticketId, items, live, className }: {
   );
 }
 
-export function ToolRow({ slug, ticketId, item, live }: { slug: string; ticketId: string; item: ToolItem; live: boolean }) {
+/** load: where the full call comes from (default: the ticket's session); ticketId then only keys the cache. */
+export function ToolRow({ slug, ticketId, item, live, load: loadDetail }: {
+  slug: string; ticketId: string; item: ToolItem; live: boolean; load?: (toolUseId: string) => Promise<ToolDetail>;
+}) {
   const key = `${ticketId}:${item.toolUseId ?? item.key}`;
   const [open, setOpen] = useState(() => opened.has(key));
   const [detail, setDetail] = useState<ToolDetail | null>(() => loaded.get(key) ?? null);
@@ -35,7 +39,7 @@ export function ToolRow({ slug, ticketId, item, live }: { slug: string; ticketId
     if (!open || !item.toolUseId || !pending) return;
     let stop = false;
     const load = () =>
-      api.tool(slug, ticketId, item.toolUseId!)
+      (loadDetail ? loadDetail(item.toolUseId!) : api.tool(slug, ticketId, item.toolUseId!))
         .then((d) => {
           if (stop) return;
           if (d.output !== null) loaded.set(key, d);
@@ -62,6 +66,7 @@ export function ToolRow({ slug, ticketId, item, live }: { slug: string; ticketId
       }}>
       <summary title={item.label}>
         {error && <span className="tool-x">✗ </span>}{item.current && <><span className="spinner" /> </>}{item.label}
+        {item.out && <span className="tool-out">{item.out}</span>}
       </summary>
       {open && (
         <div className="tool-card">

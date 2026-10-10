@@ -14,6 +14,7 @@ import { RUN_HEADER, ScheduleError, Scheduler } from "./scheduler";
 import { SnippetError, Snippets } from "./snippets";
 import { QuestionError, Questions } from "./questions";
 import { HuddleError, Huddles, type Caller } from "./huddle";
+import { HuddleSessionCache, participantSession, participantTool } from "./huddle-session";
 import { HUDDLE_HEADER, SOURCE_HEADER } from "./huddle-roster";
 import { NOTES_CAP } from "./huddle-notes";
 import { ticketAttention, userWaitReason } from "./attention";
@@ -131,6 +132,7 @@ async function body(req: Request): Promise<any> {
 export function createServer(deps: ServerDeps) {
   const { store, bus, board } = deps;
   const sessions = deps.sessions ?? new SessionCache();
+  const huddleSessions = new HuddleSessionCache();
   const updates = deps.updates ?? new UpdateChecker();
   const shells = deps.shells ?? new ShellManager();
   const mcp = deps.mcp ?? new McpManager(bus, { claudeBin: process.env.CKANBAN_CLAUDE_BIN ?? "claude" });
@@ -1024,7 +1026,7 @@ export function createServer(deps: ServerDeps) {
       throw new HttpError(404, "not found");
     }
     const { h, me } = huddles.identify(slug, rest[0], who);
-    const [, action, handle, sub] = rest;
+    const [, action, handle, sub, part, partId] = rest;
     if (!action && m === "GET") {
       const page = huddles.messages(slug, h.id, { before: num("before"), since: num("since"), limit: num("limit") });
       return json({ huddle: huddles.view(slug, h), you: me.handle, ...page });
@@ -1067,6 +1069,25 @@ export function createServer(deps: ServerDeps) {
         userOnly("stop a participant");
         huddles.stopParticipant(slug, h.id, handle);
         return json(huddles.view(slug, huddles.get(slug, h.id)));
+      }
+      // A participant's own Claude session, read-only (the Huddle tab's session viewer). The user's alone: agents
+      // and runs can't read each other's sessions.
+      if (handle && sub === "session") {
+        userOnly("read a participant's session");
+        if (m === "GET" && !part) {
+          return json(participantSession(huddles, store, sessions, huddleSessions, slug, h.id, handle, { before: num("before"), since: num("since"), limit: num("limit") }));
+        }
+        if (m === "GET" && part === "tool" && partId) {
+          const d = participantTool(huddles, sessions, slug, h.id, handle, partId);
+          if (!d) throw new HttpError(404, "tool call not found");
+          return json(d);
+        }
+        if (m === "POST" && part === "reveal" && !partId) {
+          const file = participantSession(huddles, store, sessions, huddleSessions, slug, h.id, handle, { limit: 1 }).file;
+          if (!file) throw new HttpError(404, `@${handle} has no transcript file yet`);
+          await revealFile(file);
+          return json({ ok: true, file });
+        }
       }
       if (m === "POST" && handle && sub === "restart") {
         userOnly("restart a participant");

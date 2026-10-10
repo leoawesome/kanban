@@ -3,6 +3,7 @@
 // FAKE_MODE=ok|fail|slow|partial|blocked|noresult|background|bgsilent|asks|nosession, FAKE_PR=<url>, FAKE_ARGS_FILE=<path to append argv JSON>
 // FAKE_HEARD_FILE=<path>: appends {session, text} for every user message it reads (huddle routing tests).
 // FAKE_NO_SAVE=1: stopped before the session transcript is saved (under CLAUDE_CONFIG_DIR, like the real CLI).
+// FAKE_TRANSCRIPT=1: it also thinks, runs a Bash call and posts to its huddle, and writes what it emits to the transcript.
 // With --input-format stream-json it reads user messages from stdin like the real CLI: messages that
 // arrive mid-run are picked up at the next step (replayed with --replay-user-messages), later ones
 // get their own turn, and it exits at end of input.
@@ -71,8 +72,16 @@ const sessionId = idx >= 0 ? args[idx + 1] : "none";
 
 const stepMs = Number(process.env.FAKE_STEP_MS ?? 0);
 
-function emit(obj: unknown) {
+const transcriptFile = process.env.CLAUDE_CONFIG_DIR && sessionId !== "none" && !process.env.FAKE_NO_SAVE
+  ? `${process.env.CLAUDE_CONFIG_DIR}/projects/${process.cwd().replace(/[^a-zA-Z0-9]/g, "-")}/${sessionId}.jsonl`
+  : null;
+
+function emit(obj: any) {
   process.stdout.write(JSON.stringify(obj) + "\n");
+  // Like the real CLI's transcript: assistant blocks and tool results, with timestamps.
+  if (process.env.FAKE_TRANSCRIPT && transcriptFile && (obj.type === "assistant" || obj.type === "user") && !obj.isReplay) {
+    appendFileSync(transcriptFile, JSON.stringify({ ...obj, sessionId, timestamp: new Date().toISOString() }) + "\n");
+  }
 }
 
 if (mode === "fail") {
@@ -110,6 +119,14 @@ if (stepMs) {
     emit({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: cmd, content: `ok: ${cmd}` }] } });
     drain();
   }
+}
+
+if (process.env.FAKE_TRANSCRIPT) {
+  emit({ type: "assistant", message: { content: [{ type: "text", text: "Checking how rows are built." }] } });
+  emit({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu_ls", name: "Bash", input: { command: "ls src" } }] } });
+  emit({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_ls", content: "app.ts\nlib.ts" }] } });
+  emit({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu_post", name: "mcp__ckanban__huddle_post", input: { text: "@main found it" } }] } });
+  emit({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_post", content: [{ type: "text", text: "Posted #7 as @qa." }] }] } });
 }
 
 if (mode === "child") {
